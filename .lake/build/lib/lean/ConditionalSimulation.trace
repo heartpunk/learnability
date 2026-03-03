@@ -1,0 +1,32 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["47821744b45f54a9.olean"],
+  "i": "24f50d0d67b385a6.ilean",
+  "c": "559e2a7480c6391a.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/Users/heartpunk/.lake-shared/packages/Cli/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/batteries/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/Qq/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/aesop/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/proofwidgets/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/importGraph/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/LeanSearchClient/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/plausible/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/mathlib/.lake/build/lib/lean:/Users/heartpunk/code/learnability/.lake/build/lib/lean /Users/heartpunk/.elan/toolchains/leanprover--lean4---v4.27.0/bin/lean /Users/heartpunk/code/learnability/ConditionalSimulation.lean -o /Users/heartpunk/code/learnability/.lake/build/lib/lean/ConditionalSimulation.olean -i /Users/heartpunk/code/learnability/.lake/build/lib/lean/ConditionalSimulation.ilean -c /Users/heartpunk/code/learnability/.lake/build/ir/ConditionalSimulation.c --setup /Users/heartpunk/code/learnability/.lake/build/ir/ConditionalSimulation.setup.json --json",
+   "level": "trace"}],
+ "inputs":
+ [["ConditionalSimulation:deps",
+   [["deps",
+     [["learnability/ConditionalSimulation:extraDep",
+       [["@learnability:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["LTS transitive imports (legacy)", "5a3d5301ac935292"],
+        ["LTS:importAllArts", "18108f03d27d908f"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.27.0, commit db93fe1608548721853390a10cd40580fe7d22ae",
+   "9a2be90fd35343e5"],
+  ["/Users/heartpunk/code/learnability/ConditionalSimulation.lean",
+   "0d8977c84f6e567c"],
+  ["options",
+   [["-DrelaxedAutoImplicit=false", "74a2b5546b55be80"],
+    ["-DautoImplicit=false", "4a85acb881fd49d0"]]],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "b5f4564fcab52235"}

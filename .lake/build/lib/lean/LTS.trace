@@ -1,0 +1,32 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["63fc1f28e4c9856d.olean"],
+  "i": "3d74a49c1c084771.ilean",
+  "c": "b1b4cf0db04c5254.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/Users/heartpunk/.lake-shared/packages/Cli/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/batteries/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/Qq/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/aesop/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/proofwidgets/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/importGraph/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/LeanSearchClient/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/plausible/.lake/build/lib/lean:/Users/heartpunk/.lake-shared/packages/mathlib/.lake/build/lib/lean:/Users/heartpunk/code/learnability/.lake/build/lib/lean /Users/heartpunk/.elan/toolchains/leanprover--lean4---v4.27.0/bin/lean /Users/heartpunk/code/learnability/LTS.lean -o /Users/heartpunk/code/learnability/.lake/build/lib/lean/LTS.olean -i /Users/heartpunk/code/learnability/.lake/build/lib/lean/LTS.ilean -c /Users/heartpunk/code/learnability/.lake/build/ir/LTS.c --setup /Users/heartpunk/code/learnability/.lake/build/ir/LTS.setup.json --json",
+   "level": "trace"}],
+ "inputs":
+ [["LTS:deps",
+   [["deps",
+     [["learnability/LTS:extraDep",
+       [["@learnability:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["Mathlib.Logic.Relation transitive imports (legacy)",
+         "1744e99a78f7e876"],
+        ["Mathlib.Logic.Relation:importAllArts", "607fcdec5e9280de"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.27.0, commit db93fe1608548721853390a10cd40580fe7d22ae",
+   "9a2be90fd35343e5"],
+  ["/Users/heartpunk/code/learnability/LTS.lean", "7d84139bdc627c4a"],
+  ["options",
+   [["-DrelaxedAutoImplicit=false", "74a2b5546b55be80"],
+    ["-DautoImplicit=false", "4a85acb881fd49d0"]]],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "bee155e81ccbf3bc"}

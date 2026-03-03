@@ -1,0 +1,29 @@
+name = "learnability"
+version = "0.1.0"
+keywords = ["math"]
+packagesDir = "/Users/heartpunk/.lake-shared/packages"
+defaultTargets = ["LTS", "ConditionalSimulation", "Convergence", "Learnability", "CoinductiveBisimulation"]
+
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.27.0"
+
+[[lean_lib]]
+name = "LTS"
+
+[[lean_lib]]
+name = "ConditionalSimulation"
+
+[[lean_lib]]
+name = "Convergence"
+
+[[lean_lib]]
+name = "Learnability"
+
+[[lean_lib]]
+name = "CoinductiveBisimulation"

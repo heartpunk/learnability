@@ -1,21 +1,17 @@
 /-
-# Co-Refinement Convergence
+# Convergence
 
-The paper's extraction technique involves co-refinement across three
-dimensions: configuration refinement (π), region refinement (HTH), and
-semantic refinement (R_ℓ). These refine together until all three
-stabilize.
-
-The convergence argument (main.tex §Remarks): the oracle O operates
-at the full Σ level, so it can always make progress regardless of the
-current π. Since the tracked dimension set X grows monotonically and
-the dimension space is finite, the process must terminate.
-
-This module proves the abstract convergence lemma and applies it to
-the co-refinement setting.
+Convergence of iterative dimension refinement. Pure math (monotone finset
+stabilization, iterate fixpoints) plus the CoRefinementProcess structure
+that models the operational iteration. At fixpoint: oracle is sound,
+non-controllable transitions are invisible, simulation holds.
 -/
 
 import ConditionalSimulation
+import Mathlib.Data.Finset.Basic
+import Mathlib.Data.Finset.Card
+import Mathlib.Data.Fintype.Basic
+import Mathlib.Data.Fintype.Card
 
 /-! ## Monotone Finset Stabilization
 
@@ -46,7 +42,8 @@ theorem Finset.monotone_stabilizes {α : Type*} [DecidableEq α] [Fintype α]
   -- But card is bounded by the type's cardinality
   have h_upper := Finset.card_le_univ (s (Fintype.card α + 1))
   -- Contradiction: Fintype.card α + 1 ≤ card ≤ Fintype.card α
-  exact absurd (Nat.le_trans (h_lower _) h_upper) (by omega)
+  have h_low := h_lower (Fintype.card α + 1)
+  exact absurd (Nat.le_trans h_low h_upper) (by omega)
 
 /-! ## Iterated Function Fixpoints
 
@@ -94,10 +91,7 @@ abbrev DimInflationary {Dim : Type*} [DecidableEq Dim]
   ∀ s, s ⊆ step s
 
 /-- An inflationary dimension refinement on a finite type converges
-    when iterated: there exists `n` where the dimension set stabilizes.
-    This formalizes the paper's convergence argument (main.tex,
-    Section V-C "Bootstrapping and Co-Refinement" and Section V-E
-    "Main Theorem"). -/
+    when iterated: there exists `n` where the dimension set stabilizes. -/
 theorem dimRefinement_converges {Dim : Type*} [DecidableEq Dim] [Fintype Dim]
     (step : Finset Dim → Finset Dim)
     (h_infl : DimInflationary step)
@@ -190,18 +184,6 @@ theorem simulation_at_coRefinement_fixpoint
     (LTS.ofOracle (π H_I.init) R).Simulates H_I
       (fun x σ => π σ = x ∧ H_I.Reachable σ) :=
   simulation_of_sound_oracle H_I π R h_fix.sound
-
-/-- Specialization: at a co-refinement fixpoint for a grammar-conformant
-    implementation, the oracle LTS simulates H_I. -/
-theorem simulation_at_coRefinement_fixpoint_gc
-    {HostState T : Type*}
-    (gc : GrammarConformant HostState T)
-    {Config : Type*} (π : Projection HostState Config)
-    (R : HTHLabel T gc.Γ.NT → Config → Config → Prop)
-    (h_fix : IsCoRefinementFixpoint gc.H_I π R) :
-    (LTS.ofOracle (π gc.H_I.init) R).Simulates gc.H_I
-      (fun x σ => π σ = x ∧ gc.H_I.Reachable σ) :=
-  simulation_at_coRefinement_fixpoint gc.H_I π R h_fix
 
 /-! ## Co-Refinement Process
 
