@@ -2,12 +2,12 @@
 # Learnability Preconditions
 
 Standalone formalization of the five structural preconditions sufficient
-for extracting a faithful projected model of any observable system via
+for extracting an identifiable projected model of any observable system via
 iterative refinement.
 
 These preconditions — finiteness, enumerability, identifiability,
 separability, and extractibility — are sufficient for automatically
-extracting a faithful model of any aspect of language semantics
+extracting an identifiable model of any aspect of language semantics
 expressible as State → Label → State → Prop, provided the
 preconditions can be instantiated — which may be non-trivial
 for domains beyond operational semantics.
@@ -59,14 +59,14 @@ as a Lean structure extending ObservableSystem.
 /-- Learnability preconditions for semantic extraction.
 
     Any observable system satisfying these conditions admits extraction
-    of a faithful projected model via iterative refinement.
+    of an identifiable projected model via iterative refinement.
 
     The five preconditions:
     1. **Finiteness**: `[Fintype Dim]` — observation space is finite
     2. **Enumerability**: `[Fintype Dim]` gives `Finset.univ` — dimensions
        can be iterated. In practice, grammar conformance provides
        enumerability of behavioral categories (one template per rule).
-    3. **Identifiability**: `faithful` — observations distinguish relevant states
+    3. **Identifiability**: `identifiable` — observations distinguish relevant states
     4. **Separability**: (proved, not assumed) — at the refinement fixpoint,
        the projection captures all relevant distinctions
     5. **Extractibility**: `oracle` + `sound` — a sound oracle witnesses behavior
@@ -82,10 +82,10 @@ structure LearnabilityPreconditions
     (State Label Dim Value : Type*)
     [DecidableEq Dim] [Fintype Dim] [Inhabited Value]
     extends ObservableSystem State Label Dim Value where
-  /-- Identifiability: observations are faithful on relevant states.
+  /-- Identifiability: observations are injective on relevant states.
       Any relevant state is uniquely determined by its observations
       among ALL states (s₂ unconstrained). -/
-  faithful : ∀ (s₁ s₂ : State), relevant s₁ →
+  identifiable : ∀ (s₁ s₂ : State), relevant s₁ →
     (∀ d, observe s₁ d = observe s₂ d) → s₁ = s₂
   /-- Extractibility: a sound oracle for the system's behavior -/
   oracle : Label → State → State → Prop
@@ -219,7 +219,7 @@ theorem Function.iterate_stable' {α : Type*}
 
 open Classical in
 /-- Main learnability theorem: any system satisfying the 5 preconditions
-    admits a faithful projected model.
+    admits an identifiable projected model.
 
     "Faithful" means: at the fixpoint tracked dimensions X*,
     (1) the projected oracle is sound for all relevant behaviors, and
@@ -257,14 +257,14 @@ theorem LearnabilityPreconditions.extraction_exists
   -- Soundness: from oracle soundness
   · intro s s' ℓ _hrel hbeh
     exact ⟨s, s', rfl, lp.sound s s' ℓ hbeh, rfl⟩
-  -- Controllability: at fixpoint, h_faithful makes it vacuous
+  -- Controllability: at fixpoint, identifiability makes it vacuous
   · intro s₁ s₂ ℓ h_rel hproj_eq ⟨s₁', hbeh⟩
     by_cases h_can : ∃ s', lp.behavior s₂ ℓ s'
     · exact h_can
     · -- s₂ can't take ℓ. Show s₁ = s₂, contradicting this.
       exfalso; apply h_can
       have h_eq : s₁ = s₂ := by
-        apply lp.faithful _ _ h_rel
+        apply lp.identifiable _ _ h_rel
         intro d
         by_cases hd : d ∈ X
         · -- d ∈ X: projection equality gives agreement
@@ -321,7 +321,7 @@ is injective on relevant states, giving bisimulation. -/
 
     Note: `exact_extraction` below does not use `complete` or
     `relevant_closed` — it proves soundness, controllability, and
-    injectivity from `faithful` + `sound` alone. These fields are
+    injectivity from `identifiable` + `sound` alone. These fields are
     present for downstream bisimulation construction, which requires
     completeness to go from projected oracle claims back to real
     behavior, and relevant closure to thread relevance through
@@ -342,7 +342,7 @@ open Classical in
     a relevance-restricted oracle and `relevant_closed`, this gives
     bisimulation (see `extraction_bisimulation` for the LTS case).
 
-    The proof only uses `faithful` and `sound` from the parent
+    The proof only uses `identifiable` and `sound` from the parent
     structure — `complete` and `relevant_closed` are not needed for
     the three properties proved here. They become necessary when
     assembling the reverse simulation direction.
@@ -350,7 +350,7 @@ open Classical in
     The proof uses a combined refinement step that tracks both
     non-controllability disagreements (as in `extraction_exists`) and
     observation disagreements among relevant states. At fixpoint,
-    faithful + no disagreements → injective on relevant states,
+    identifiable + no disagreements → injective on relevant states,
     and the non-controllability argument gives controllability. -/
 theorem LearnabilityPreconditionsComplete.exact_extraction
     {State Label Dim Value : Type*}
@@ -396,7 +396,7 @@ theorem LearnabilityPreconditionsComplete.exact_extraction
       lp.relevant s₁ → lp.relevant s₂ →
       project lp.observe X s₁ = project lp.observe X s₂ → s₁ = s₂ := by
     intro s₁ s₂ hr₁ hr₂ hπ
-    apply lp.faithful s₁ s₂ hr₁
+    apply lp.identifiable s₁ s₂ hr₁
     intro d
     by_cases hd : d ∈ X
     · have h_pe : (if d ∈ X then lp.observe s₁ d else (default : Value)) =
@@ -413,13 +413,13 @@ theorem LearnabilityPreconditionsComplete.exact_extraction
   -- Soundness: from oracle soundness
   · intro s s' ℓ hr hbeh
     exact ⟨s, s', rfl, lp.sound s s' ℓ hbeh, rfl⟩
-  -- Controllability: at fixpoint, h_faithful makes it vacuous
+  -- Controllability: at fixpoint, identifiability makes it vacuous
   · intro s₁ s₂ ℓ hr₁ hπ ⟨s₁', hbeh⟩
     by_cases h_can : ∃ s', lp.behavior s₂ ℓ s'
     · exact h_can
     · exfalso; apply h_can
       have h_eq : s₁ = s₂ := by
-        apply lp.faithful _ _ hr₁
+        apply lp.identifiable _ _ hr₁
         intro d
         by_cases hd : d ∈ X
         · have h_pe : (if d ∈ X then lp.observe s₁ d else (default : Value)) =
@@ -495,7 +495,7 @@ theorem LearnabilityPreconditionsComplete.relevantProjectedOracle_witness_eq
 /-! ## Strengthened Extraction: Named Constructions
 
 The theorems above use existentials (`∃ X, ...`), which are trivially
-satisfiable by `X = Finset.univ` given `faithful`. The definitions and
+satisfiable by `X = Finset.univ` given `identifiable`. The definitions and
 theorems below make the refinement construction explicit: the dimension
 set is a named `def`, and every tracked dimension carries a concrete
 certificate of necessity.
@@ -584,7 +584,7 @@ theorem LearnabilityPreconditions.extractionDims_controllable
   · exact h_can
   · exfalso; apply h_can
     have h_eq : s₁ = s₂ := by
-      apply lp.faithful _ _ h_rel
+      apply lp.identifiable _ _ h_rel
       intro d
       by_cases hd : d ∈ lp.extractionDims
       · exact obs_eq_of_proj_eq_mem hproj_eq hd
@@ -727,7 +727,7 @@ theorem LearnabilityPreconditionsComplete.extractionDims_injective
         project lp.observe lp.extractionDims s₂ → s₁ = s₂ := by
   intro s₁ s₂ hr₁ hr₂ hπ
   have h_fp := lp.extractionDims_is_fixpoint
-  apply lp.faithful s₁ s₂ hr₁
+  apply lp.identifiable s₁ s₂ hr₁
   intro d
   by_cases hd : d ∈ lp.extractionDims
   · exact obs_eq_of_proj_eq_mem hπ hd
@@ -768,7 +768,7 @@ theorem LearnabilityPreconditionsComplete.extractionDims_controllable
   · exact h_can
   · exfalso; apply h_can
     have h_eq : s₁ = s₂ := by
-      apply lp.faithful _ _ h_rel
+      apply lp.identifiable _ _ h_rel
       intro d
       by_cases hd : d ∈ lp.extractionDims
       · exact obs_eq_of_proj_eq_mem hproj_eq hd
