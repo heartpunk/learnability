@@ -1,8 +1,8 @@
 {"synthetic": false,
  "schemaVersion": "2025-09-10",
  "outputs":
- {"o": ["c637c6b2fe5c748e.olean"],
-  "i": "723da89f1c46f8b5.ilean",
+ {"o": ["86a4735cb91a3450.olean"],
+  "i": "c31f332479a1dac6.ilean",
   "c": "22bf62f4920616aa.c"},
  "log":
  [{"message":
@@ -12,7 +12,7 @@
    "Learnability.lean:737:9: unused variable `X`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"},
   {"message":
-   "Learnability.lean:922:9: unused variable `X`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "Learnability.lean:928:9: unused variable `X`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"}],
  "inputs":
  [["Learnability:deps",
@@ -39,9 +39,9 @@
       ["module plugins", "00000000000006bb"]]]]],
   ["Lean 4.27.0, commit db93fe1608548721853390a10cd40580fe7d22ae",
    "9a2be90fd35343e5"],
-  ["/Users/heartpunk/code/learnability/Learnability.lean", "7a005ce49051d9ec"],
+  ["/Users/heartpunk/code/learnability/Learnability.lean", "c6d9361a8d0ca4ce"],
   ["options",
    [["-DrelaxedAutoImplicit=false", "74a2b5546b55be80"],
     ["-DautoImplicit=false", "4a85acb881fd49d0"]]],
   ["Module.leanArgs: #[]", "00000000000006bb"]],
- "depHash": "8ff405746d472128"}
+ "depHash": "4094871406e371fe"}

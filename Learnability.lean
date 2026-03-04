@@ -747,7 +747,9 @@ noncomputable def LearnabilityPreconditions.extractionDims
   (refineStep lp.toObservableSystem)^[lp.refinementSteps] ∅
 
 open Classical in
-/-- extractionDims is a fixpoint of refineStep. -/
+/-- extractionDims is a fixpoint of refineStep. This is the concrete
+    witness for the existential in `extraction_exists` — the named dimension
+    set at which refinement stabilizes. -/
 theorem LearnabilityPreconditions.extractionDims_is_fixpoint
     {State Label Dim Value : Type*}
     [DecidableEq Dim] [Fintype Dim] [Inhabited Value]
@@ -783,7 +785,9 @@ theorem LearnabilityPreconditions.extraction_cost_bound
 
 open Classical in
 /-- The extracted dimensions are sound: every behavior of a relevant
-    state is captured by the projected oracle through extractionDims. -/
+    state is captured by the projected oracle through extractionDims.
+    This is the first half of `extraction_exists`, instantiated at the
+    named fixpoint `extractionDims`. -/
 theorem LearnabilityPreconditions.extractionDims_sound
     {State Label Dim Value : Type*}
     [DecidableEq Dim] [Fintype Dim] [Inhabited Value]
@@ -797,7 +801,9 @@ theorem LearnabilityPreconditions.extractionDims_sound
 
 open Classical in
 /-- The extracted dimensions are controllable: states with the same
-    projection have the same behavior availability. -/
+    projection have the same behavior availability. This is the second
+    half of `extraction_exists`, instantiated at the named fixpoint
+    `extractionDims`. -/
 theorem LearnabilityPreconditions.extractionDims_controllable
     {State Label Dim Value : Type*}
     [DecidableEq Dim] [Fintype Dim] [Inhabited Value]
