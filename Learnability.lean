@@ -550,8 +550,11 @@ open Classical in
 
     The proof only uses `identifiable` and `sound` from the parent
     structure — `complete` and `relevant_closed` are not needed for
-    the three properties proved here. They become necessary when
-    assembling the reverse simulation direction.
+    the three properties proved here (soundness, controllability,
+    injectivity are all earned before completeness enters). Completeness
+    becomes necessary only downstream, when the reverse simulation
+    direction needs to go from a projected oracle claim back to real
+    behavior (`extractionDims_deproject`).
 
     The proof uses a combined refinement step that tracks both
     non-controllability disagreements (as in `extraction_exists`) and
