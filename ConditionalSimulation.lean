@@ -120,6 +120,11 @@ abbrev Projection (HostState Config : Type*) := HostState → Config
 
 /-! ## X-Controllable and Implementation-Internal Transitions
 
+"X" refers to the tracked dimension set — the subset of host-state dimensions
+that the current extraction step considers relevant. In `Convergence.lean`,
+X grows iteratively until it stabilizes; in `Learnability.lean`, it is the
+`Finset Dim` at which `refineStep` reaches a fixpoint.
+
 A transition is **X-controllable** at state s when the projected state
 π(s) is sufficient to determine its availability: any host state with
 the same projection can also take that transition. These are the branches
