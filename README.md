@@ -2,7 +2,7 @@
 
 Imagine you're reverse-engineering a C program that parses JSON. The program has hundreds of internal states, but the JSON grammar only needs a handful of behavioral distinctions. If you can observe the program's state and query its behavior — instrument it, run a symbolic executor against it, whatever gets you the observations — then there is a procedure that discovers which distinctions matter. It finds pairs of states that your current model conflates but that behave differently, refines the model, and repeats. When no more distinguishing pairs exist, the model is faithful.
 
-The real contribution is that this is possible *at all*. This is a Lean 4 formalization proving that any system with finite behavioral structure, identifiable observations, and a sound oracle admits faithful extraction via iterative refinement (`extraction_exists` in `Learnability.lean`). The algorithm is abstract — it proves a faithful model exists and that refinement converges, but building the instrumentation and oracle for your specific system is on you. 0 sorries.
+The real contribution is that this is possible *at all*. This is a Lean 4 formalization proving that any system with finite behavioral structure, identifiable observations, and a sound oracle admits faithful extraction via iterative refinement (`extraction_exists` in `Learnability.lean`). The oracle is commonly available in principle — symbolic execution (KLEE, angr, etc.) gives you one for compiled code. The harder open problem is instrumentation: observing the right state at the right granularity. The theorem says that if you solve that problem, convergence to a faithful model is guaranteed. 0 sorries.
 
 ## Reading order
 
