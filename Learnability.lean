@@ -553,7 +553,7 @@ open Classical in
 /-- With a complete oracle, extraction yields an exact model:
     the projection is injective on relevant states. Combined with
     a relevance-restricted oracle and `relevant_closed`, this gives
-    bisimulation (see `extraction_bisimulation` for the LTS case).
+    bisimulation (see `CoinductiveBisimulation.lean`).
 
     The proof only uses `identifiable` and `sound` from the parent
     structure — `complete` and `relevant_closed` are not needed for
