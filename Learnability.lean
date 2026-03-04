@@ -295,7 +295,7 @@ structure LearnabilityPreconditions
 /-! ## Refinement Machinery
 
 Standalone definitions for projection, projected oracle, and refinement
-step. These mirror `ExtractionPossibility.lean` but are self-contained.
+step. These are self-contained — no imports from the LTS chain.
 -/
 
 /-- Project state onto tracked dimensions, defaulting elsewhere. -/
@@ -334,7 +334,7 @@ noncomputable abbrev refineStep {State Label Dim Value : Type*}
 /-! ## Monotone Finset Stabilization
 
 An inflationary operator on Finset over Fintype stabilizes.
-Self-contained proof (mirrors CoRefinementConvergence.lean).
+Self-contained proof (mirrors `Convergence.lean`).
 -/
 
 /-- A monotone increasing sequence of finsets over a finite type
