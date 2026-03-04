@@ -3,9 +3,62 @@ import Mathlib.Logic.Relation
 /-!
 # Labeled Transition Systems
 
-General theory of labeled transition systems. Defines LTS, reachability,
-traces, branch points, simulation, and trace inclusion. No domain-specific
-content.
+Pure theory of labeled transition systems: the vocabulary everything else in
+this project builds on. This file is domain-agnostic — no oracles, no
+projections, no extraction. Those belong to `ConditionalSimulation.lean` and
+downstream.
+
+## Why relational encoding
+
+An LTS is a triple `(S, L, →)` where `→ ⊆ S × L × S`. We encode the
+transition relation as `step : S → L → S → Prop` rather than a function
+`S → L → S` or `S → L → Option S`. The relational encoding handles
+nondeterminism naturally: a state can have multiple successors for the same
+label (branching), or none (the transition is unavailable). This is
+essential — real implementations branch, and the whole point of extraction
+is to recover that branching structure.
+
+The same data, viewed differently, is a Kleisli arrow for the powerset
+monad: `step : S → L → Set S`. No conversion is needed — `Set S` is
+definitionally `S → Prop` in Lean. The Kleisli perspective is how symbolic
+execution actually operates: given a state and a label, enumerate the set of
+reachable successors.
+
+## What this file defines
+
+- **LTS structure**: initial state + transition relation.
+- **Reachability**: label-erased reflexive-transitive closure via Mathlib's
+  `ReflTransGen`. We erase labels because reachability asks "can you get
+  there?" not "how?" — the path witness is a trace (below).
+- **Traces**: the labeled counterpart to reachability. A trace is a list of
+  labels witnessing a step-by-step path between two states. Where
+  reachability forgets the path, traces retain it. This duality — reachability
+  for existence, traces for evidence — recurs throughout.
+- **Branch points and maximal traces**: a branch point has multiple distinct
+  outgoing transitions; a dead end has none. A maximal trace extends through
+  all deterministic steps, stopping only at branch points or dead ends.
+  This captures "faithful execution record" — the trace doesn't stop early
+  at a state with a unique successor.
+- **Simulation**: `simulating` simulates `simulated` via witness relation
+  `R` when initial states are related and every step of `simulated` can be
+  matched. Simulation forms a preorder — reflexive via `Eq`, transitive via
+  relational composition. This is the standard behavioral preorder on
+  abstractions: if A simulates B, then A is at least as behaviorally rich
+  as B.
+- **Trace inclusion**: simulation implies trace inclusion — every trace of
+  the simulated system has a matching trace (same label sequence) in the
+  simulating system. This is the standard `simulation ⊆ trace inclusion`
+  result.
+
+## What this file does NOT define
+
+No projections, no oracles, no dimension refinement, no extraction. This is
+pure LTS theory — the foundation layer. Domain-specific content starts in
+`ConditionalSimulation.lean` (projections and oracles) and
+`Convergence.lean` (iterative refinement). The general framework in
+`Learnability.lean` doesn't import this file at all — it works with
+arbitrary `State → Label → State → Prop` behavior relations that need not
+be transition systems.
 -/
 
 /-! ## Labeled Transition Systems
