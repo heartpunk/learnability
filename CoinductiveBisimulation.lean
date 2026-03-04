@@ -5,7 +5,7 @@ import Learnability
 
 Capstone of the extraction story. `Learnability.lean` proves that a sound oracle
 yields a simulation-equivalent projected model; this file upgrades the result to
-**bisimulation** when the oracle is also complete. The file is 127 lines because
+**bisimulation** when the oracle is also complete. The file is short because
 no new math is needed — the coinductive proof obligation (show the relation is
 preserved by one step) reduces to three theorem applications from
 `Learnability.lean`:
