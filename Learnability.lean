@@ -753,6 +753,26 @@ theorem LearnabilityPreconditions.extractionDims_is_fixpoint
   exact h
 
 open Classical in
+/-- Extraction is tractable: `refineStep` reaches a fixpoint in at most
+    `Fintype.card Dim` iterations starting from ∅.
+
+    This is `inflationary_stabilizes_bound` specialized to the learnability
+    setting. `refineStep` is inflationary (only adds dimensions), so the chain
+    of dimension sets strictly increases at each non-fixpoint step, bounded
+    by |Dim| total elements.
+
+    Finding *a* faithful fixpoint is tractable (this theorem). Finding the
+    *minimum* faithful fixpoint is NP-hard (Jha & Seshia 2018, Theorem 6.1). -/
+theorem LearnabilityPreconditions.extraction_cost_bound
+    {State Label Dim Value : Type*}
+    [DecidableEq Dim] [Fintype Dim] [Inhabited Value]
+    (lp : LearnabilityPreconditions State Label Dim Value) :
+    ∃ n, n ≤ Fintype.card Dim ∧
+      (refineStep lp.toObservableSystem)^[n + 1] ∅ =
+      (refineStep lp.toObservableSystem)^[n] ∅ :=
+  inflationary_stabilizes_bound _ (fun _ => Finset.subset_union_left) ∅
+
+open Classical in
 /-- The extracted dimensions are sound: every behavior of a relevant
     state is captured by the projected oracle through extractionDims. -/
 theorem LearnabilityPreconditions.extractionDims_sound
@@ -915,6 +935,19 @@ theorem LearnabilityPreconditionsComplete.extractionDims_is_fixpoint
   show f (f^[lp.refinementSteps] ∅) = f^[lp.refinementSteps] ∅
   rw [Function.iterate_succ_apply'] at h
   exact h
+
+open Classical in
+/-- Extraction with complete oracle is tractable: `refineStepComplete` reaches
+    a fixpoint in at most `Fintype.card Dim` iterations starting from ∅.
+    Parallel to `LearnabilityPreconditions.extraction_cost_bound`. -/
+theorem LearnabilityPreconditionsComplete.extraction_cost_bound
+    {State Label Dim Value : Type*}
+    [DecidableEq Dim] [Fintype Dim] [Inhabited Value]
+    (lp : LearnabilityPreconditionsComplete State Label Dim Value) :
+    ∃ n, n ≤ Fintype.card Dim ∧
+      (refineStepComplete lp.toObservableSystem)^[n + 1] ∅ =
+      (refineStepComplete lp.toObservableSystem)^[n] ∅ :=
+  inflationary_stabilizes_bound _ (fun _ => Finset.subset_union_left) ∅
 
 open Classical in
 /-- At the combined fixpoint, the projection is injective on relevant states. -/
