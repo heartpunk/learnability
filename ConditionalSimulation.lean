@@ -3,12 +3,21 @@ import LTS
 /-!
 # Conditional Simulation
 
-Conditional simulation: observing an LTS through a lossy projection and
-using an oracle to reconstruct behavior. Defines Projection,
-X-controllability, implementation-internal transitions, oracle
-soundness/completeness, branching oracles, and the core simulation
-theorems. The simulation is conditional on oracle properties — soundness
-gives forward simulation, completeness gives reverse simulation.
+Recovering guest-language operational semantics from host-language evaluation.
+The projection π : HostState → Config maps host evaluation states to
+guest-language configurations. Oracle soundness and completeness characterize
+when the projected model faithfully simulates the original.
+
+Oracle completeness splits into two parts that connect to standard
+abstract-interpretation structure:
+- **OracleRealizableFor** — the Galois dual of OracleSoundFor: R ⊆ α(steps),
+  every claimed transition is witnessed by some concrete step.
+- **ProjectionUniform** — all concrete states with the same projection agree
+  on transition availability and projected target (a property of H_I and π,
+  independent of any particular oracle R).
+
+OracleSoundFor gives forward simulation; OracleRealizableFor + ProjectionUniform
+give reverse simulation.
 -/
 
 /-! ## Projection
@@ -71,7 +80,7 @@ soundness, not a separate theorem hypothesis.
 **B–R relationship**: The canonical B is the domain of R:
 `B x ℓ := ∃ x', R ℓ x x'`. Under this definition,
 `OracleSoundFor R` implies `BranchOracleCompleteFor B`, and
-`OracleCompleteFor R` implies `BranchOracleSoundFor B`.
+`OracleRealizableFor R + ProjectionUniform` implies `BranchOracleSoundFor B`.
 -/
 
 /-- An oracle is sound for an LTS through a projection when every
@@ -85,24 +94,34 @@ abbrev OracleSoundFor {HostState Config : Type*} {L : Type*}
   ∀ (σ σ' : HostState) (ℓ : L),
     H_I.Reachable σ → H_I.step σ ℓ σ' → R ℓ (π σ) (π σ')
 
-/-- An oracle is complete for an LTS through a projection when every
-    claimed transition is realizable from any concrete state projecting
-    to the source. This captures that π contains all state relevant to
-    transition behavior: non-projected state cannot block a transition
-    that R claims is possible. This subsumes branching oracle soundness:
-    a complete value oracle induces a sound branching oracle
-    (see `BranchOracleSoundFor_of_OracleCompleteFor`). -/
-abbrev OracleCompleteFor {HostState Config : Type*} {L : Type*}
+/-- The Galois dual of OracleSoundFor: R ⊆ α(steps). Every claimed
+    oracle transition is witnessed by at least one concrete step pair.
+    Formally: OracleSoundFor says α(H_I.step) ⊆ R; this says R ⊆ α(H_I.step),
+    where α maps via π image. Together they give R = α(H_I.step). -/
+abbrev OracleRealizableFor {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config)
     (R : L → Config → Config → Prop) : Prop :=
-  ∀ (σ : HostState) (x' : Config) (ℓ : L),
-    R ℓ (π σ) x' → ∃ (σ' : HostState), H_I.step σ ℓ σ' ∧ π σ' = x'
+  ∀ (x x' : Config) (ℓ : L),
+    R ℓ x x' → ∃ (σ σ' : HostState), π σ = x ∧ H_I.step σ ℓ σ' ∧ π σ' = x'
+
+/-- Transition availability and projected target are determined by projected
+    state alone: any two concrete states with the same projection agree on
+    which transitions are available and where they lead (in projected space).
+    This is a property of H_I and π independent of any particular oracle R.
+    Together with OracleRealizableFor it gives the reverse simulation. -/
+abbrev ProjectionUniform {HostState Config : Type*} {L : Type*}
+    (H_I : LTS HostState L) (π : Projection HostState Config) : Prop :=
+  ∀ (σ₁ σ₂ : HostState) (ℓ : L) (x' : Config),
+    π σ₁ = π σ₂ →
+    (∃ σ₁', H_I.step σ₁ ℓ σ₁' ∧ π σ₁' = x') →
+    (∃ σ₂', H_I.step σ₂ ℓ σ₂' ∧ π σ₂' = x')
 
 /- **Paper correspondence only.** The following BranchingOracle definitions
    exist for correspondence with Section III-A of the paper. The extraction
-   pipeline uses only `OracleSoundFor`/`OracleCompleteFor`; the subsumption
-   theorems below show that a sound value oracle induces a complete branching
-   oracle (and vice versa). -/
+   pipeline uses only `OracleSoundFor`/`OracleRealizableFor`/`ProjectionUniform`;
+   the subsumption theorems below show that a sound value oracle induces a
+   complete branching oracle, and a realizable+uniform oracle induces a sound
+   branching oracle. -/
 
 /-- A branching oracle: for each configuration, which labels are feasible. -/
 abbrev BranchingOracle (Config L : Type*) := Config → L → Prop
@@ -136,15 +155,17 @@ theorem BranchOracleCompleteFor_of_OracleSoundFor {HostState Config : Type*} {L 
     BranchOracleCompleteFor H_I π (BranchingOracle.ofValueOracle R) :=
   fun σ σ' ℓ h_reach hstep => ⟨π σ', h_sound σ σ' ℓ h_reach hstep⟩
 
-/-- A complete value oracle induces a sound branching oracle. -/
-theorem BranchOracleSoundFor_of_OracleCompleteFor {HostState Config : Type*} {L : Type*}
+/-- A realizable, uniform oracle induces a sound branching oracle. -/
+theorem BranchOracleSoundFor_of_OracleRealizable {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config)
     (R : L → Config → Config → Prop)
-    (h_complete : OracleCompleteFor H_I π R) :
+    (h_realizable : OracleRealizableFor H_I π R)
+    (h_uniform : ProjectionUniform H_I π) :
     BranchOracleSoundFor H_I π (BranchingOracle.ofValueOracle R) := by
   intro σ ℓ ⟨x', hR⟩
-  obtain ⟨σ', hstep, _⟩ := h_complete σ x' ℓ hR
-  exact ⟨σ', hstep⟩
+  obtain ⟨σ₀, σ₀', hπ₀, hstep₀, hπ₀'⟩ := h_realizable _ _ _ hR
+  obtain ⟨σ', hstep', _⟩ := h_uniform σ₀ σ ℓ x' hπ₀ ⟨σ₀', hstep₀, hπ₀'⟩
+  exact ⟨σ', hstep'⟩
 
 /-! ## Oracle-Induced Simulation and Bisimulation
 
@@ -177,16 +198,20 @@ theorem simulation_of_sound_oracle {HostState Config : Type*} {L : Type*}
     subst hrel
     exact ⟨π σ', h_sound σ σ' ℓ hreach hstep, rfl, hreach.step hstep⟩
 
-/-- A complete oracle induces a reverse simulation: H_I simulates
-    the oracle LTS via `fun σ x => π σ = x`. -/
+/-- A realizable, uniform oracle induces a reverse simulation: H_I simulates
+    the oracle LTS via `fun σ x => π σ = x`. OracleRealizableFor witnesses that
+    some concrete step exists; ProjectionUniform transfers it to any concrete
+    state with the same projection. -/
 theorem simulation_of_complete_oracle {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config)
     (R : L → Config → Config → Prop)
-    (h_complete : OracleCompleteFor H_I π R) :
+    (h_realizable : OracleRealizableFor H_I π R)
+    (h_uniform : ProjectionUniform H_I π) :
     H_I.Simulates (LTS.ofOracle (π H_I.init) R) (fun σ x => π σ = x) where
   init := rfl
   step_match := by
     intro σ x ℓ x' hrel hstep
     subst hrel
-    obtain ⟨σ', hstep', hproj⟩ := h_complete σ x' ℓ hstep
+    obtain ⟨σ₀, σ₀', hπ₀, hstep₀, hπ₀'⟩ := h_realizable _ _ _ hstep
+    obtain ⟨σ', hstep', hproj⟩ := h_uniform σ₀ σ ℓ x' hπ₀ ⟨σ₀', hstep₀, hπ₀'⟩
     exact ⟨σ', hstep', hproj⟩
