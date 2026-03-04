@@ -27,6 +27,24 @@ distinctions (the escape sequence parser operates over finitely many modes and
 control characters). `[Fintype Dim]` bounds the observation space, not the
 system's reachable state space.
 
+## Structure of This File
+
+1. `ObservableSystem` — base structure: relevant states, behavior relation,
+   observation function
+2. `LearnabilityPreconditions` — identifiable + sound oracle
+3. Refinement machinery: `project`, `projectedOracle`, `refineStep`
+4. Monotone stabilization: self-contained proof of `inflationary_stabilizes_bound`
+5. `extraction_exists` — fixpoint gives soundness + controllability
+6. `extraction_with_projection` — names the extracted π and R explicitly
+7. `LearnabilityPreconditionsComplete` — adds `complete` + `relevant_closed`
+8. `exact_extraction` — complete oracle gives soundness + controllability + injectivity
+9. `relevantProjectedOracle`, `relevantProjectedOracle_witness_eq` —
+   relevance-restricted oracle enabling reverse direction
+10. Named constructions (sound-only): `extractionDims`,
+    `extractionDims_each_dim_witnessed` — concrete fixpoint with certificates
+11. Named constructions (complete): `refineStepComplete`, `extractionDims` (complete
+    case), `extractionDims_deproject`, `extractionDims_each_dim_witnessed` (complete)
+
 ## Three Explicit Preconditions (Plus One Implicit)
 
 The Lean types capture three explicit preconditions:
@@ -205,24 +223,6 @@ The present file is more general (any `ObservableSystem`), more declarative
 (existence of a fixpoint rather than construction), and more complete (bisimulation
 via the complete oracle case). The two developments are parallel, not formally
 connected — bridging them is future work.
-
-## Structure of This File
-
-1. `ObservableSystem` — base structure: relevant states, behavior relation,
-   observation function
-2. `LearnabilityPreconditions` — identifiable + sound oracle
-3. Refinement machinery: `project`, `projectedOracle`, `refineStep`
-4. Monotone stabilization: self-contained proof of `inflationary_stabilizes_bound`
-5. `extraction_exists` — fixpoint gives soundness + controllability
-6. `extraction_with_projection` — names the extracted π and R explicitly
-7. `LearnabilityPreconditionsComplete` — adds `complete` + `relevant_closed`
-8. `exact_extraction` — complete oracle gives soundness + controllability + injectivity
-9. `relevantProjectedOracle`, `relevantProjectedOracle_witness_eq` —
-   relevance-restricted oracle enabling reverse direction
-10. Named constructions (sound-only): `extractionDims`,
-    `extractionDims_each_dim_witnessed` — concrete fixpoint with certificates
-11. Named constructions (complete): `refineStepComplete`, `extractionDims` (complete
-    case), `extractionDims_deproject`, `extractionDims_each_dim_witnessed` (complete)
 -/
 
 set_option autoImplicit false
