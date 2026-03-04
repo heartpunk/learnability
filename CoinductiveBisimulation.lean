@@ -106,9 +106,8 @@ in classical logic.
 Lean 4 does have native `coinductive` predicates (via `Lean.Elab.Coinductive`,
 elaborated through partial fixpoint machinery). The Milner construction was
 originally chosen under the incorrect belief that `coinductive` was not
-available. It works fine — but a coinductive encoding may be cleaner. Open
-questions: how `coinductive` interacts with the relevance guard (`lp.relevant s`)
-and with `open Classical`.
+available. Both encodings now coexist — see the `BisimilarCo` section below
+for the coinductive version and the equivalence proof.
 -/
 
 /-- Two states are bisimilar if they are related by some bisimulation. -/
@@ -140,3 +139,97 @@ theorem projection_bisimilar
   ⟨projectionRelation lp, projectionRelation_isBisimulation lp, hr, rfl⟩
 
 end CoinductiveBisimulation
+
+/-! ## Coinductive Encoding
+
+The same bisimilarity, defined directly as a `coinductive` predicate rather than
+as the union of all bisimulations. Lean 4's `coinductive` elaborates through
+partial fixpoint machinery and generates a coinduction principle
+(`BisimilarCo.coinduct`) automatically.
+
+The two encodings are equivalent on relevant states. The Milner construction
+(`Bisimilar`) is more explicit — you can see the witness bisimulation. The
+coinductive version (`BisimilarCo`) is more direct — bisimilarity means the
+one-step property holds forever, no intermediate `IsBisimulation` needed.
+
+Note: `BisimilarCo` requires `lp.relevant s` in its constructor, making
+relevance a structural invariant. `Bisimilar` is vacuously true for irrelevant
+states (since `IsBisimulation` only constrains relevant pairs). The equivalence
+therefore holds on relevant states, which is the only case that matters —
+`projection_bisimilar` and `projection_bisimilarCo` both take `hr : lp.relevant s`.
+-/
+
+section CoinductiveBisimulationCo
+
+variable {State Label Dim Value : Type*}
+  [DecidableEq Dim] [Fintype Dim] [Inhabited Value]
+
+open Classical
+
+/-- Bisimilarity defined coinductively: two states are bisimilar when the
+    one-step matching property holds at every depth. Equivalent to `Bisimilar`
+    on relevant states. -/
+coinductive BisimilarCo
+    (lp : LearnabilityPreconditionsComplete State Label Dim Value)
+    : State → (Dim → Value) → Prop where
+  | step : ∀ s g,
+    lp.relevant s →
+    (∀ ℓ s', lp.behavior s ℓ s' →
+      relevantProjectedOracle lp.relevant lp.oracle lp.observe
+        lp.extractionDims ℓ g (project lp.observe lp.extractionDims s') ∧
+      BisimilarCo lp s' (project lp.observe lp.extractionDims s')) →
+    (∀ ℓ g', relevantProjectedOracle lp.relevant lp.oracle lp.observe
+        lp.extractionDims ℓ g g' →
+      ∃ s', lp.behavior s ℓ s' ∧ BisimilarCo lp s' g') →
+    BisimilarCo lp s g
+
+/-- The coinductive bisimilarity is a bisimulation in the relational sense.
+    Unfold one step of the coinductive definition. -/
+theorem bisimilarCo_isBisimulation
+    (lp : LearnabilityPreconditionsComplete State Label Dim Value) :
+    IsBisimulation lp (BisimilarCo lp) := by
+  intro s g hco hr
+  cases hco with
+  | step _ _ _ hfwd hbwd => exact ⟨hfwd, hbwd⟩
+
+/-- Coinductive bisimilarity implies Milner bisimilarity: `BisimilarCo` is
+    itself a bisimulation, so it witnesses the existential in `Bisimilar`. -/
+theorem bisimilarCo_implies_bisimilar
+    (lp : LearnabilityPreconditionsComplete State Label Dim Value)
+    (s : State) (g : Dim → Value) :
+    BisimilarCo lp s g → Bisimilar lp s g :=
+  fun hco => ⟨BisimilarCo lp, bisimilarCo_isBisimulation lp, hco⟩
+
+/-- Milner bisimilarity implies coinductive bisimilarity (for relevant states).
+
+    Uses `BisimilarCo.coinduct` — the coinduction principle Lean 4 generates
+    automatically. The coinduction predicate is `fun s g => relevant s ∧ Bisimilar s g`,
+    strengthened with relevance because `BisimilarCo.step` requires it.
+    `relevant_closed` threads relevance through successor states. -/
+theorem bisimilar_implies_bisimilarCo
+    (lp : LearnabilityPreconditionsComplete State Label Dim Value)
+    (s : State) (g : Dim → Value)
+    (hr : lp.relevant s) :
+    Bisimilar lp s g → BisimilarCo lp s g := by
+  intro hbis
+  apply BisimilarCo.coinduct lp (fun s g => lp.relevant s ∧ Bisimilar lp s g)
+  · intro a a₁ ⟨hra, R, hR_bisim, hRaa₁⟩
+    obtain ⟨hfwd, hbwd⟩ := hR_bisim a a₁ hRaa₁ hra
+    refine ⟨hra, ?_, ?_⟩
+    · intro ℓ s' hbeh
+      obtain ⟨hgram, hRs'⟩ := hfwd ℓ s' hbeh
+      exact ⟨hgram, lp.relevant_closed a s' ℓ hra hbeh, R, hR_bisim, hRs'⟩
+    · intro ℓ g' hclaim
+      obtain ⟨s', hbeh, hRs'g'⟩ := hbwd ℓ g' hclaim
+      exact ⟨s', hbeh, lp.relevant_closed a s' ℓ hra hbeh, R, hR_bisim, hRs'g'⟩
+  · exact ⟨hr, hbis⟩
+
+/-- Every relevant state is coinductively bisimilar to its projection.
+    The coinductive analog of `projection_bisimilar`. -/
+theorem projection_bisimilarCo
+    (lp : LearnabilityPreconditionsComplete State Label Dim Value)
+    (s : State) (hr : lp.relevant s) :
+    BisimilarCo lp s (project lp.observe lp.extractionDims s) :=
+  bisimilar_implies_bisimilarCo lp s _ hr (projection_bisimilar lp s hr)
+
+end CoinductiveBisimulationCo
