@@ -31,16 +31,24 @@ These form a Galois connection: `α(S) ⊆ R ↔ S ⊆ γ(R)`.
 
 The oracle conditions are the two halves:
 
-- **`OracleSoundFor`** = `α(H_I.step) ⊆ R`: every concrete step, when
-  projected via π, appears in R. The oracle contains the full abstraction of
-  the implementation.
+- **`OracleSoundFor`** = `α(H_I.step) ⊆ R`: every concrete step from a
+  *reachable* state, when projected via π, appears in R. The oracle contains
+  the full abstraction of the implementation's reachable behavior.
 
 - **`OracleRealizableFor`** = `R ⊆ α(H_I.step)`: every oracle claim is
-  witnessed by some concrete step. The oracle claims nothing the implementation
-  doesn't do.
+  witnessed by *some* concrete step (no reachability guard). The oracle claims
+  nothing the implementation doesn't do.
 
-- **Together**: `R = α(H_I.step)`. **R is exactly the guest-level semantics**
-  — the precise image of the host's transitions under π.
+- **Together**: `R = α(H_I.step)` over reachable states. **R is exactly the
+  guest-level semantics** — the precise image of the host's reachable
+  transitions under π.
+
+Note the deliberate asymmetry: soundness is restricted to reachable states
+(unreachable behavior is irrelevant to simulation), while realizability is
+unrestricted (any oracle claim must be concretely witnessed, regardless of
+whether the witness is reachable). The bridge lemma
+`oracleComplete_of_realizable_uniform` shows that `OracleRealizableFor +
+ProjectionUniform` together recover the fused completeness condition.
 
 ## ProjectionUniform: making π a semantic quotient map
 
