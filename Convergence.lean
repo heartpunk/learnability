@@ -215,8 +215,8 @@ structure IsCoRefinementFixpoint {HostState Config : Type*} {L : Type*}
 
 /-- X-controllable branch completeness follows from oracle soundness:
     given `H_I.step σ ℓ σ'`, soundness gives `R ℓ (π σ) (π σ')`,
-    witnessing `∃ x', R ℓ (π σ) x'`. The reachability, branch point,
-    and controllability hypotheses are unused — soundness alone suffices. -/
+    witnessing `∃ x', R ℓ (π σ) x'`. The branch point and controllability
+    hypotheses are unused — soundness and reachability alone suffice. -/
 theorem IsCoRefinementFixpoint.branches_complete
     {HostState Config : Type*} {L : Type*}
     {H_I : LTS HostState L} {π : Projection HostState Config}
