@@ -116,6 +116,22 @@ abbrev ProjectionUniform {HostState Config : Type*} {L : Type*}
     (∃ σ₁', H_I.step σ₁ ℓ σ₁' ∧ π σ₁' = x') →
     (∃ σ₂', H_I.step σ₂ ℓ σ₂' ∧ π σ₂' = x')
 
+/-- Bridge: OracleRealizableFor + ProjectionUniform recover the fused
+    completeness condition. Every oracle claim is realizable from any
+    concrete state with the matching projection. Documents that the split
+    is lossless — the two components together are equivalent to the original
+    fused `OracleCompleteFor`. -/
+theorem oracleComplete_of_realizable_uniform {HostState Config : Type*} {L : Type*}
+    (H_I : LTS HostState L) (π : Projection HostState Config)
+    (R : L → Config → Config → Prop)
+    (h_realizable : OracleRealizableFor H_I π R)
+    (h_uniform : ProjectionUniform H_I π) :
+    ∀ (σ : HostState) (x' : Config) (ℓ : L),
+      R ℓ (π σ) x' → ∃ (σ' : HostState), H_I.step σ ℓ σ' ∧ π σ' = x' := by
+  intro σ x' ℓ hR
+  obtain ⟨σ₀, σ₀', hπ₀, hstep₀, hπ₀'⟩ := h_realizable _ _ _ hR
+  exact h_uniform σ₀ σ ℓ x' hπ₀ ⟨σ₀', hstep₀, hπ₀'⟩
+
 /- **Paper correspondence only.** The following BranchingOracle definitions
    exist for correspondence with Section III-A of the paper. The extraction
    pipeline uses only `OracleSoundFor`/`OracleRealizableFor`/`ProjectionUniform`;
