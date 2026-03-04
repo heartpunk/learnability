@@ -3,28 +3,108 @@ import LTS
 /-!
 # Conditional Simulation
 
-Recovering guest-language operational semantics from host-language evaluation.
-The projection π : HostState → Config maps host evaluation states to
-guest-language configurations. Oracle soundness and completeness characterize
-when the projected model faithfully simulates the original.
+The theoretical core of the extraction technique: characterizing when a
+projection of an implementation LTS faithfully captures guest-language
+operational semantics.
 
-Oracle completeness splits into two parts that connect to standard
-abstract-interpretation structure:
-- **OracleRealizableFor** — the Galois dual of OracleSoundFor: R ⊆ α(steps),
-  every claimed transition is witnessed by some concrete step.
-- **ProjectionUniform** — all concrete states with the same projection agree
-  on transition availability and projected target (a property of H_I and π,
-  independent of any particular oracle R).
+## The setup: guest/host language extraction
 
-OracleSoundFor gives forward simulation; OracleRealizableFor + ProjectionUniform
-give reverse simulation.
+The host system `H_I` evaluates programs in a guest language. `HostState`
+contains everything the host needs — stack frames, allocator metadata, OS
+resources, implementation bookkeeping. `Config` is the guest-language
+operational state — everything the *guest* program cares about. The projection
+`π : HostState → Config` recovers guest-level state from host evaluation state.
+
+This is not lossy observation. It is **semantic recovery**: `π` identifies the
+guest-level structure the host is computing over. When `π` is correctly chosen,
+the oracle `R : L → Config → Config → Prop` captures the guest language's
+transition relation exactly — R *is* the extracted operational semantics.
+
+## The Galois connection: the central organizing idea
+
+`π` induces two natural maps on step relations:
+
+- **α(S)** `= {(π σ, ℓ, π σ') | (σ, ℓ, σ') ∈ S}` — abstraction: image under π
+- **γ(R)** `= {(σ, ℓ, σ') | (π σ, ℓ, π σ') ∈ R}` — concretization: preimage under π
+
+These form a Galois connection: `α(S) ⊆ R ↔ S ⊆ γ(R)`.
+
+The oracle conditions are the two halves:
+
+- **`OracleSoundFor`** = `α(H_I.step) ⊆ R`: every concrete step, when
+  projected via π, appears in R. The oracle contains the full abstraction of
+  the implementation.
+
+- **`OracleRealizableFor`** = `R ⊆ α(H_I.step)`: every oracle claim is
+  witnessed by some concrete step. The oracle claims nothing the implementation
+  doesn't do.
+
+- **Together**: `R = α(H_I.step)`. **R is exactly the guest-level semantics**
+  — the precise image of the host's transitions under π.
+
+## ProjectionUniform: making π a semantic quotient map
+
+The Galois connection tells you what R should be. For the **reverse simulation**,
+you need more: given oracle claim `R ℓ x x'` and a specific concrete state `σ`
+with `π σ = x`, you need `σ` *itself* to be able to take the step — not just
+some other state sharing σ's projection.
+
+`ProjectionUniform` is the condition that licences this transfer. It says that
+the hidden state — the part `π` discards — cannot affect (1) whether a
+transition is available, or (2) what projected state it leads to. Formally: if
+any host state with projection `x` can take `ℓ` to a state projecting to `x'`,
+then **every** host state with projection `x` can do so.
+
+This makes `π` a **semantic quotient map**: the guest-level transition relation
+is well-defined on `π`-equivalence classes. Two host states indistinguishable
+to the guest behave identically from the guest's perspective.
+
+`ProjectionUniform` is a property of `H_I + π` only, independent of R. It is
+what the co-refinement process (`Convergence.lean`) iteratively establishes:
+each dimension added to X corrects a pair of states with the same current
+projection that violate uniformity. At the fixpoint, no violation remains.
+
+## Relation to IsXControllable
+
+`IsXControllable` at `(s, ℓ)` says all `π`-equivalent states can take `ℓ`
+(to *some* target, unconstrained). `ProjectionUniform` is the global, stronger
+version: all `π`-equivalent states agree on the full `(ℓ, x')` transition set,
+not just on label availability. At the co-refinement fixpoint, non-controllable
+transitions are implementation-internal — they fire without changing the projected
+state (`Convergence.lean`, `IsCoRefinementFixpoint.non_controllable_internal`).
+
+## Why simulation is "conditional"
+
+The implications here are almost immediate given the oracle conditions:
+- `OracleSoundFor` → forward simulation: one line. Apply soundness to produce
+  the oracle step from any concrete step.
+- `OracleRealizableFor + ProjectionUniform` → reverse simulation: three lines.
+  Realizability witnesses some concrete step; uniformity transfers it to the
+  specific concrete state at hand.
+
+The simulation is **conditional** because establishing these oracle properties
+is the hard part. That is the job of the extraction pipeline and the
+co-refinement process in `Convergence.lean`. The implications here are
+theoretically thin; the weight is in earning the preconditions.
+
+## What this file does NOT do
+
+No dimension refinement, no iterative process, no convergence argument. This
+file says: *given* that oracle conditions hold, these simulation results follow.
+How to achieve those conditions is `Convergence.lean`.
 -/
 
 /-! ## Projection
 
-The projection π : Σ → X maps the full host state to the program-relevant
-configuration. X is the transitive closure of AST-bound state—everything
-causally influenced by program structure.
+`π : HostState → Config` recovers the guest-language operational state from
+the host evaluation state. Host states in the same `π`-equivalence class
+represent the same guest-language configuration — they differ only in
+implementation detail that the guest language cannot observe.
+
+The choice of `π` determines what counts as "the same" at the guest level.
+Choosing it correctly — so that `ProjectionUniform` holds — is the content
+of the extraction technique. The co-refinement process discovers the minimal
+`π` for which uniformity holds.
 -/
 
 /-- The projection from host state to program-relevant configuration. -/
@@ -59,28 +139,28 @@ abbrev IsImplementationInternal {HostState Config : Type*} {L : Type*}
 
 /-! ## Oracles: Value Transformation and Branching
 
-The extraction relies on two oracles:
+The oracle `R : L → Config → Config → Prop` summarizes the implementation's
+transition behavior at the guest level. `R ℓ x x'` means: from guest state
+`x`, the implementation can take label `ℓ` to arrive at guest state `x'`.
+When `R = α(H_I.step)` — i.e., when both soundness and realizability hold —
+R is exactly the guest language's operational semantics.
 
-1. **Value-transformation oracle** (R): for each label ℓ, a relation
-   R_ℓ(x, x') capturing the state transformation of the region.
-   Soundness: every concrete step is captured. Completeness: R claims
-   no transitions beyond what H_I exhibits.
+A separate **branching oracle** `B : Config → L → Prop` records which labels
+are available from each configuration. `B x ℓ` means label `ℓ` is feasible
+from `x`. The canonical choice is `B := domain(R)`: `B x ℓ := ∃ x', R ℓ x x'`.
 
-2. **Branching oracle** (B): for each configuration x, the set of
-   feasible labels B(x). Soundness: claimed labels are feasible.
-   Completeness: all feasible labels are claimed.
+**Dependency chain**: The simulation theorems below take R as hypothesis —
+they don't mention B explicitly. However, *constructing* a sound R requires
+discovering all branches first: if B misses a label ℓ, R will never have an
+entry for it, violating `OracleSoundFor`. So branching oracle completeness is
+a construction-time prerequisite for value oracle soundness, even though it
+is logically a *consequence* of soundness (see `BranchOracleCompleteFor_of_OracleSoundFor`).
 
-**Dependency chain**: The simulation theorems below only require R to be
-sound/complete—they don't mention B. However, *constructing* a sound R
-requires complete branching discovery: if the branching oracle misses a
-label ℓ, then R_ℓ will be wrong/absent, violating `OracleSoundFor`.
-So branching oracle completeness is a prerequisite for value oracle
-soundness, not a separate theorem hypothesis.
-
-**B–R relationship**: The canonical B is the domain of R:
-`B x ℓ := ∃ x', R ℓ x x'`. Under this definition,
-`OracleSoundFor R` implies `BranchOracleCompleteFor B`, and
-`OracleRealizableFor R + ProjectionUniform` implies `BranchOracleSoundFor B`.
+**B–R subsumption** (under the canonical `B = domain(R)`):
+- `OracleSoundFor R` → `BranchOracleCompleteFor B`: soundness witnesses every
+  branch, so B misses nothing.
+- `OracleRealizableFor R + ProjectionUniform` → `BranchOracleSoundFor B`:
+  every claimed branch is realizable from any concrete state with that projection.
 -/
 
 /-- An oracle is sound for an LTS through a projection when every
@@ -185,11 +265,25 @@ theorem BranchOracleSoundFor_of_OracleRealizable {HostState Config : Type*} {L :
 
 /-! ## Oracle-Induced Simulation and Bisimulation
 
-Given a sound oracle R, the oracle LTS simulates H_I (forward simulation).
-Given a complete oracle R, H_I simulates the oracle LTS (reverse simulation).
-Together, soundness + completeness give bisimulation. The non-trivial content
-lies in *establishing* these oracle properties (extraction pipeline,
-co-refinement fixpoint), not in these implications themselves.
+These theorems are the payoff of the oracle conditions — short proofs because
+the oracle conditions already did the heavy lifting.
+
+**Forward** (`simulation_of_sound_oracle`): `OracleSoundFor` → oracle LTS
+simulates `H_I`. Every concrete step `σ →ℓ σ'` yields `R ℓ (π σ) (π σ')`
+directly, which is a step in the oracle LTS. The witness relation is
+`fun x σ => π σ = x ∧ H_I.Reachable σ`.
+
+**Reverse** (`simulation_of_complete_oracle`): `OracleRealizableFor +
+ProjectionUniform` → `H_I` simulates the oracle LTS. Given oracle claim
+`R ℓ x x'` and concrete `σ` with `π σ = x`: realizability finds some `σ₀`
+with `π σ₀ = x` that can take the step; uniformity transfers the step to
+`σ` itself. The witness relation is `fun σ x => π σ = x`.
+
+**Bisimulation**: both simulations hold simultaneously when all three oracle
+conditions hold (`OracleSoundFor`, `OracleRealizableFor`, `ProjectionUniform`).
+This is the full correctness guarantee: the extracted oracle LTS and `H_I`
+are bisimilar over reachable states. See `CoinductiveBisimulation.lean` for
+the coinductive characterization via the general `Learnability.lean` framework.
 -/
 
 /-- The LTS over configurations induced by an oracle: transitions are
