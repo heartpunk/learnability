@@ -299,6 +299,81 @@ structure LearnabilityPreconditions
   /-- Oracle soundness: every real behavior has an oracle witness -/
   sound : ∀ (s s' : State) (ℓ : Label), behavior s ℓ s' → oracle ℓ s s'
 
+/-! ## Identifiability Theorems
+
+The `identifiable` precondition — observations distinguish relevant states —
+is near-trivially satisfiable for concrete computational objects. These
+theorems make that precise.
+
+**What this discharges and what it doesn't.** Identifiability is the *easy*
+precondition. For any system with decidable state equality (programs on x86,
+ARM, any concrete ISA), these theorems give you identifiability for free.
+The *hard* preconditions — constructing a sound oracle (requires symbolic
+execution or equivalent) and achieving effective observability (the fourth
+implicit precondition: choosing *what* to observe, building instrumentation
+harnesses, computing the right program slice) — are not addressed here.
+The framework guarantees convergence *if* you solve those problems; these
+theorems just ensure identifiability won't be the bottleneck.
+-/
+
+/-- Globally injective observation implies identifiability.
+
+    If `observe`, viewed as a function `State → (Dim → Value)`, is injective,
+    then the `identifiable` precondition holds for any `relevant` predicate.
+
+    Relevance is unused — global injectivity is stronger than the precondition
+    requires. The precondition only constrains `relevant s₁` (with `s₂`
+    unconstrained), so an observation function may conflate irrelevant states
+    with each other, as long as no irrelevant state is observationally
+    identical to a relevant one. -/
+theorem identifiable_of_injective_observe
+    {State Dim Value : Type*}
+    (observe : State → Dim → Value)
+    (h_inj : Function.Injective observe)
+    {relevant : State → Prop} :
+    ∀ (s₁ s₂ : State), relevant s₁ →
+      (∀ d, observe s₁ d = observe s₂ d) → s₁ = s₂ :=
+  fun s₁ s₂ _ h_obs => h_inj (funext h_obs)
+
+/-- The indicator observation `fun s d => decide (s = d)` is injective.
+
+    For any type with decidable equality, each state has a unique Boolean
+    fingerprint: state `s` maps dimension `d` to `true` iff `s = d`.
+    Two states with identical fingerprints must be equal. -/
+theorem indicator_observe_injective {State : Type*} [DecidableEq State] :
+    Function.Injective (fun (s : State) (d : State) => decide (s = d)) := by
+  intro s₁ s₂ h
+  have h₁ := congr_fun h s₁
+  simp at h₁
+  exact h₁.symm
+
+/-- Identifiability for `DecidableEq` types via the indicator observation.
+
+    Corollary of `identifiable_of_injective_observe` applied to
+    `indicator_observe_injective`. For any concrete computational type
+    with decidable equality — `State := (Stack × Heap × Registers)`,
+    `State := (Context × Expr)`, etc. — identifiability is trivially
+    satisfiable using `Dim := State`, `Value := Bool`,
+    `observe s d := decide (s = d)`.
+
+    This proves identifiability is *satisfiable*, not that the indicator
+    observation is the right one to use. In practice, the choice of
+    observation function determines the quality of the extracted model —
+    a natural observation like register/memory reads on an ISA gives a
+    meaningful model, while the indicator construction only witnesses
+    existence. The hard work is choosing observations that make effective
+    observability achievable.
+
+    Note: using this as an `identifiable` field in `LearnabilityPreconditions`
+    also requires `[Fintype State]`, since the framework needs `[Fintype Dim]`
+    and here `Dim = State`. -/
+theorem identifiable_indicator
+    {State : Type*} [DecidableEq State]
+    {relevant : State → Prop} :
+    ∀ (s₁ s₂ : State), relevant s₁ →
+      (∀ d : State, decide (s₁ = d) = decide (s₂ = d)) → s₁ = s₂ :=
+  identifiable_of_injective_observe (fun s d => decide (s = d)) indicator_observe_injective
+
 /-! ## Refinement Machinery
 
 Standalone definitions for projection, projected oracle, and refinement
