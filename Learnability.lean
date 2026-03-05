@@ -1218,3 +1218,51 @@ theorem LearnabilityPreconditionsComplete.extractionDims_each_dim_witnessed
   have h_in_filter := hk_in'.resolve_left hk_out
   rw [Finset.mem_filter] at h_in_filter
   exact ⟨k, hk_out, h_in_filter.2⟩
+
+/-! ## Extraction at Arbitrary Fixpoints
+
+`extraction_exists` proves properties at the specific fixpoint discovered by
+iterating `refineStep` from `∅`. But its proof only uses the fixpoint property
+`refineStep X = X`, not how X was constructed. This factored version works for
+ANY fixpoint. -/
+
+open Classical in
+/-- Extraction at any fixpoint of `refineStep`.
+
+    `extraction_exists` is the special case where `X = extractionDims`
+    (the fixpoint discovered by iteration). Any other construction that
+    produces a fixpoint gets the same soundness and controllability. -/
+theorem LearnabilityPreconditions.extraction_at_fixpoint
+    {State Label Dim Value : Type*}
+    [DecidableEq Dim] [Fintype Dim] [Inhabited Value]
+    (lp : LearnabilityPreconditions State Label Dim Value)
+    (X : Finset Dim)
+    (h_fp : refineStep lp.toObservableSystem X = X) :
+    (∀ (s s' : State) (ℓ : Label), lp.relevant s → lp.behavior s ℓ s' →
+      projectedOracle lp.oracle lp.observe X ℓ
+        (project lp.observe X s) (project lp.observe X s')) ∧
+    (∀ (s₁ s₂ : State) (ℓ : Label), lp.relevant s₁ →
+      project lp.observe X s₁ = project lp.observe X s₂ →
+      (∃ s₁', lp.behavior s₁ ℓ s₁') →
+      (∃ s₂', lp.behavior s₂ ℓ s₂')) := by
+  refine ⟨?_, ?_⟩
+  · intro s s' ℓ _hrel hbeh
+    exact ⟨s, s', rfl, lp.sound s s' ℓ hbeh, rfl⟩
+  · intro s₁ s₂ ℓ h_rel hproj_eq ⟨s₁', hbeh⟩
+    by_cases h_can : ∃ s', lp.behavior s₂ ℓ s'
+    · exact h_can
+    · exfalso; apply h_can
+      have h_eq : s₁ = s₂ := by
+        apply lp.identifiable _ _ h_rel
+        intro d
+        by_cases hd : d ∈ X
+        · exact obs_eq_of_proj_eq_mem hproj_eq hd
+        · by_contra h_ne
+          have h_mem : d ∈ refineStep lp.toObservableSystem X := by
+            apply Finset.mem_union_right
+            rw [Finset.mem_filter]
+            exact ⟨Finset.mem_univ d, s₁, s₂, ℓ, h_rel, ⟨s₁', hbeh⟩,
+                   hproj_eq.symm, h_can, h_ne⟩
+          rw [h_fp] at h_mem
+          exact hd h_mem
+      subst h_eq; exact ⟨s₁', hbeh⟩
