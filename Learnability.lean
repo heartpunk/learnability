@@ -197,13 +197,24 @@ need not represent state transitions:
    finite behavioral structure.
 
 4. **Type systems**: `behavior` captures typing judgments (Γ ⊢ e : τ), not state
-   transitions. Finitely many type rules and context shapes give `[Fintype Dim]`.
-   No initial state — judgments stand alone. `relevant` filters to well-formed pairs.
+   transitions. `State := (Context × Expr)`, `Label := TypeRule` (which typing rule
+   applies), `behavior (Γ, e) rule (Γ', e')` means applying `rule` in context Γ to
+   expression e yields context Γ' and subexpression e'. `Dim` ranges over context
+   shapes — the finite set of relevant context distinctions (e.g., "is variable x
+   bound?", "what is the type of variable y?"). No initial state — judgments stand
+   alone, so `relevant` filters to well-formed `(Γ, e)` pairs rather than marking
+   reachable states. Identifiability is trivially `DecidableEq` on `(Context × Expr)`.
+   Finitely many type rules and context shapes give `[Fintype Dim]`.
 
-5. **Effect systems**: `behavior` captures effect propagation constraints. Finitely
-   many effect annotations give `[Fintype Dim]`. Constraint propagation, not
-   transitions — `ObservableSystem` handles this because `behavior` is just a
-   relation on states.
+5. **Effect systems**: `behavior` captures effect propagation constraints, not state
+   transitions. `State := (EffectContext × Computation)`, `Label := EffectOperation`
+   (which effect operation is performed), `behavior (ε, c) op (ε', c')` means
+   performing operation `op` in effect context ε on computation c yields ε' and c'.
+   `Dim` ranges over effect annotations — the finite set of effect distinctions
+   tracked by the system (e.g., "does this computation perform IO?", "is this
+   handler installed?"). Effect annotations propagate through the type system, not
+   through state transitions — a genuinely different mechanism from LTS, but
+   `ObservableSystem` handles it because `behavior` is just a relation on states.
 
 6. **Effect handler operational semantics**: a clean LTS — in contrast to #5,
    which is not an LTS. The effect annotation system and its operational semantics
@@ -228,8 +239,9 @@ Those files implement the same technique for the specific LTS case:
 `simulation_at_coRefinement_fixpoint` gives the forward simulation result.
 The present file is more general (any `ObservableSystem`), more declarative
 (existence of a fixpoint rather than construction), and more complete (bisimulation
-via the complete oracle case). The two developments are parallel, not formally
-connected — bridging them is future work.
+via the complete oracle case). The two developments are bridged in `LearnabilityConvergence.lean`:
+any `LearnabilityPreconditions` instance gives rise to a `CoRefinementProcess`,
+and `extractionDims` is a valid co-refinement fixpoint.
 -/
 
 set_option autoImplicit false
