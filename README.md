@@ -19,6 +19,8 @@ The same idea is formalized twice — once concretely for labeled transition sys
 - `Learnability.lean` — the general framework, independent of the LTS chain (imports only Mathlib). Works for any `behavior : State → Label → State → Prop` — not just transition systems but typing judgments, parse relations, effect propagation. Contains the main theorem and all refinement machinery.
 - `CoinductiveBisimulation.lean` — capstone: upgrades simulation to bisimulation when the oracle is complete. Both Milner (union-of-bisimulations) and coinductive encodings, with equivalence proof.
 
+**Bridge:** `LearnabilityConvergence.lean` — connects the two chains. Shows that any `LearnabilityPreconditions` instance gives rise to a `CoRefinementProcess`, and that `extractionDims` is a valid co-refinement fixpoint.
+
 ## Building
 
 Requires Lean 4 + Mathlib.
