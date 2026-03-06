@@ -425,6 +425,131 @@ theorem guardedLoopDenot_sound_complete
       (CompTree.treeBehavior isa (guardedLoopTree isa summary n)) := by
   exact CompTree.denot_sound_complete isa (guardedLoopTree isa summary n)
 
+/-- Bounded while behavior: `whileBehavior` restricted to at most `bound` iterations.
+    This is the semantic target for `guardedLoopTree`. -/
+def boundedWhileBehavior (summary : LoopSummary Sub PC State isa) (bound : ℕ) :
+    State → State → Prop :=
+  fun s s' => ∃ n, n ≤ bound ∧
+    (iterateBody isa summary n s = s') ∧
+    (∀ k, k + 1 < n → isa.satisfies (summary.bodyEffect^[k + 1] s) summary.continues) ∧
+    isa.satisfies (summary.bodyEffect^[n] s) summary.exits
+
+/-- `f^[n+1] x = f^[n] (f x)` — definitional from `Function.iterate`. -/
+private theorem iterate_succ_apply' {α : Type*} (f : α → α) (n : ℕ) (x : α) :
+    f^[n + 1] x = f^[n] (f x) := rfl
+
+/-- `f^[n+1] x = f (f^[n] x)` (pointwise form of iterate_succ'). -/
+private theorem iterate_succ_apply {α : Type*} (f : α → α) (n : ℕ) (x : α) :
+    f^[n + 1] x = f (f^[n] x) := by
+  rw [Function.iterate_succ', Function.comp_apply]
+
+/-- Iterating f commutes: `f^[n] (f x) = f (f^[n] x)`. -/
+private theorem iterate_comm {α : Type*} (f : α → α) (n : ℕ) (x : α) :
+    f^[n] (f x) = f (f^[n] x) := by
+  rw [← iterate_succ_apply' f n x, iterate_succ_apply f n x]
+
+/-- The concrete behavior of `afterBody n` matches the "between iterations" semantics:
+    starting from state s (which is already post-body), either exit or (continues holds,
+    do body, recurse with up to n more post-body decisions). -/
+private theorem afterBody_behavior
+    (summary : LoopSummary Sub PC State isa) (n : ℕ) (s s' : State) :
+    CompTree.treeBehavior isa (afterBody isa summary n) s s' ↔
+      ∃ m, m ≤ n ∧
+        (summary.bodyEffect^[m] s = s') ∧
+        (∀ k, k < m → isa.satisfies (summary.bodyEffect^[k] s) summary.continues) ∧
+        isa.satisfies (summary.bodyEffect^[m] s) summary.exits := by
+  induction n generalizing s with
+  | zero =>
+    simp only [afterBody, CompTree.treeBehavior, assertBehavior]
+    constructor
+    · rintro ⟨hsat, heq⟩
+      exact ⟨0, le_refl 0, heq.symm, fun k hk => by omega, heq ▸ hsat⟩
+    · rintro ⟨m, hm, heq, -, hext⟩
+      have hm0 : m = 0 := by omega
+      subst hm0; simp at heq; exact ⟨heq ▸ hext, heq.symm⟩
+  | succ n ih =>
+    simp only [afterBody, CompTree.treeBehavior, choiceBehavior, assertBehavior, seqBehavior]
+    constructor
+    · rintro (⟨hsat, heq⟩ | ⟨t₁, ⟨hcont, ht₁⟩, t₂, hbody, hafter⟩)
+      · exact ⟨0, Nat.zero_le _, heq.symm, fun k hk => by omega, heq ▸ hsat⟩
+      · subst ht₁
+        have hdet := (summary.bodyEffect_spec _ t₂).mp hbody; subst hdet
+        rw [ih] at hafter
+        obtain ⟨m', hm', heq', hconts', hext'⟩ := hafter
+        refine ⟨m' + 1, by omega, ?_, ?_, ?_⟩
+        · rw [iterate_succ_apply']; exact heq'
+        · intro k hk
+          cases k with
+          | zero => exact hcont
+          | succ k' =>
+            rw [iterate_succ_apply']
+            exact hconts' k' (by omega)
+        · rw [iterate_succ_apply']; exact hext'
+    · rintro ⟨m, hm, heq, hconts, hext⟩
+      cases m with
+      | zero => left; simp at heq; exact ⟨heq ▸ hext, heq.symm⟩
+      | succ m' =>
+        right
+        refine ⟨_, ⟨hconts 0 (by omega), rfl⟩, summary.bodyEffect _,
+                (summary.bodyEffect_spec s _).mpr rfl, ?_⟩
+        rw [ih]
+        refine ⟨m', by omega, ?_, ?_, ?_⟩
+        · rw [iterate_succ_apply'] at heq; exact heq
+        · intro k hk
+          have := hconts (k + 1) (by omega)
+          rw [iterate_succ_apply'] at this; exact this
+        · rw [iterate_succ_apply'] at hext; exact hext
+
+/-- **Semantic equivalence:** `treeBehavior (guardedLoopTree summary bound)` is exactly
+    `boundedWhileBehavior summary bound`.
+
+    This closes finding #1: the guarded loop tree has sound+complete branches
+    (from `guardedLoopDenot_sound_complete`) AND matches the concrete loop semantics. -/
+theorem guardedLoopTree_eq_boundedWhileBehavior
+    (summary : LoopSummary Sub PC State isa) (bound : ℕ) (s s' : State) :
+    CompTree.treeBehavior isa (guardedLoopTree isa summary bound) s s' ↔
+    boundedWhileBehavior isa summary bound s s' := by
+  induction bound generalizing s with
+  | zero =>
+    simp only [guardedLoopTree, CompTree.treeBehavior, assertBehavior,
+               boundedWhileBehavior, iterateBody]
+    constructor
+    · rintro ⟨hsat, heq⟩
+      exact ⟨0, le_refl 0, heq.symm, fun k hk => by omega, heq ▸ hsat⟩
+    · rintro ⟨m, hm, heq, -, hext⟩
+      have hm0 : m = 0 := by omega
+      subst hm0; simp at heq; exact ⟨heq ▸ hext, heq.symm⟩
+  | succ n ih =>
+    simp only [guardedLoopTree, CompTree.treeBehavior, choiceBehavior,
+               assertBehavior, seqBehavior, boundedWhileBehavior, iterateBody]
+    constructor
+    · rintro (⟨hsat, heq⟩ | ⟨t, hbody, hafter⟩)
+      · exact ⟨0, Nat.zero_le _, heq.symm, fun k hk => by omega, heq ▸ hsat⟩
+      · have hdet := (summary.bodyEffect_spec s t).mp hbody; subst hdet
+        rw [afterBody_behavior] at hafter
+        obtain ⟨m', hm', heq', hconts', hext'⟩ := hafter
+        refine ⟨m' + 1, by omega, ?_, ?_, ?_⟩
+        · -- bodyEffect^[m'+1] s = bodyEffect^[m'] (bodyEffect s) = s'
+          rw [iterate_succ_apply']; exact heq'
+        · intro k hk
+          -- k + 1 < m' + 1, so need satisfies at bodyEffect^[k+1] s
+          rw [iterate_succ_apply']
+          exact hconts' k (by omega)
+        · rw [iterate_succ_apply']; exact hext'
+    · rintro ⟨m, hm, heq, hconts, hext⟩
+      cases m with
+      | zero => left; simp at heq; exact ⟨heq ▸ hext, heq.symm⟩
+      | succ m' =>
+        right
+        refine ⟨summary.bodyEffect s, (summary.bodyEffect_spec s _).mpr rfl, ?_⟩
+        rw [afterBody_behavior]
+        refine ⟨m', by omega, ?_, ?_, ?_⟩
+        · rw [iterate_succ_apply'] at heq; exact heq
+        · intro k hk
+          have := hconts k (by omega)
+          rw [iterate_succ_apply'] at this; exact this
+        · rw [iterate_succ_apply'] at hext; exact hext
+
 end GuardedLoopTree
 
 
