@@ -462,6 +462,7 @@ private theorem iterate_comm {α : Type*} (f : α → α) (n : ℕ) (x : α) :
 /-- The concrete behavior of `afterBody n` matches the "between iterations" semantics:
     starting from state s (which is already post-body), either exit or (continues holds,
     do body, recurse with up to n more post-body decisions). -/
+omit [DecidableEq Sub] [DecidableEq PC] in
 private theorem afterBody_behavior
     (summary : LoopSummary Sub PC State isa) (n : ℕ) (s s' : State) :
     CompTree.treeBehavior isa (afterBody isa summary n) s s' ↔
@@ -516,6 +517,7 @@ private theorem afterBody_behavior
 
     This closes finding #1: the guarded loop tree has sound+complete branches
     (from `guardedLoopDenot_sound_complete`) AND matches the concrete loop semantics. -/
+omit [DecidableEq Sub] [DecidableEq PC] in
 theorem guardedLoopTree_eq_boundedWhileBehavior
     (summary : LoopSummary Sub PC State isa) (bound : ℕ) (s s' : State) :
     CompTree.treeBehavior isa (guardedLoopTree isa summary bound) s s' ↔
