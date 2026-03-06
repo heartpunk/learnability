@@ -364,9 +364,11 @@ end LoopBranchSetBridge
 /-! ## Guarded Loop Tree
 
 A `while continues { body }` with exit condition `exits`, bounded to n
-iterations, is the CompTree:
+iterations. Continues is checked BETWEEN iterations (after body, before
+the next body), matching `whileBehavior` semantics:
 - 0 iterations: `assert exits`
-- n+1: `choice (assert exits) (seq (assert continues) (seq body (recurse n)))` -/
+- n+1: `choice (assert exits) (seq body (afterBody n))`
+  where `afterBody` handles the between-iterations continue/exit decision. -/
 
 section GuardedLoopTree
 
