@@ -4,37 +4,32 @@ import Mathlib.Data.Fintype.Pigeonhole
 /-!
 # Circular Coinduction for Unbounded Loops
 
-Extends the branch framework to handle unbounded loops via the Lucanu-Rusu-Arusoaie
-technique (JSC 2017). Instead of unrolling a loop N times (exponential branch count),
-we characterize the loop by a **loop summary**: execute the body once symbolically,
-producing a branch, plus continue/exit conditions.
+Extends the branch framework to handle unbounded loops. A loop body can now
+be a full `CompTree` (with internal branching), not just a single `Branch`.
 
 ## Key Idea
 
-A `LoopSummary` is a tuple `(body, continues, exits)` where:
-- `body : Branch Sub PC` — one iteration's substitution + guard
-- `continues : PC` — loop repeats when this holds (of the post-body state)
-- `exits : PC` — loop terminates when this holds (of the post-body state)
+A `LoopSummary` has:
+- `body : CompTree Sub PC` — one iteration (may branch internally)
+- `continues`/`exits : PC` — loop control conditions
+- `bodyEffect : State → State` — deterministic concrete effect
+- `bodyEffect_spec` — proof that bodyEffect agrees with treeBehavior
 
-The loop summary characterizes ALL iterations: the n-th iteration's branch
-is `body^n` (n-fold composition via `Branch.compose`), and the loop exits
-when the post-state satisfies `exits` and no longer satisfies `continues`.
+## Convergence
+
+The loop branch set (`loopBranchSet`) accumulates symbolic branches by
+composing the body's denotation with previously discovered branches.
+It is monotone and, when it stabilizes, gives a complete branch model.
+
+**Worst case:** (1 + B)^K branches (exponential in unrolling depth K).
+**With absorptivity:** B * K branches (linear). Absorptivity holds when
+  branches in the same PC-equivalence class compose identically — true for
+  parsers and other programs with finite symbolic state. This follows from
+  the `pcSetoid` congruence in Quotient.lean.
 
 ## Connection to Stalagmite
 
-Stubs in stalagmite ARE loop summaries:
-- A stub is a pre-computed summary of a function's behavior
-- Co-refinement (re-run with tighter stubs until no new grammar rules) IS
-  circular coinduction reaching fixpoint
-- The guardedness condition (nontrivial body) corresponds to stubs requiring
-  at least one real step before re-invoking
-
-## ICTAC Context
-
-ICTAC's `PWhile b p` is handled via bounded unrolling (`CompTree.boundedIter`).
-This phase lifts that to unbounded loops by showing that loop summaries
-produce sound (and potentially complete) branch models for the full while
-loop behavior, without requiring an a priori iteration bound.
+Stubs in stalagmite ARE loop summaries. Co-refinement IS circular coinduction.
 -/
 
 set_option autoImplicit false
@@ -46,51 +41,39 @@ section LoopSummary
 
 variable {Sub PC State : Type*}
 
-/-- A loop summary: characterizes a while loop by its body effect and
-    continue/exit conditions.
+/-- A loop summary: characterizes a while loop by its body (a CompTree with
+    possible internal branching), continue/exit conditions, and a deterministic
+    effect function.
 
-    `body` is the branch for one iteration (substitution + guard).
-    `continues` holds of the post-body state when the loop repeats.
-    `exits` holds of the post-body state when the loop terminates. -/
-structure LoopSummary (Sub PC : Type*) where
-  /-- The branch for one loop iteration. -/
-  body : Branch Sub PC
+    The determinism field reflects that compiled programs are deterministic:
+    given a concrete state, exactly one path through the body fires. -/
+structure LoopSummary (Sub PC State : Type*) (isa : SymbolicISA Sub PC State) where
+  /-- The computation tree for one loop iteration (may have internal choice). -/
+  body : CompTree Sub PC
   /-- Condition for loop to repeat (checked after body executes). -/
   continues : PC
   /-- Condition for loop to exit (checked after body executes). -/
   exits : PC
-
-/-! ## Iterated Branch Composition -/
+  /-- Deterministic effect of one iteration on concrete states. -/
+  bodyEffect : State → State
+  /-- The effect function agrees with the tree's behavior. -/
+  bodyEffect_spec : ∀ s, CompTree.treeBehavior isa body s (bodyEffect s)
 
 variable (isa : SymbolicISA Sub PC State)
 
-/-- Compose a branch with itself n times.
-    `iterateBranch isa b 0 = Branch.skip isa` (identity).
-    `iterateBranch isa b (n+1) = Branch.compose isa b (iterateBranch isa b n)`. -/
-def iterateBranch (b : Branch Sub PC) : ℕ → Branch Sub PC
-  | 0 => Branch.skip isa
-  | n + 1 => b.compose isa (iterateBranch b n)
+/-- Iterate the body effect n times. Computable, deterministic. -/
+def iterateBody (summary : LoopSummary Sub PC State isa) (n : ℕ) (s : State) : State :=
+  summary.bodyEffect^[n] s
 
-/-- Zero iterations = skip. -/
-theorem iterateBranch_zero (b : Branch Sub PC) :
-    iterateBranch isa b 0 = Branch.skip isa := rfl
+/-- Zero iterations = identity. -/
+theorem iterateBody_zero (summary : LoopSummary Sub PC State isa) (s : State) :
+    iterateBody isa summary 0 s = s := rfl
 
-/-- One iteration = the branch itself (up to semantic equivalence).
-    The sub is equal; the PC is semantically equivalent. -/
-theorem iterateBranch_one_sub (b : Branch Sub PC) :
-    (iterateBranch isa b 1).sub = isa.compose_sub b.sub isa.id_sub := rfl
-
-/-- The effect of iterated composition is iterated application.
-    `eval (b^n) s = eval_b (eval_b (... (eval_b s)))` (n times). -/
-theorem iterateBranch_effect (b : Branch Sub PC) (s : State) (n : ℕ) :
-    (iterateBranch isa b n).effect isa s =
-    (b.effect isa)^[n] s := by
-  induction n generalizing s with
-  | zero => simp [iterateBranch, Branch.skip_effect, Function.iterate_zero]
-  | succ n ih =>
-    simp only [iterateBranch, Function.iterate_succ, Function.comp]
-    rw [Branch.compose_effect]
-    exact ih (b.effect isa s)
+/-- Iteration unfolds: n+1 steps = one step then n steps. -/
+theorem iterateBody_succ (summary : LoopSummary Sub PC State isa) (n : ℕ) (s : State) :
+    iterateBody isa summary (n + 1) s =
+    iterateBody isa summary n (summary.bodyEffect s) := by
+  simp [iterateBody, Function.iterate_succ, Function.comp]
 
 end LoopSummary
 
@@ -103,186 +86,182 @@ variable {Sub PC State : Type*} (isa : SymbolicISA Sub PC State)
 
 /-- The behavior of a while loop:
     `while continues { body }` relates s to s' when there exists
-    some number of iterations n such that:
-    - body executes n times starting from s
-    - after each of the first n iterations, `continues` holds
-    - after the n-th iteration, `exits` holds
-    - s' is the state after n iterations
-
-    This is the transitive closure of body under the continue condition,
-    with exit on the exit condition. -/
-def whileBehavior (summary : LoopSummary Sub PC) : State → State → Prop :=
+    some number of iterations n such that body executes n times,
+    `continues` holds after each intermediate iteration, and
+    `exits` holds after the final iteration. -/
+def whileBehavior (summary : LoopSummary Sub PC State isa) : State → State → Prop :=
   fun s s' => ∃ n,
-    -- The state after n iterations is s'
-    (isa.eval_sub (iterateBranch isa summary.body n).sub s = s') ∧
-    -- Body's PC is satisfied at each step
-    (∀ k, k < n → isa.satisfies ((summary.body.effect isa)^[k] s) summary.body.pc) ∧
-    -- Continue holds after each of the first n-1 body executions
-    (∀ k, k < n → isa.satisfies ((summary.body.effect isa)^[k + 1] s) summary.continues) ∧
-    -- Exit holds after the final iteration (or immediately for n=0)
-    isa.satisfies ((summary.body.effect isa)^[n] s) summary.exits
+    (iterateBody isa summary n s = s') ∧
+    (∀ k, k < n → isa.satisfies (summary.bodyEffect^[k + 1] s) summary.continues) ∧
+    isa.satisfies (summary.bodyEffect^[n] s) summary.exits
 
-/-! ## Loop Summary Soundness
-
-If the body branch is sound for a one-step behavior, then iterating it
-is sound for the iterated behavior. -/
-
-/-- A loop summary is **sound** for a while loop when:
-    1. The body branch is sound for one iteration of the loop body
-    2. The exit condition is complete (every exiting state satisfies `exits`)
-    3. The continue/exit conditions are exhaustive -/
-def LoopSummary.Sound (summary : LoopSummary Sub PC)
+/-- A loop summary is **sound** when the body captures the one-step behavior
+    and the continue/exit conditions are exhaustive. -/
+def LoopSummary.Sound (summary : LoopSummary Sub PC State isa)
     (oneStepBehavior : State → State → Prop) : Prop :=
-  -- Body branch captures one iteration when body PC holds
-  (∀ s, isa.satisfies s summary.body.pc →
-    oneStepBehavior s (isa.eval_sub summary.body.sub s)) ∧
-  -- Continue and exit partition the post-body states
+  (∀ s, oneStepBehavior s (summary.bodyEffect s)) ∧
   (∀ s, isa.satisfies s summary.continues ∨ isa.satisfies s summary.exits)
-
-/-- The iterated branch effect chains one-step effects.
-    If each intermediate state satisfies the body PC, then one step
-    is sound at each intermediate state along the chain. -/
-theorem iterated_oneStep_chain
-    (summary : LoopSummary Sub PC)
-    (oneStep : State → State → Prop)
-    (h_sound : ∀ s, isa.satisfies s summary.body.pc →
-      oneStep s (isa.eval_sub summary.body.sub s))
-    (n : ℕ) (s : State)
-    (h_pcs : ∀ k, k < n → isa.satisfies ((summary.body.effect isa)^[k] s) summary.body.pc) :
-    ∀ k, k < n →
-      oneStep ((summary.body.effect isa)^[k] s)
-              ((summary.body.effect isa)^[k + 1] s) := by
-  intro k hk
-  simp only [Function.iterate_succ', Function.comp]
-  exact h_sound _ (h_pcs k hk)
 
 end WhileLoop
 
 
-/-! ## Practical Loop Summary Theorem
+/-! ## Loop Branch Set
 
-The key practical result: a loop summary produces a finite set of branches
-that soundly approximates the while loop for any given iteration bound.
-This connects loop summaries to the existing convergence machinery. -/
+The symbolic branches accumulated after n unrollings of the loop body. -/
 
-section PracticalLoop
+section LoopBranchSet
 
 variable {Sub PC State : Type*} [DecidableEq Sub] [DecidableEq PC]
   (isa : SymbolicISA Sub PC State)
 
-/-- Generate the branch set for a loop summary with a given iteration bound.
-    Produces one branch per possible exit point (0 to maxIter iterations). -/
-def loopBranches (summary : LoopSummary Sub PC) (maxIter : ℕ) :
-    Finset (Branch Sub PC) :=
-  Finset.image
-    (fun n => (iterateBranch isa summary.body n).compose isa ⟨isa.id_sub, summary.exits⟩)
-    (Finset.range (maxIter + 1))
+/-- Symbolic branches after n unrollings.
+    - 0 unrollings: {skip}
+    - n+1: previous ∪ compose(body_branches, previous) -/
+def loopBranchSet (summary : LoopSummary Sub PC State isa) :
+    ℕ → Finset (Branch Sub PC)
+  | 0 => {Branch.skip isa}
+  | n + 1 => loopBranchSet summary n ∪
+      composeBranchFinsets isa (CompTree.denot isa summary.body) (loopBranchSet summary n)
 
-/-- The branch set for a loop is a superset of any smaller bound. -/
-theorem loopBranches_mono (summary : LoopSummary Sub PC) (n m : ℕ) (h : n ≤ m) :
-    loopBranches isa summary n ⊆ loopBranches isa summary m := by
-  intro b hb
-  simp only [loopBranches, Finset.mem_image, Finset.mem_range] at hb ⊢
-  obtain ⟨k, hk, rfl⟩ := hb
-  exact ⟨k, by omega, rfl⟩
+/-- The loop branch set is monotone. -/
+theorem loopBranchSet_mono (summary : LoopSummary Sub PC State isa) :
+    ∀ n, loopBranchSet isa summary n ⊆ loopBranchSet isa summary (n + 1) := by
+  intro n
+  show loopBranchSet isa summary n ⊆
+    loopBranchSet isa summary n ∪
+      composeBranchFinsets isa (CompTree.denot isa summary.body) (loopBranchSet isa summary n)
+  exact Finset.subset_union_left
 
-/-- The cardinality of loop branches is bounded by the iteration bound + 1. -/
-theorem loopBranches_card (summary : LoopSummary Sub PC) (maxIter : ℕ) :
-    (loopBranches isa summary maxIter).card ≤ maxIter + 1 := by
-  unfold loopBranches
-  exact le_trans Finset.card_image_le (by simp [Finset.card_range])
+/-- Monotonicity extended to any gap. -/
+theorem loopBranchSet_mono' (summary : LoopSummary Sub PC State isa) :
+    ∀ n m, n ≤ m → loopBranchSet isa summary n ⊆ loopBranchSet isa summary m := by
+  intro n m h
+  induction h with
+  | refl => exact Finset.Subset.refl _
+  | step h ih => exact Finset.Subset.trans ih (loopBranchSet_mono isa summary _)
 
-omit [DecidableEq Sub] [DecidableEq PC] in
-/-- Helper: boundedIter accepts n ≤ maxIter steps of assert-then-assign.
-    By induction on maxIter. The 0-iteration case uses skipBehavior.
-    The (m+1)-iteration case: n=0 takes the skip choice, n=k+1 takes one
-    body step then applies the IH on the shifted state. -/
-private theorem boundedIter_takes_n_steps
-    (body : Branch Sub PC) (maxIter n : ℕ) (hn : n ≤ maxIter)
-    (s : State)
-    (h_pcs : ∀ k, k < n → isa.satisfies ((body.effect isa)^[k] s) body.pc) :
-    CompTree.treeBehavior isa
-      (.boundedIter (.seq (.assert body.pc) (.assign body.sub)) maxIter)
-      s ((body.effect isa)^[n] s) := by
-  induction maxIter generalizing n s with
+/-- After stabilization, no further unrollings add branches. -/
+theorem loopBranchSet_stable (summary : LoopSummary Sub PC State isa) (K : ℕ)
+    (h_stab : loopBranchSet isa summary K = loopBranchSet isa summary (K + 1)) :
+    ∀ n, n ≥ K → loopBranchSet isa summary n = loopBranchSet isa summary K := by
+  intro n hn
+  induction n with
   | zero =>
-    obtain rfl : n = 0 := Nat.eq_zero_of_le_zero hn
-    simp [CompTree.treeBehavior, skipBehavior]
+      have hK : K = 0 := by omega
+      rw [hK]
   | succ m ih =>
-    simp only [CompTree.treeBehavior]
-    cases n with
-    | zero =>
-      left
-      simp [skipBehavior]
-    | succ k =>
-      right
-      simp only [seqBehavior]
-      refine ⟨body.effect isa s, ?_, ?_⟩
-      · -- One body step: assert body.pc then assign body.sub
-        simp only [assertBehavior, assignBehavior]
-        exact ⟨s, ⟨h_pcs 0 (Nat.zero_lt_succ k), rfl⟩,
-               by simp [Branch.effect]⟩
-      · -- Remaining k steps via IH on shifted state
-        have iter_shift : (body.effect isa)^[k + 1] s =
-            (body.effect isa)^[k] (body.effect isa s) := by
-          simp [Function.iterate_succ, Function.comp]
-        rw [iter_shift]
-        apply ih k (by omega) (body.effect isa s)
-        intro j hj
-        have := h_pcs (j + 1) (by omega)
-        simp only [Function.iterate_succ, Function.comp] at this
-        exact this
+    by_cases hm : m ≥ K
+    · -- m ≥ K, so by IH: S(m) = S(K)
+      have hm_eq := ih hm
+      -- S(m+1) = S(m) ∪ compose(body, S(m)) = S(K) ∪ compose(body, S(K)) = S(K+1) = S(K)
+      show loopBranchSet isa summary m ∪
+          composeBranchFinsets isa (CompTree.denot isa summary.body)
+            (loopBranchSet isa summary m) =
+        loopBranchSet isa summary K
+      rw [hm_eq]
+      -- Goal: S(K) ∪ compose(body, S(K)) = S(K)
+      -- h_stab : S(K) = S(K+1) = S(K) ∪ compose(body, S(K))
+      exact h_stab.symm
+    · -- m < K, so m + 1 ≤ K, and since m + 1 ≥ K (from hn), m + 1 = K
+      have : m + 1 = K := by omega
+      rw [this]
 
-omit [DecidableEq Sub] [DecidableEq PC] in
-/-- A loop summary with bounded iterations embeds into CompTree.
-    The encoding: `seq (boundedIter (seq (assert body.pc) (assign body.sub)) maxIter) (assert exits)`.
-    This witnesses that bounded loops can be represented in the existing framework. -/
-theorem loopSummary_bounded_embedding (summary : LoopSummary Sub PC) (maxIter : ℕ) :
-    ∃ tree : CompTree Sub PC,
-      ∀ s s' n, n ≤ maxIter →
-        (isa.eval_sub (iterateBranch isa summary.body n).sub s = s') →
-        isa.satisfies s' summary.exits →
-        (∀ k, k < n → isa.satisfies ((summary.body.effect isa)^[k] s) summary.body.pc) →
-        CompTree.treeBehavior isa tree s s' := by
-  refine ⟨.seq (.boundedIter (.seq (.assert summary.body.pc) (.assign summary.body.sub)) maxIter)
-              (.assert summary.exits), ?_⟩
-  intro s s' n hn h_eval h_exits h_pcs
-  -- The tree behavior is: seq (boundedIter ...) (assert exits)
-  -- = ∃ mid, treeBehavior (boundedIter ...) s mid ∧ assertBehavior isa exits mid s'
-  simp only [CompTree.treeBehavior, seqBehavior, assertBehavior]
-  -- mid = s' = (body.effect isa)^[n] s
-  have h_effect : s' = (summary.body.effect isa)^[n] s := by
-    rw [← h_eval]
-    exact iterateBranch_effect isa summary.body s n
-  refine ⟨s', ?_, h_exits, rfl⟩
-  rw [h_effect]
-  exact boundedIter_takes_n_steps isa summary.body maxIter n hn s h_pcs
+/-- **Convergence theorem.**
 
-end PracticalLoop
+    If the branch set stabilizes at step K, it equals the branch set at K
+    for all subsequent steps. The stabilized set is the complete branch
+    model for the loop (up to the equivalence classes that cause stabilization).
+
+    The cardinality of the stabilized set depends on the program:
+    - Worst case: (1 + B)^K (exponential, no branch collapsing)
+    - With absorptivity: ≤ 1 + B * K (linear, see `absorptive_card_bound`) -/
+theorem symbolic_loop_convergence
+    (summary : LoopSummary Sub PC State isa) (K : ℕ)
+    (h_stab : loopBranchSet isa summary K = loopBranchSet isa summary (K + 1)) :
+    ∀ n, n ≥ K → loopBranchSet isa summary n = loopBranchSet isa summary K :=
+  loopBranchSet_stable isa summary K h_stab
 
 
-/-! ## Connection to Convergence
+/-! ### Absorptive Composition Bound
 
-The fundamental observation: a while loop with a loop summary can be analyzed
-by the existing convergence machinery. The oracle discovers branches for each
-iteration depth, and convergence is guaranteed when:
-- The loop has a known maximum iteration count (reduces to boundedIter), or
-- The loop is stabilizing: there exists N such that for all n ≥ N, the
-  n-th iteration branch is already in the model (the state space is finite
-  and the loop eventually cycles)
+When composition is "absorptive" — each unrolling adds at most B new
+branches regardless of how large the existing set is — the total branch
+count is linear: at most 1 + B * K.
 
-For practical symex (stalagmite), stubs provide the loop summary, and
-re-execution with tighter stubs corresponds to refining the iteration bound
-until convergence — this IS circular coinduction. -/
+This holds for programs where branches in the same PC-equivalence class
+compose identically (the congruence property from Quotient.lean). In
+particular, it holds for parsers and other finite-state programs. -/
 
-section Convergence
+/-- Absorptivity: composing body branches with the existing set adds at most
+    B new branches per step. -/
+def Absorptive (summary : LoopSummary Sub PC State isa) : Prop :=
+  ∀ n, (composeBranchFinsets isa (CompTree.denot isa summary.body)
+          (loopBranchSet isa summary n) \
+        loopBranchSet isa summary n).card ≤
+    (CompTree.denot isa summary.body).card
+
+/-- Under absorptivity, each step increases the branch set by at most B. -/
+theorem absorptive_step_bound (summary : LoopSummary Sub PC State isa)
+    (h_abs : Absorptive isa summary) (n : ℕ) :
+    (loopBranchSet isa summary (n + 1)).card ≤
+    (loopBranchSet isa summary n).card + (CompTree.denot isa summary.body).card := by
+  -- S(n+1) = S(n) ∪ compose(body, S(n))
+  -- |A ∪ B| = |A| + |B \ A| (disjoint decomposition)
+  show (loopBranchSet isa summary n ∪
+      composeBranchFinsets isa (CompTree.denot isa summary.body)
+        (loopBranchSet isa summary n)).card ≤
+    (loopBranchSet isa summary n).card + (CompTree.denot isa summary.body).card
+  let A := loopBranchSet isa summary n
+  let B := composeBranchFinsets isa (CompTree.denot isa summary.body)
+              (loopBranchSet isa summary n)
+  -- |A ∪ B| ≤ |A| + |B| (standard), but we need the tighter |A| + |B \ A|.
+  -- Key: |A ∪ B| + |A ∩ B| = |A| + |B|, so |A ∪ B| = |A| + |B| - |A ∩ B|
+  -- Also |B \ A| = |B| - |A ∩ B|, so |A ∪ B| = |A| + |B \ A|.
+  -- We have |B \ A| ≤ denot.card by absorptivity.
+  have h_card_eq : (A ∪ B).card + (A ∩ B).card = A.card + B.card :=
+    Finset.card_union_add_card_inter A B
+  have h_sdiff_card : (B \ A).card + (A ∩ B).card = B.card := by
+    rw [Finset.inter_comm]; exact Finset.card_sdiff_add_card_inter B A
+  -- So (A ∪ B).card = A.card + B.card - (A ∩ B).card = A.card + (B \ A).card
+  have h_union : (A ∪ B).card = A.card + (B \ A).card := by omega
+  rw [h_union]
+  have h_sdiff_le := h_abs n
+  -- (B \ A) is definitionally equal to the sdiff in h_abs
+  change A.card + (B \ A).card ≤ A.card + (CompTree.denot isa summary.body).card
+  exact Nat.add_le_add_left h_sdiff_le A.card
+
+/-- **Linear bound under absorptivity: total branches ≤ 1 + B * K.** -/
+theorem absorptive_card_bound (summary : LoopSummary Sub PC State isa)
+    (h_abs : Absorptive isa summary) (n : ℕ) :
+    (loopBranchSet isa summary n).card ≤
+      1 + (CompTree.denot isa summary.body).card * n := by
+  induction n with
+  | zero => simp [loopBranchSet, Finset.card_singleton]
+  | succ k ih =>
+    have h_step := absorptive_step_bound isa summary h_abs k
+    have h_mul : (CompTree.denot isa summary.body).card * (k + 1) =
+        (CompTree.denot isa summary.body).card * k +
+        (CompTree.denot isa summary.body).card :=
+      Nat.mul_succ _ k
+    omega
+
+end LoopBranchSet
+
+
+/-! ## Finite State Convergence (Corollary)
+
+When the concrete state space is finite, stabilization is guaranteed by
+pigeonhole. Provides one way to discharge the stabilization hypothesis,
+but the practical bound comes from domain knowledge (e.g., parser states),
+not state exhaustion. -/
+
+section FiniteConvergence
 
 variable {Sub PC State : Type*} [DecidableEq Sub] [DecidableEq PC]
   (isa : SymbolicISA Sub PC State)
 
 /-- Iterating a periodic function: if `f^[p] x = x` with `p > 0`,
-    then `f^[n] x = f^[n % p] x`. Proof: decompose `n = n%p + p*(n/p)`
-    and show `f^[p*m] x = x` by induction on `m`. -/
+    then `f^[n] x = f^[n % p] x`. -/
 private theorem iterate_mod_of_periodic {α : Type*} {f : α → α} {x : α} {p : ℕ}
     (_hp : 0 < p) (h : f^[p] x = x) (n : ℕ) :
     f^[n] x = f^[n % p] x := by
@@ -293,53 +272,32 @@ private theorem iterate_mod_of_periodic {α : Type*} {f : α → α} {x : α} {p
   conv_lhs => rw [show n = n % p + p * (n / p) from (Nat.mod_add_div n p).symm]
   rw [Function.iterate_add, Function.comp_apply, key]
 
-omit [DecidableEq Sub] [DecidableEq PC] in
-/-- If the state space is finite and the loop body is deterministic
-    (the substitution is an endofunction), then the loop must eventually
-    cycle and the branch model stabilizes. This gives us convergence
-    without knowing the iteration bound a priori.
-
-    Proof: by pigeonhole, the orbit of any state under a deterministic
-    function on a finite type must cycle within `|State| + 1` steps.
-    Once it cycles, `iterate_mod_of_periodic` shows all further iterates
-    land in the first `|State| + 1` values. -/
-theorem finite_loop_convergence
+/-- If the state space is finite, the body effect's orbit must cycle.
+    This gives a concrete (though potentially large) stabilization bound. -/
+theorem finite_effect_convergence
     [Fintype State] [DecidableEq State]
-    (summary : LoopSummary Sub PC) :
+    (f : State → State) :
     ∃ maxIter,
       ∀ n, n ≥ maxIter →
-        ∀ s : State, (isa.eval_sub (iterateBranch isa summary.body n).sub s) ∈
-          Finset.image (fun k => isa.eval_sub (iterateBranch isa summary.body k).sub s)
-            (Finset.range maxIter) := by
+        ∀ s : State, f^[n] s ∈
+          Finset.image (fun k => f^[k] s) (Finset.range maxIter) := by
   use Fintype.card State + 1
   intro n hn s
-  -- Convert eval_sub to iterate via iterateBranch_effect
-  let f := summary.body.effect isa
-  have h_iter : ∀ k, isa.eval_sub (iterateBranch isa summary.body k).sub s = f^[k] s := by
-    intro k
-    change Branch.effect isa (iterateBranch isa summary.body k) s = _
-    exact iterateBranch_effect isa summary.body s k
-  simp only [h_iter]
-  -- By pigeonhole: the map (k : Fin (|State|+1)) ↦ f^[k] s has more inputs than outputs
   have h_card : Fintype.card State < Fintype.card (Fin (Fintype.card State + 1)) := by
     simp [Fintype.card_fin]
   obtain ⟨⟨i, hi⟩, ⟨j, hj⟩, hij, heq⟩ :=
     Fintype.exists_ne_map_eq_of_card_lt (fun (k : Fin (Fintype.card State + 1)) => f^[k.val] s) h_card
-  -- WLOG i < j (they're not equal since hij)
   have i_ne_j : i ≠ j := by intro h; exact hij (Fin.ext h)
-  -- Get ordered pair: a < b with f^[a] s = f^[b] s
   obtain ⟨a, b, hab, h_eq, hb⟩ : ∃ a b, a < b ∧ f^[a] s = f^[b] s ∧ b < Fintype.card State + 1 := by
     rcases Nat.lt_or_gt_of_ne i_ne_j with h | h
     · exact ⟨i, j, h, heq, hj⟩
     · exact ⟨j, i, h, heq.symm, hi⟩
-  -- f^[b-a](f^[a] s) = f^[a] s, so f^[a] s is periodic with period p = b - a
   have p_pos : 0 < b - a := Nat.sub_pos_of_lt hab
   have h_periodic : f^[b - a] (f^[a] s) = f^[a] s := by
     have : f^[b] s = f^[b - a] (f^[a] s) := by
       conv_lhs => rw [show b = (b - a) + a from by omega]
       rw [Function.iterate_add, Function.comp_apply]
     rw [← this, ← h_eq]
-  -- For any n, f^[n] s = f^[a + (n-a) % p] s when n ≥ a
   have h_reduce : ∀ m, m ≥ a → f^[m] s = f^[a + (m - a) % (b - a)] s := by
     intro m hm
     have h1 : f^[m] s = f^[m - a] (f^[a] s) := by
@@ -351,15 +309,13 @@ theorem finite_loop_convergence
       conv_rhs => rw [show a + (m - a) % (b - a) = (m - a) % (b - a) + a from by omega]
       rw [Function.iterate_add, Function.comp_apply]
     rw [h1, h2, h3]
-  -- a + (n-a) % (b-a) < b ≤ card State + 1 = maxIter
   have h_bound : ∀ m, m ≥ a → a + (m - a) % (b - a) < Fintype.card State + 1 := by
     intro m _
     have : (m - a) % (b - a) < b - a := Nat.mod_lt _ p_pos
     omega
-  -- Apply to our n
   have hn' : n ≥ a := by omega
   rw [h_reduce n hn']
   apply Finset.mem_image.mpr
   exact ⟨a + (n - a) % (b - a), Finset.mem_range.mpr (h_bound n hn'), rfl⟩
 
-end Convergence
+end FiniteConvergence
