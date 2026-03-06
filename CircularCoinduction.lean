@@ -17,15 +17,22 @@ A `LoopSummary` has:
 
 ## Convergence
 
-The loop branch set (`loopBranchSet`) accumulates symbolic branches by
-composing the body's denotation with previously discovered branches.
-It is monotone and, when it stabilizes, gives a complete branch model.
+The **guard-free** branch set (`loopBranchSet`) accumulates symbolic branches
+by composing the body's denotation with previously discovered branches.
+It is monotone and, when it stabilizes, equals `denot(boundedIter body n)`
+for all n ≥ K (`loopBranchSet_eq_boundedIter_denot`, `symbolic_loop_convergence`).
+
+The **guarded** loop tree (`guardedLoopTree`) adds continue/exit guards and
+its concrete semantics matches `boundedWhileBehavior`
+(`guardedLoopTree_eq_boundedWhileBehavior`). The bridge from guard-free
+stabilization to completeness of the full unbounded `whileBehavior` is not
+yet formalized.
 
 **Worst case:** (1 + B)^K branches (exponential in unrolling depth K).
 **With absorptivity:** B * K branches (linear). Absorptivity holds when
   branches in the same PC-equivalence class compose identically — true for
-  parsers and other programs with finite symbolic state. This follows from
-  the `pcSetoid` congruence in Quotient.lean.
+  parsers and other programs with finite symbolic state. The claim that this
+  follows from `pcSetoid` congruence is not yet formalized (see finding #5).
 
 ## Connection to Stalagmite
 
