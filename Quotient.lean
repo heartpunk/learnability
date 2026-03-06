@@ -310,3 +310,77 @@ theorem quotient_bisimulation (model : Finset (Branch Sub PC))
   backward := quotient_backward isa model behavior h_sound
 
 end AbstractSystem
+
+
+/-! ## Step 4d: Finiteness Bound
+
+The number of abstract states is bounded by `2^|pcClosure model|`.
+Each equivalence class is characterized by its "PC signature" — the
+subset of closure PCs it satisfies. Distinct classes have distinct
+signatures, and signatures are subsets of the closure. -/
+
+section Finiteness
+
+variable {Sub PC State : Type*} [DecidableEq PC] [Fintype PC]
+  (isa : SymbolicISA Sub PC State)
+  [h_dec : ∀ (s : State) (φ : PC), Decidable (isa.satisfies s φ)]
+
+/-- The PC signature of a state: which closure PCs it satisfies. -/
+noncomputable def pcSignature (model : Finset (Branch Sub PC)) (s : State) : Finset PC :=
+  (pcClosure isa model).filter (fun φ => isa.satisfies s φ)
+
+/-- Equivalent states have the same signature. -/
+theorem pcSignature_eq_of_equiv
+    {model : Finset (Branch Sub PC)} {s₁ s₂ : State}
+    (h : (pcSetoid isa model).r s₁ s₂) :
+    pcSignature isa model s₁ = pcSignature isa model s₂ := by
+  unfold pcSignature
+  ext φ
+  constructor
+  · intro hφ
+    rw [Finset.mem_filter] at hφ ⊢
+    exact ⟨hφ.1, (h φ hφ.1).mp hφ.2⟩
+  · intro hφ
+    rw [Finset.mem_filter] at hφ ⊢
+    exact ⟨hφ.1, (h φ hφ.1).mpr hφ.2⟩
+
+/-- States with the same signature are equivalent. -/
+theorem equiv_of_pcSignature_eq
+    {model : Finset (Branch Sub PC)} {s₁ s₂ : State}
+    (h : pcSignature isa model s₁ = pcSignature isa model s₂) :
+    (pcSetoid isa model).r s₁ s₂ := by
+  intro φ hφ
+  constructor
+  · intro hsat
+    have h1 : φ ∈ pcSignature isa model s₁ :=
+      Finset.mem_filter.mpr ⟨hφ, hsat⟩
+    rw [h] at h1
+    exact (Finset.mem_filter.mp h1).2
+  · intro hsat
+    have h1 : φ ∈ pcSignature isa model s₂ :=
+      Finset.mem_filter.mpr ⟨hφ, hsat⟩
+    rw [← h] at h1
+    exact (Finset.mem_filter.mp h1).2
+
+/-- Signature characterizes equivalence classes: equal iff equivalent. -/
+theorem pcSignature_eq_iff_equiv
+    {model : Finset (Branch Sub PC)} {s₁ s₂ : State} :
+    pcSignature isa model s₁ = pcSignature isa model s₂ ↔
+    (pcSetoid isa model).r s₁ s₂ :=
+  ⟨equiv_of_pcSignature_eq isa, pcSignature_eq_of_equiv isa⟩
+
+/-- Lift signature to the quotient (well-defined by `pcSignature_eq_of_equiv`). -/
+noncomputable def quotientSignature (model : Finset (Branch Sub PC)) :
+    Quotient (pcSetoid isa model) → Finset PC :=
+  Quotient.lift (pcSignature isa model) (fun _ _ h => pcSignature_eq_of_equiv isa h)
+
+/-- The quotient signature is injective: distinct classes have distinct signatures. -/
+theorem quotientSignature_injective (model : Finset (Branch Sub PC)) :
+    Function.Injective (quotientSignature isa model) := by
+  intro q₁ q₂ h
+  obtain ⟨s₁, rfl⟩ := Quotient.exists_rep q₁
+  obtain ⟨s₂, rfl⟩ := Quotient.exists_rep q₂
+  apply Quotient.sound
+  exact equiv_of_pcSignature_eq isa h
+
+end Finiteness
