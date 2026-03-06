@@ -2,7 +2,7 @@ name = "learnability"
 version = "0.1.0"
 keywords = ["math"]
 packagesDir = "/Users/heartpunk/.lake-shared/packages"
-defaultTargets = ["LTS", "ConditionalSimulation", "Convergence", "Learnability", "CoinductiveBisimulation", "LearnabilityConvergence", "SymbolicISA", "Branch", "Bisimulation"]
+defaultTargets = ["LTS", "ConditionalSimulation", "Convergence", "Learnability", "CoinductiveBisimulation", "LearnabilityConvergence", "SymbolicISA", "Branch", "Bisimulation", "BranchExample"]
 
 [leanOptions]
 autoImplicit = false
@@ -42,3 +42,6 @@ name = "BranchConvergence"
 
 [[lean_lib]]
 name = "Bisimulation"
+
+[[lean_lib]]
+name = "BranchExample"
