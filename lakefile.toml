@@ -36,3 +36,6 @@ name = "SymbolicISA"
 
 [[lean_lib]]
 name = "Branch"
+
+[[lean_lib]]
+name = "BranchConvergence"

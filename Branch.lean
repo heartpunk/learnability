@@ -1,5 +1,6 @@
 import SymbolicISA
 import Mathlib.Data.Set.Basic
+import Mathlib.Data.Set.Insert
 
 /-!
 # Branches and Branch Models
@@ -39,6 +40,7 @@ structure Branch (Sub : Type*) (PC : Type*) where
   sub : Sub
   /-- The path condition: under what states this path is taken. -/
   pc : PC
+  deriving DecidableEq
 
 section BranchOps
 
@@ -132,10 +134,6 @@ def BranchModel.Complete (model : BranchModel Sub PC) (behavior : State → Stat
   ∀ (s s' : State), behavior s s' →
     ∃ b ∈ model, isa.satisfies s b.pc ∧ isa.eval_sub b.sub s = s'
 
-/-- A faithful branch model is both sound and complete. -/
-def BranchModel.Faithful (model : BranchModel Sub PC) (behavior : State → State → Prop) : Prop :=
-  model.Sound isa behavior ∧ model.Complete isa behavior
-
 /-- Soundness is downward-closed: subsets of sound models are sound. -/
 theorem BranchModel.Sound.subset {model₁ model₂ : BranchModel Sub PC}
     {behavior : State → State → Prop}
@@ -158,5 +156,20 @@ theorem BranchModel.Complete.superset {model₁ model₂ : BranchModel Sub PC}
 theorem BranchModel.Sound.empty (behavior : State → State → Prop) :
     (∅ : BranchModel Sub PC).Sound isa behavior := by
   intro b hb; simp at hb
+
+/-- Inserting a sound branch into a sound model preserves soundness.
+    This is the key lemma for oracle accumulation: the oracle produces
+    a branch known to be sound, we add it, soundness is preserved. -/
+theorem BranchModel.Sound.insert {model : BranchModel Sub PC}
+    {behavior : State → State → Prop}
+    (h_sound : model.Sound isa behavior)
+    {b : Branch Sub PC}
+    (h_b : ∀ (s : State), isa.satisfies s b.pc → behavior s (isa.eval_sub b.sub s)) :
+    (insert b model).Sound isa behavior := by
+  intro b' hb' s hsat
+  simp [Set.mem_insert_iff] at hb'
+  rcases hb' with rfl | hb'
+  · exact h_b s hsat
+  · exact h_sound b' hb' s hsat
 
 end BranchModelProperties
