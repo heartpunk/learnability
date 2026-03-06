@@ -46,7 +46,10 @@ variable {Sub PC State : Type*}
     effect function.
 
     The determinism field reflects that compiled programs are deterministic:
-    given a concrete state, exactly one path through the body fires. -/
+    given a concrete state, exactly one path through the body fires. The
+    `bodyEffect_spec` biconditional formalizes this: `treeBehavior` relates
+    `s` to `s'` iff `s' = bodyEffect s`. This rules out the body having
+    multiple successors for any given state. -/
 structure LoopSummary (Sub PC State : Type*) (isa : SymbolicISA Sub PC State) where
   /-- The computation tree for one loop iteration (may have internal choice). -/
   body : CompTree Sub PC
@@ -56,8 +59,10 @@ structure LoopSummary (Sub PC State : Type*) (isa : SymbolicISA Sub PC State) wh
   exits : PC
   /-- Deterministic effect of one iteration on concrete states. -/
   bodyEffect : State → State
-  /-- The effect function agrees with the tree's behavior. -/
-  bodyEffect_spec : ∀ s, CompTree.treeBehavior isa body s (bodyEffect s)
+  /-- The effect function IS the tree's behavior: `treeBehavior isa body s s'`
+      holds iff `s' = bodyEffect s`. Encodes determinism — exactly one
+      successor per state. -/
+  bodyEffect_spec : ∀ s s', CompTree.treeBehavior isa body s s' ↔ s' = bodyEffect s
 
 variable (isa : SymbolicISA Sub PC State)
 
