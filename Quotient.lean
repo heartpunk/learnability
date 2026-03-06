@@ -130,3 +130,81 @@ theorem pcClosure_contains_model_pcs (model : Finset (Branch Sub PC))
   exact pcClosureBase_sub_seq isa model _ (Finset.mem_image_of_mem _ hb)
 
 end PCClosure
+
+
+/-! ## Step 4b: PC-Equivalence and Congruence
+
+Two states are PC-equivalent (w.r.t. the closure) when they satisfy exactly
+the same PCs in the closure. This is an equivalence relation, and it's a
+congruence: transitions respect it.
+
+The congruence proof uses `sat_lift` + the closure property from Step 4a. -/
+
+section PCEquiv
+
+variable {Sub PC State : Type*} [DecidableEq PC] [Fintype PC]
+  (isa : SymbolicISA Sub PC State)
+
+/-- Two states are PC-equivalent w.r.t. a closure: they agree on all PCs in it. -/
+def pcEquiv (closure : Finset PC) (s₁ s₂ : State) : Prop :=
+  ∀ φ ∈ closure, isa.satisfies s₁ φ ↔ isa.satisfies s₂ φ
+
+set_option linter.unusedSectionVars false in
+theorem pcEquiv_refl (closure : Finset PC) (s : State) :
+    pcEquiv isa closure s s :=
+  fun _ _ => Iff.rfl
+
+set_option linter.unusedSectionVars false in
+theorem pcEquiv_symm {closure : Finset PC} {s₁ s₂ : State}
+    (h : pcEquiv isa closure s₁ s₂) : pcEquiv isa closure s₂ s₁ :=
+  fun φ hφ => (h φ hφ).symm
+
+set_option linter.unusedSectionVars false in
+theorem pcEquiv_trans {closure : Finset PC} {s₁ s₂ s₃ : State}
+    (h₁₂ : pcEquiv isa closure s₁ s₂) (h₂₃ : pcEquiv isa closure s₂ s₃) :
+    pcEquiv isa closure s₁ s₃ :=
+  fun φ hφ => (h₁₂ φ hφ).trans (h₂₃ φ hφ)
+
+/-- PC-equivalence over a model's closure as a `Setoid`. -/
+def pcSetoid (model : Finset (Branch Sub PC)) : Setoid State where
+  r := pcEquiv isa (pcClosure isa model)
+  iseqv := {
+    refl := pcEquiv_refl isa _
+    symm := pcEquiv_symm isa
+    trans := pcEquiv_trans isa
+  }
+
+/-- If two states are PC-equivalent (over the closure) and a branch in the
+    model fires from one, it fires from the other. -/
+theorem pcEquiv_branch_fires {model : Finset (Branch Sub PC)}
+    {s₁ s₂ : State} {b : Branch Sub PC}
+    (hb : b ∈ model)
+    (h_equiv : (pcSetoid isa model).r s₁ s₂)
+    (h_fires : isa.satisfies s₁ b.pc) :
+    isa.satisfies s₂ b.pc :=
+  (h_equiv b.pc (pcClosure_contains_model_pcs isa model b hb)).mp h_fires
+
+/-- If two states are PC-equivalent (over the closure), their successors
+    under any branch in the model are also PC-equivalent.
+
+    For any `φ ∈ closure`:
+    `satisfies (eval_sub σ s₁) φ ↔ satisfies s₁ (pc_lift σ φ)` (by sat_lift)
+    `↔ satisfies s₂ (pc_lift σ φ)` (by h_equiv, since pc_lift σ φ ∈ closure)
+    `↔ satisfies (eval_sub σ s₂) φ` (by sat_lift). -/
+theorem pcEquiv_eval_sub {model : Finset (Branch Sub PC)}
+    {s₁ s₂ : State} {b : Branch Sub PC}
+    (hb : b ∈ model)
+    (h_equiv : (pcSetoid isa model).r s₁ s₂) :
+    (pcSetoid isa model).r (isa.eval_sub b.sub s₁) (isa.eval_sub b.sub s₂) := by
+  intro φ hφ
+  constructor
+  · intro h
+    rw [← isa.sat_lift s₂ b.sub φ]
+    rw [← isa.sat_lift s₁ b.sub φ] at h
+    exact (h_equiv (isa.pc_lift b.sub φ) (pcClosure_closed isa model b hb φ hφ)).mp h
+  · intro h
+    rw [← isa.sat_lift s₁ b.sub φ]
+    rw [← isa.sat_lift s₂ b.sub φ] at h
+    exact (h_equiv (isa.pc_lift b.sub φ) (pcClosure_closed isa model b hb φ hφ)).mpr h
+
+end PCEquiv
