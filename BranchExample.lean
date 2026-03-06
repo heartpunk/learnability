@@ -59,6 +59,10 @@ def exISA : SymbolicISA ExSub ExPC ExState where
     show (φ₁ s && φ₂ s) = true ↔ φ₁ s = true ∧ φ₂ s = true
     rw [Bool.and_eq_true]
   sat_lift := fun _ _ _ => Iff.rfl
+  pc_not := fun φ s => !φ s
+  sat_not := fun s φ => by
+    show (!φ s) = true ↔ ¬ (φ s = true)
+    cases φ s <;> simp
 
 /-! ## The toy system -/
 

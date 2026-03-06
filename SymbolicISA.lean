@@ -90,6 +90,11 @@ structure SymbolicISA (Sub : Type*) (PC : Type*) (State : Type*) where
       This is the key law connecting substitutions and path conditions. -/
   sat_lift : ∀ (s : State) (σ : Sub) (φ : PC),
     satisfies s (pc_lift σ φ) ↔ satisfies (eval_sub σ s) φ
+  /-- Negation of a path condition. ICTAC: `BNot`. -/
+  pc_not : PC → PC
+  /-- Negation semantics: `satisfies s (pc_not φ) ↔ ¬ satisfies s φ`. -/
+  sat_not : ∀ (s : State) (φ : PC),
+    satisfies s (pc_not φ) ↔ ¬ satisfies s φ
 
 section SymbolicISA_lemmas
 
