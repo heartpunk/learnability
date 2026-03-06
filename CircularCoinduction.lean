@@ -373,14 +373,30 @@ section GuardedLoopTree
 variable {Sub PC State : Type*} [DecidableEq Sub] [DecidableEq PC]
   (isa : SymbolicISA Sub PC State)
 
+/-- Post-body decision: after body has executed, either exit or (check continues,
+    execute body again, recurse). This is the "between iterations" logic.
+
+    - 0: must exit (assert exits)
+    - n+1: exit OR (continues holds, body executes, recurse) -/
+def afterBody (summary : LoopSummary Sub PC State isa) :
+    ℕ → CompTree Sub PC
+  | 0 => .assert summary.exits
+  | n + 1 => .choice
+      (.assert summary.exits)
+      (.seq (.assert summary.continues) (.seq summary.body (afterBody summary n)))
+
 /-- The guarded while loop as a CompTree, bounded to at most n iterations.
-    Exit checks `exits`; continuation checks `continues` before each body execution. -/
+    Matches `whileBehavior` semantics: continues is checked BETWEEN iterations
+    (after body, before the next body), not before the first or after the last.
+
+    - 0 iterations: assert exits at initial state
+    - n+1: exit OR (execute body, then afterBody decides continue/exit) -/
 def guardedLoopTree (summary : LoopSummary Sub PC State isa) :
     ℕ → CompTree Sub PC
   | 0 => .assert summary.exits
   | n + 1 => .choice
       (.assert summary.exits)
-      (.seq (.assert summary.continues) (.seq summary.body (guardedLoopTree summary n)))
+      (.seq summary.body (afterBody isa summary n))
 
 /-- Symbolic denotation of the guarded loop tree. -/
 def guardedLoopDenot (summary : LoopSummary Sub PC State isa) (n : ℕ) :
