@@ -38,7 +38,7 @@ The convergence argument is purely combinatorial:
 4. Monotone growth of a finite set bounded above → stabilizes
 5. At stabilization: model = target (otherwise oracle would produce more)
 
-No classical logic needed. No `Fintype` on the branch types — finiteness is
+Minimal classical reasoning (`by_contra` for existence proofs). No `Fintype` on the branch types — finiteness is
 a hypothesis on the specific system ("this program has finitely many branches"),
 not a constraint on the types.
 -/
@@ -249,7 +249,6 @@ theorem oracleStep_bounded (oracle : BranchOracle Sub PC State)
     (h_sub : model ⊆ target) :
     oracleStep oracle model ⊆ target := by
   intro x hx
-  have h_mono := oracleStep_mono oracle model
   -- Either x was already in model, or x is the newly inserted branch
   by_cases hxm : x ∈ model
   · exact h_sub hxm
