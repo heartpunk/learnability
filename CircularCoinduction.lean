@@ -87,12 +87,15 @@ variable {Sub PC State : Type*} (isa : SymbolicISA Sub PC State)
 /-- The behavior of a while loop:
     `while continues { body }` relates s to s' when there exists
     some number of iterations n such that body executes n times,
-    `continues` holds after each intermediate iteration, and
-    `exits` holds after the final iteration. -/
+    `continues` holds after each intermediate iteration (but not the last),
+    and `exits` holds after the final iteration.
+
+    For n = 0: just check exits at the initial state (zero iterations).
+    For n ≥ 1: continues holds at iterations 1..n-1, exits at iteration n. -/
 def whileBehavior (summary : LoopSummary Sub PC State isa) : State → State → Prop :=
   fun s s' => ∃ n,
     (iterateBody isa summary n s = s') ∧
-    (∀ k, k < n → isa.satisfies (summary.bodyEffect^[k + 1] s) summary.continues) ∧
+    (∀ k, k + 1 < n → isa.satisfies (summary.bodyEffect^[k + 1] s) summary.continues) ∧
     isa.satisfies (summary.bodyEffect^[n] s) summary.exits
 
 /-- A loop summary is **sound** when the body captures the one-step behavior
