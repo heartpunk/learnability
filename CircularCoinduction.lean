@@ -25,8 +25,9 @@ for all n ≥ K (`loopBranchSet_eq_boundedIter_denot`, `symbolic_loop_convergenc
 The **guarded** loop tree (`guardedLoopTree`) adds continue/exit guards and
 its concrete semantics matches `boundedWhileBehavior`
 (`guardedLoopTree_eq_boundedWhileBehavior`). The bridge from guard-free
-stabilization to completeness of the full unbounded `whileBehavior` is not
-yet formalized.
+stabilization to completeness of the full unbounded `whileBehavior` is
+`stabilization_complete`: if `loopBranchSet` stabilizes at K, every
+`whileBehavior` execution completes within K iterations.
 
 **Worst case:** (1 + B)^K branches (exponential in unrolling depth K).
 **With absorptivity:** B * K branches (linear). Absorptivity holds when
