@@ -63,6 +63,12 @@ inductive CompTree (Sub PC : Type*) where
   | seq (t₁ t₂ : CompTree Sub PC) : CompTree Sub PC
   /-- Nondeterministic choice. ICTAC: `PCh`. -/
   | choice (t₁ t₂ : CompTree Sub PC) : CompTree Sub PC
+  /-- Guarded choice: if guard holds take tThen, if pc_not guard holds take tElse.
+      The guard PC lives in the tree, structurally enforcing that the two branches
+      partition the input space. Equivalent to `choice (seq (assert guard) tThen)
+      (seq (assert (pc_not guard)) tElse)` but as a primitive.
+      ICTAC: `PIf b p₁ p₂`. -/
+  | guardedChoice (guard : PC) (tThen tElse : CompTree Sub PC) : CompTree Sub PC
   /-- Bounded loop: execute body at most n times.
       Each iteration can either continue or exit nondeterministically. -/
   | boundedIter (body : CompTree Sub PC) (n : ℕ) : CompTree Sub PC
@@ -84,6 +90,10 @@ def denot [DecidableEq Sub] [DecidableEq PC]
   | .assert φ => {⟨isa.id_sub, φ⟩}
   | .seq t₁ t₂ => composeBranchFinsets isa (denot isa t₁) (denot isa t₂)
   | .choice t₁ t₂ => choiceBranchFinsets (denot isa t₁) (denot isa t₂)
+  | .guardedChoice guard tThen tElse =>
+      choiceBranchFinsets
+        (composeBranchFinsets isa {⟨isa.id_sub, guard⟩} (denot isa tThen))
+        (composeBranchFinsets isa {⟨isa.id_sub, isa.pc_not guard⟩} (denot isa tElse))
   | .boundedIter _body 0 => {Branch.skip isa}
   | .boundedIter body (n + 1) =>
       -- 0 iterations (skip) ∪ (1 iteration of body ; up to n more iterations)
@@ -102,6 +112,10 @@ def treeBehavior (isa : SymbolicISA Sub PC State) :
   | .assert φ => assertBehavior isa φ
   | .seq t₁ t₂ => seqBehavior (treeBehavior isa t₁) (treeBehavior isa t₂)
   | .choice t₁ t₂ => choiceBehavior (treeBehavior isa t₁) (treeBehavior isa t₂)
+  | .guardedChoice guard tThen tElse =>
+      choiceBehavior
+        (seqBehavior (assertBehavior isa guard) (treeBehavior isa tThen))
+        (seqBehavior (assertBehavior isa (isa.pc_not guard)) (treeBehavior isa tElse))
   | .boundedIter _body 0 => skipBehavior
   | .boundedIter body (n + 1) =>
       choiceBehavior skipBehavior
@@ -115,6 +129,7 @@ def bound : CompTree Sub PC → Nat
   | .skip | .assign _ | .assert _ => 1
   | .seq t₁ t₂ => bound t₁ * bound t₂
   | .choice t₁ t₂ => bound t₁ + bound t₂
+  | .guardedChoice _guard tThen tElse => bound tThen + bound tElse
   | .boundedIter _body 0 => 1
   | .boundedIter body (n + 1) => 1 + bound body * bound (.boundedIter body n)
 
@@ -158,6 +173,16 @@ theorem denot_sound (tree : CompTree Sub PC) :
     simp only [denot, treeBehavior]
     rw [choiceBranchFinsets_coe]
     exact choiceBranchSets_sound isa ih₁ ih₂
+  | guardedChoice guard tThen tElse ihThen ihElse =>
+    simp only [denot, treeBehavior]
+    rw [choiceBranchFinsets_coe]
+    apply choiceBranchSets_sound isa
+    · rw [composeBranchFinsets_coe]
+      exact composeBranchSets_sound isa
+        (by rw [Finset.coe_singleton]; exact assert_sound isa guard) ihThen
+    · rw [composeBranchFinsets_coe]
+      exact composeBranchSets_sound isa
+        (by rw [Finset.coe_singleton]; exact assert_sound isa (isa.pc_not guard)) ihElse
   | boundedIter body n ih =>
     induction n with
     | zero =>
@@ -201,6 +226,16 @@ theorem denot_complete (tree : CompTree Sub PC) :
     simp only [denot, treeBehavior]
     rw [choiceBranchFinsets_coe]
     exact choiceBranchSets_complete isa ih₁ ih₂
+  | guardedChoice guard tThen tElse ihThen ihElse =>
+    simp only [denot, treeBehavior]
+    rw [choiceBranchFinsets_coe]
+    apply choiceBranchSets_complete isa
+    · rw [composeBranchFinsets_coe]
+      exact composeBranchSets_complete isa
+        (by rw [Finset.coe_singleton]; exact assert_complete isa guard) ihThen
+    · rw [composeBranchFinsets_coe]
+      exact composeBranchSets_complete isa
+        (by rw [Finset.coe_singleton]; exact assert_complete isa (isa.pc_not guard)) ihElse
   | boundedIter body n ih =>
     induction n with
     | zero =>
