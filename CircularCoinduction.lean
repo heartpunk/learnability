@@ -460,6 +460,7 @@ private theorem iterate_comm {α : Type*} (f : α → α) (n : ℕ) (x : α) :
     f^[n] (f x) = f (f^[n] x) := by
   rw [← iterate_succ_apply' f n x, iterate_succ_apply f n x]
 
+omit [DecidableEq Sub] [DecidableEq PC] in
 /-- The concrete behavior of `afterBody n` matches the "between iterations" semantics:
     starting from state s (which is already post-body), either exit or (continues holds,
     do body, recurse with up to n more post-body decisions). -/
