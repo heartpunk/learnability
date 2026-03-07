@@ -35,7 +35,7 @@ BEFORE running symbolic execution.
 | `CompTree.assign` | `PAss` |
 | `CompTree.assert` | guard (part of `PIf`) |
 | `CompTree.seq` | `PSeq` |
-| `CompTree.choice` | `PCh` |
+| `CompTree.guardedChoice` | `PIf` / `PCh` (guarded) |
 | `CompTree.boundedIter` | unrolled `PWhile` |
 | `denot` | `denot__S` |
 | `treeBehavior` | `denot_fun_nondet` |
@@ -49,9 +49,9 @@ set_option relaxedAutoImplicit false
 
 /-- Program structure tree. Primitive leaves correspond to ICTAC primitives.
 
-    Note: `ite` (if-then-else) is not a primitive — it encodes as
-    `choice (seq (assert φ) t₁) (seq (assert (pc_not φ)) t₂)`.
-    This matches ICTAC's treatment: `PIf b p₁ p₂ = PCh (PSeq (PGuard b) p₁) (PSeq (PGuard (BNot b)) p₂)`. -/
+    If-then-else is `guardedChoice`: the guard PC lives in the tree,
+    structurally enforcing that the two branches partition the input space.
+    ICTAC: `PIf b p₁ p₂ = PCh (PSeq (PGuard b) p₁) (PSeq (PGuard (BNot b)) p₂)`. -/
 inductive CompTree (Sub PC : Type*) where
   /-- Identity: no state change. ICTAC: `PSkip`. -/
   | skip : CompTree Sub PC
@@ -61,13 +61,9 @@ inductive CompTree (Sub PC : Type*) where
   | assert (φ : PC) : CompTree Sub PC
   /-- Sequential composition. ICTAC: `PSeq`. -/
   | seq (t₁ t₂ : CompTree Sub PC) : CompTree Sub PC
-  /-- Nondeterministic choice. ICTAC: `PCh`. -/
-  | choice (t₁ t₂ : CompTree Sub PC) : CompTree Sub PC
   /-- Guarded choice: if guard holds take tThen, if pc_not guard holds take tElse.
       The guard PC lives in the tree, structurally enforcing that the two branches
-      partition the input space. Equivalent to `choice (seq (assert guard) tThen)
-      (seq (assert (pc_not guard)) tElse)` but as a primitive.
-      ICTAC: `PIf b p₁ p₂`. -/
+      partition the input space. ICTAC: `PIf b p₁ p₂`. -/
   | guardedChoice (guard : PC) (tThen tElse : CompTree Sub PC) : CompTree Sub PC
   /-- Bounded loop: execute body at most n times.
       Each iteration can either continue or exit nondeterministically. -/
@@ -89,7 +85,6 @@ def denot [DecidableEq Sub] [DecidableEq PC]
   | .assign σ => {⟨σ, isa.pc_true⟩}
   | .assert φ => {⟨isa.id_sub, φ⟩}
   | .seq t₁ t₂ => composeBranchFinsets isa (denot isa t₁) (denot isa t₂)
-  | .choice t₁ t₂ => choiceBranchFinsets (denot isa t₁) (denot isa t₂)
   | .guardedChoice guard tThen tElse =>
       choiceBranchFinsets
         (composeBranchFinsets isa {⟨isa.id_sub, guard⟩} (denot isa tThen))
@@ -111,7 +106,6 @@ def treeBehavior (isa : SymbolicISA Sub PC State) :
   | .assign σ => assignBehavior isa σ
   | .assert φ => assertBehavior isa φ
   | .seq t₁ t₂ => seqBehavior (treeBehavior isa t₁) (treeBehavior isa t₂)
-  | .choice t₁ t₂ => choiceBehavior (treeBehavior isa t₁) (treeBehavior isa t₂)
   | .guardedChoice guard tThen tElse =>
       choiceBehavior
         (seqBehavior (assertBehavior isa guard) (treeBehavior isa tThen))
@@ -128,7 +122,6 @@ def treeBehavior (isa : SymbolicISA Sub PC State) :
 def bound : CompTree Sub PC → Nat
   | .skip | .assign _ | .assert _ => 1
   | .seq t₁ t₂ => bound t₁ * bound t₂
-  | .choice t₁ t₂ => bound t₁ + bound t₂
   | .guardedChoice _guard tThen tElse => bound tThen + bound tElse
   | .boundedIter _body 0 => 1
   | .boundedIter body (n + 1) => 1 + bound body * bound (.boundedIter body n)
@@ -169,10 +162,6 @@ theorem denot_sound (tree : CompTree Sub PC) :
     simp only [denot, treeBehavior]
     rw [composeBranchFinsets_coe]
     exact composeBranchSets_sound isa ih₁ ih₂
-  | choice t₁ t₂ ih₁ ih₂ =>
-    simp only [denot, treeBehavior]
-    rw [choiceBranchFinsets_coe]
-    exact choiceBranchSets_sound isa ih₁ ih₂
   | guardedChoice guard tThen tElse ihThen ihElse =>
     simp only [denot, treeBehavior]
     rw [choiceBranchFinsets_coe]
@@ -222,10 +211,6 @@ theorem denot_complete (tree : CompTree Sub PC) :
     simp only [denot, treeBehavior]
     rw [composeBranchFinsets_coe]
     exact composeBranchSets_complete isa ih₁ ih₂
-  | choice t₁ t₂ ih₁ ih₂ =>
-    simp only [denot, treeBehavior]
-    rw [choiceBranchFinsets_coe]
-    exact choiceBranchSets_complete isa ih₁ ih₂
   | guardedChoice guard tThen tElse ihThen ihElse =>
     simp only [denot, treeBehavior]
     rw [choiceBranchFinsets_coe]
