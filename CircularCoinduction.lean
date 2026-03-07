@@ -513,6 +513,7 @@ private theorem afterBody_behavior
           rw [iterate_succ_apply'] at this; exact this
         · rw [iterate_succ_apply'] at hext; exact hext
 
+omit [DecidableEq Sub] [DecidableEq PC] in
 /-- **Semantic equivalence:** `treeBehavior (guardedLoopTree summary bound)` is exactly
     `boundedWhileBehavior summary bound`.
 
