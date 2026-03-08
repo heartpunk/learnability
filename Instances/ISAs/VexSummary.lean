@@ -25,6 +25,39 @@ structure Summary where
   sub : SymSub
   pc : SymPC
 
+private theorem SymSub.ext {sub₁ sub₂ : SymSub}
+    (hRax : sub₁ .rax = sub₂ .rax)
+    (hRcx : sub₁ .rcx = sub₂ .rcx)
+    (hRdi : sub₁ .rdi = sub₂ .rdi)
+    (hRip : sub₁ .rip = sub₂ .rip) :
+    sub₁ = sub₂ := by
+  funext reg
+  cases reg with
+  | rax => exact hRax
+  | rcx => exact hRcx
+  | rdi => exact hRdi
+  | rip => exact hRip
+
+instance : DecidableEq SymSub := by
+  intro sub₁ sub₂
+  by_cases hRax : sub₁ .rax = sub₂ .rax
+  · by_cases hRcx : sub₁ .rcx = sub₂ .rcx
+    · by_cases hRdi : sub₁ .rdi = sub₂ .rdi
+      · by_cases hRip : sub₁ .rip = sub₂ .rip
+        · exact isTrue (SymSub.ext hRax hRcx hRdi hRip)
+        · exact isFalse (fun h => hRip (congrArg (fun sub => sub .rip) h))
+      · exact isFalse (fun h => hRdi (congrArg (fun sub => sub .rdi) h))
+    · exact isFalse (fun h => hRcx (congrArg (fun sub => sub .rcx) h))
+  · exact isFalse (fun h => hRax (congrArg (fun sub => sub .rax) h))
+
+instance : DecidableEq Summary := by
+  intro left right
+  by_cases hSub : left.sub = right.sub
+  · by_cases hPc : left.pc = right.pc
+    · exact isTrue (by cases left; cases right; cases hSub; cases hPc; rfl)
+    · exact isFalse (fun h => hPc (by cases h; rfl))
+  · exact isFalse (fun h => hSub (by cases h; rfl))
+
 
 def SymSub.id : SymSub := SymExpr.reg
 
