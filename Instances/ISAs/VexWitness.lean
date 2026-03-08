@@ -302,4 +302,58 @@ theorem whileLoopUnrollBound_of_stabilization
   rcases hcover s s' hBounded with ⟨blocks, hMem, hPath⟩
   exact ⟨blocks, hMem, ⟨hRel, s', hPath, hObs⟩⟩
 
+/-- If one concrete execution of the VEX body path realizes the loop's `bodyEffect`,
+    then repeating that path `n` times realizes the `n`-th iterate of `bodyEffect`. -/
+theorem repeatBlockPath_reaches_iterate_of_bodyEffect_mem
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (summary : VexLoopSummary Reg)
+    (body : List (Block Reg))
+    (hbody : ∀ s, summary.bodyEffect s ∈ execBlockPath body s) :
+    ∀ n s,
+      summary.bodyEffect^[n] s ∈ execBlockPath (repeatBlockPath body n) s := by
+  intro n
+  induction n with
+  | zero =>
+      intro s
+      simp [repeatBlockPath, execBlockPath]
+  | succ n ih =>
+      intro s
+      rw [repeatBlockPath_succ, execBlockPath_append]
+      refine Finset.mem_biUnion.mpr ?_
+      refine ⟨summary.bodyEffect s, hbody s, ?_⟩
+      simpa using ih (summary.bodyEffect s)
+
+/-- A single-step body-path realization hypothesis is enough to cover every bounded
+    while execution by some path in the bounded loop witness. -/
+theorem boundedWhileCoverage_of_bodyEffect_path
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (summary : VexLoopSummary Reg)
+    (body : List (Block Reg)) (K : Nat)
+    (hbody : ∀ s, summary.bodyEffect s ∈ execBlockPath body s) :
+    ∀ s s',
+      boundedWhileBehavior (isa := vexSummaryISA Reg) summary K s s' →
+        ∃ blocks ∈ boundedLoopWitness body K, s' ∈ execBlockPath blocks s := by
+  intro s s' h
+  rcases h with ⟨n, hn, hIter, _, _⟩
+  refine ⟨repeatBlockPath body n, ?_, ?_⟩
+  · exact (mem_boundedLoopWitness_iff body K (repeatBlockPath body n)).2 ⟨n, hn, rfl⟩
+  · simpa [hIter.symm] using repeatBlockPath_reaches_iterate_of_bodyEffect_mem summary body hbody n s
+
+/-- Under stabilization, a simple one-step body-path realization hypothesis suffices to
+    discharge the concrete while-loop unroll bound. -/
+theorem whileLoopUnrollBound_of_stabilization_and_bodyEffect_path
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (program : Program Reg) (ip_reg : Reg)
+    (summary : VexLoopSummary Reg)
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (body : List (Block Reg)) (K : Nat)
+    (h_stab :
+      loopBranchSet (isa := vexSummaryISA Reg) summary K =
+        loopBranchSet (isa := vexSummaryISA Reg) summary (K + 1))
+    (hbody : ∀ s, summary.bodyEffect s ∈ execBlockPath body s) :
+    WhileLoopUnrollBound program ip_reg summary Relevant observe body K :=
+  whileLoopUnrollBound_of_stabilization program ip_reg summary Relevant observe body K h_stab
+    (boundedWhileCoverage_of_bodyEffect_path summary body K hbody)
+
  end VexISA
