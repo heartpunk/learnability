@@ -54,9 +54,9 @@ def expr_to_data(arch, expr):
         return {"tag": "const", "value": int(expr.con.value)}
     if isinstance(expr, pyvex.expr.Unop):
         if expr.op == "Iop_64to32":
-            return {"tag": "low32", "expr": expr_to_data(arch, expr.args[0])}
+            return {"tag": "narrow32", "expr": expr_to_data(arch, expr.args[0])}
         if expr.op == "Iop_32Uto64":
-            return {"tag": "uext32", "expr": expr_to_data(arch, expr.args[0])}
+            return {"tag": "zext64", "expr": expr_to_data(arch, expr.args[0])}
         raise ValueError(f"unsupported unop: {expr.op}")
     if isinstance(expr, pyvex.expr.Load):
         if expr.end != "Iend_LE":
@@ -65,6 +65,14 @@ def expr_to_data(arch, expr):
             raise ValueError(f"unsupported load type: {expr.ty}")
         return {"tag": "load64", "addr": expr_to_data(arch, expr.addr)}
     if isinstance(expr, pyvex.expr.Binop):
+        if expr.op == "Iop_Add32":
+            if len(expr.args) != 2:
+                raise ValueError(f"unexpected arg count for {expr.op}: {len(expr.args)}")
+            return {
+                "tag": "add32",
+                "lhs": expr_to_data(arch, expr.args[0]),
+                "rhs": expr_to_data(arch, expr.args[1]),
+            }
         if expr.op != "Iop_Add64":
             raise ValueError(f"unsupported binop: {expr.op}")
         if len(expr.args) != 2:
@@ -136,10 +144,12 @@ def lean_expr(expr: dict) -> str:
         return f".tmp {expr['tmp']}"
     if tag == "const":
         return f".const 0x{expr['value']:x}"
-    if tag == "low32":
-        return f".low32 ({lean_expr(expr['expr'])})"
-    if tag == "uext32":
-        return f".uext32 ({lean_expr(expr['expr'])})"
+    if tag in ("low32", "narrow32"):
+        return f".narrow32 ({lean_expr(expr['expr'])})"
+    if tag in ("uext32", "zext64"):
+        return f".zext64 ({lean_expr(expr['expr'])})"
+    if tag == "add32":
+        return f".add32 ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
     if tag == "load64":
         return f".load64 ({lean_expr(expr['addr'])})"
     if tag == "add64":
@@ -226,6 +236,10 @@ def build_fixture(
         "rcx": out.solver.eval(out.regs.rcx),
         "rdi": out.solver.eval(out.regs.rdi),
         "rip": out.solver.eval(out.regs.rip),
+        "cc_op": out.solver.eval(out.regs.cc_op),
+        "cc_dep1": out.solver.eval(out.regs.cc_dep1),
+        "cc_dep2": out.solver.eval(out.regs.cc_dep2),
+        "cc_ndep": out.solver.eval(out.regs.cc_ndep),
         "mem64le": [
             {
                 "addr": addr,
@@ -239,6 +253,10 @@ def build_fixture(
         "rcx": inputs.get("rcx", 0),
         "rdi": inputs.get("rdi", 0),
         "rip": base,
+        "cc_op": inputs.get("cc_op", 0),
+        "cc_dep1": inputs.get("cc_dep1", 0),
+        "cc_dep2": inputs.get("cc_dep2", 0),
+        "cc_ndep": inputs.get("cc_ndep", 0),
         "mem64le": normalize_mem64le(input_mem64le),
     }
 
@@ -316,19 +334,27 @@ def block : Amd64Block :=
     ] 0x{fixture['block']['next']:x}
 
 def input : Amd64ConcreteState :=
-  mkAmd64State
+  mkAmd64StateCC
     0x{fixture['input']['rax']:x}
     0x{fixture['input']['rcx']:x}
     0x{fixture['input']['rdi']:x}
     0x{fixture['input']['rip']:x}
+    0x{fixture['input']['cc_op']:x}
+    0x{fixture['input']['cc_dep1']:x}
+    0x{fixture['input']['cc_dep2']:x}
+    0x{fixture['input']['cc_ndep']:x}
     {input_mem}
 
 def expected : Amd64ConcreteState :=
-  mkAmd64State
+  mkAmd64StateCC
     0x{fixture['expected']['rax']:x}
     0x{fixture['expected']['rcx']:x}
     0x{fixture['expected']['rdi']:x}
     0x{fixture['expected']['rip']:x}
+    0x{fixture['expected']['cc_op']:x}
+    0x{fixture['expected']['cc_dep1']:x}
+    0x{fixture['expected']['cc_dep2']:x}
+    0x{fixture['expected']['cc_ndep']:x}
     {expected_mem}
 
 end {lean_namespace}
