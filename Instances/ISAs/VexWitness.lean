@@ -251,4 +251,28 @@ theorem loopWitnessComplete_iff_sound_and_unrollBound
   · rintro ⟨hsound, hbound⟩
     exact loopWitnessComplete_of_sound_and_unrollBound spec body K hsound hbound
 
+/-- For the concrete while-based loop region, witness soundness follows once every
+    repeated body path up to the bound denotes a bounded while execution. This is the
+    easy direction: bounded witness behaviors are real loop behaviors. -/
+theorem whileLoopWitnessSound_of_boundedPathBehavior
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (program : Program Reg) (ip_reg : Reg)
+    (summary : VexLoopSummary Reg)
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (body : List (Block Reg)) (K : Nat)
+    (hpath :
+      ∀ n s s',
+        n ≤ K →
+        s' ∈ execBlockPath (repeatBlockPath body n) s →
+          boundedWhileBehavior (isa := vexSummaryISA Reg) summary K s s') :
+    LoopWitnessSound (whileLoopRegionSpec program ip_reg summary Relevant observe) body K := by
+  intro s o hExec
+  rcases hExec with ⟨blocks, hMem, hBlocks⟩
+  rcases (mem_boundedLoopWitness_iff body K blocks).mp hMem with ⟨n, hn, hEq⟩
+  subst hEq
+  rcases hBlocks with ⟨hRel, s', hPath, hObs⟩
+  refine ⟨hRel, s', ?_, hObs⟩
+  exact boundedWhileBehavior_implies_whileBehavior summary K (hpath n s s' hn hPath)
+
  end VexISA
