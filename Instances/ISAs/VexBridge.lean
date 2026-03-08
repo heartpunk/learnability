@@ -23,11 +23,22 @@ def LoweredDenotes {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (block : Block Reg) (input output : ConcreteState Reg) : Prop :=
   SummaryDenotes (lowerBlockSummaries block) input output
 
+/-- The semantic bridge contract for a raw VEX block:
+raw syntax and lowered summaries induce the same concrete successor relation. -/
+def BridgeContract {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (block : Block Reg) : Prop :=
+  ∀ input output, SyntaxDenotes block input output ↔ LoweredDenotes block input output
+
 /-- Materialize the concrete successors described by a family of summaries on a fixed input. -/
 def summarySuccs {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (summaries : Finset (Summary Reg)) (input : ConcreteState Reg) : Finset (ConcreteState Reg) :=
   Finset.biUnion summaries fun summary =>
     if evalSymPC input summary.pc then ({Summary.apply summary input} : Finset (ConcreteState Reg)) else ∅
+
+/-- Executable set-level form of the semantic bridge contract for a raw VEX block. -/
+def ExecutableBridgeContract {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (block : Block Reg) : Prop :=
+  ∀ input, summarySuccs (lowerBlockSummaries block) input = execBlockSuccs block input
 
 @[simp] theorem syntaxDenotes_iff {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (block : Block Reg) (input output : ConcreteState Reg) :
@@ -90,6 +101,12 @@ theorem syntax_iff_lowered {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   · exact syntax_to_lowered_sound block input output
   · exact lowered_to_syntax_complete block input output
 
+/-- The raw-syntax and lowered-summary views satisfy the semantic bridge contract. -/
+theorem bridgeContract {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (block : Block Reg) : BridgeContract block := by
+  intro input output
+  exact syntax_iff_lowered block input output
+
 /-- Executable set-level form of the commuting triangle for the current VEX slice. -/
 theorem summarySuccs_lowerBlockSummaries_eq_execBlockSuccs {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (block : Block Reg) (input : ConcreteState Reg) :
@@ -97,5 +114,11 @@ theorem summarySuccs_lowerBlockSummaries_eq_execBlockSuccs {Reg : Type} [Decidab
   ext output
   rw [mem_summarySuccs]
   exact (syntax_iff_lowered block input output).symm
+
+/-- The executable successor sets satisfy the set-level semantic bridge contract. -/
+theorem executableBridgeContract {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (block : Block Reg) : ExecutableBridgeContract block := by
+  intro input
+  exact summarySuccs_lowerBlockSummaries_eq_execBlockSuccs block input
 
 end VexISA
