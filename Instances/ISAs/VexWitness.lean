@@ -53,4 +53,37 @@ theorem completeWitnesses_modelEq
     (extractedModel_of_witnessComplete R paths₁ h₁ s o)
     (extractedModel_of_witnessComplete R paths₂ h₂ s o).symm
 
+/-- An extensional loop-region specification. This keeps the concrete lifted program and
+    instruction-pointer register in scope, but leaves the observed loop behavior itself
+    extensional for now. -/
+structure LoopRegionSpec (Reg : Type) (Obs : Type) [DecidableEq Reg] [Fintype Reg] where
+  program : Program Reg
+  ip_reg : Reg
+  Relevant : ConcreteState Reg → Prop
+  observe : ConcreteState Reg → Obs
+  DenotesObs : ConcreteState Reg → Obs → Prop
+
+/-- Forget a loop-region specification down to the generic extensional region object. -/
+def LoopRegion
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (spec : LoopRegionSpec Reg Obs) : Region Reg Obs :=
+  { Relevant := spec.Relevant
+    observe := spec.observe
+    DenotesObs := spec.DenotesObs }
+
+@[simp] theorem loopRegion_relevant
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (spec : LoopRegionSpec Reg Obs) :
+    (LoopRegion spec).Relevant = spec.Relevant := rfl
+
+@[simp] theorem loopRegion_observe
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (spec : LoopRegionSpec Reg Obs) :
+    (LoopRegion spec).observe = spec.observe := rfl
+
+@[simp] theorem loopRegion_denotesObs
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (spec : LoopRegionSpec Reg Obs) :
+    (LoopRegion spec).DenotesObs = spec.DenotesObs := rfl
+
  end VexISA
