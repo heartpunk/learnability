@@ -12,6 +12,7 @@ import Instances.Examples.VexMovMemRdiRaxExample
 import Instances.Examples.VexMovMemRdiRaxFixture
 import Instances.Examples.VexStore64Example
 import Instances.ISAs.MachineISA
+import Instances.ISAs.VexSyntax
 import Instances.ISAs.VexISA
 import Instances.ISAs.VexSummary
 import Instances.ISAs.VexLowering

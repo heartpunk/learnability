@@ -1,4 +1,4 @@
-import Instances.ISAs.VexISA
+import Instances.ISAs.VexSyntax
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
