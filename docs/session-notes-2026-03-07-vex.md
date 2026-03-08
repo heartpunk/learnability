@@ -661,3 +661,83 @@ Instead:
 5. instantiate `SymbolicISA` on the summary type
 6. then extend the frontend and lowering to more VEX features
 
+
+## Continuation update: rebased coverage and memory milestone progress
+
+This session continued substantially past the initial straight-line `lea` slice.
+
+Committed follow-up work:
+
+- `5c92663df987` `add fixed memory to VEX concrete and symbolic state`
+- `da8d30c546d0` `expand VEX coverage corpus`
+- `0fd138f5f2f4` `regenerate VEX coverage fixtures for memory-aware state`
+- `6870e7643968` `clean unused-variable warnings in Learnability.Framework`
+- `14d3589425b7` `add VEX load64 semantics and lowering`
+- `6e413af7cea2` `add angr-backed VEX load64 fixture generation and example`
+- `3ea5984739b8` `add VEX store64 semantics and lowering`
+
+Current VEX state after those commits:
+
+- concrete state now includes full byte-addressed memory:
+  - `ConcreteState.mem : ByteMem`
+- symbolic summaries now also include memory:
+  - `SymSub.regs : Reg -> SymExpr`
+  - `SymSub.mem : SymMem`
+- symbolic memory is represented as a store-chain:
+  - `SymMem.base`
+  - `SymMem.store64`
+- symbolic expressions can read memory:
+  - `SymExpr.load64`
+
+Concrete VEX fragment now implemented:
+
+- registers:
+  - `rax`
+  - `rcx`
+  - `rdi`
+  - `rip`
+- expressions:
+  - `const`
+  - `get`
+  - `tmp`
+  - `add64`
+  - `load64`
+- conditions:
+  - `eq64`
+- statements:
+  - `wrTmp`
+  - `put`
+  - `store64`
+  - `exit`
+
+Symbolic/lowering status:
+
+- straight-line and guarded blocks lower to ICTAC-style summaries `(σ, φ)`
+- the lowering proofs now cover:
+  - register-only blocks
+  - guarded exit blocks
+  - `load64`
+  - `store64`
+- `VexSummaryISA` is a real `SymbolicISA` instance over the current summary algebra
+
+Reference-validation status:
+
+- full corpus revalidated after the memory-state rebase
+- added one real `angr`-backed load fixture:
+  - `amd64_mov_rax_mem_rdi`
+- store semantics are implemented in Lean, but the `angr`-backed store fixture was not yet finished at this point in the notes
+
+Build status at this point:
+
+- `lake build` succeeds for the full repository
+- build size at this point: `790 jobs`
+
+Open edge of the current milestone:
+
+- extend the extractor one step further to decode VEX `Store`
+- generate one `angr`-backed store fixture
+- check that fixture through both:
+  - concrete block execution
+  - lowered symbolic summary application
+
+Only after that store fixture lands should this memory milestone be considered complete.
