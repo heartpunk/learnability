@@ -143,7 +143,7 @@ The congruence proof uses `sat_lift` + the closure property from Step 4a. -/
 
 section PCEquiv
 
-variable {Sub PC State : Type*} [DecidableEq PC] [Fintype PC]
+variable {Sub PC State : Type*} [DecidableEq PC]
   (isa : SymbolicISA Sub PC State)
 
 /-- Two states are PC-equivalent w.r.t. a closure: they agree on all PCs in it. -/
@@ -166,14 +166,49 @@ theorem pcEquiv_trans {closure : Finset PC} {s₁ s₂ s₃ : State}
     pcEquiv isa closure s₁ s₃ :=
   fun φ hφ => (h₁₂ φ hφ).trans (h₂₃ φ hφ)
 
-/-- PC-equivalence over a model's closure as a `Setoid`. -/
-def pcSetoid (model : Finset (Branch Sub PC)) : Setoid State where
-  r := pcEquiv isa (pcClosure isa model)
+/-- PC-equivalence over an explicit closure as a `Setoid`. -/
+def pcSetoidWith (closure : Finset PC) : Setoid State where
+  r := pcEquiv isa closure
   iseqv := {
     refl := pcEquiv_refl isa _
     symm := pcEquiv_symm isa
     trans := pcEquiv_trans isa
   }
+
+/-- If two states are PC-equivalent over an explicit closure and a branch PC lies in
+    that closure, the branch fires from one state iff it fires from the other. -/
+theorem pcEquiv_branch_firesWith {closure : Finset PC}
+    {s₁ s₂ : State} {b : Branch Sub PC}
+    (hb_mem : b.pc ∈ closure)
+    (h_equiv : (pcSetoidWith isa closure).r s₁ s₂)
+    (h_fires : isa.satisfies s₁ b.pc) :
+    isa.satisfies s₂ b.pc :=
+  (h_equiv b.pc hb_mem).mp h_fires
+
+/-- If two states are PC-equivalent over an explicit closure and that closure is closed
+    under lifting through branch `b`, their successors under `b` remain equivalent. -/
+theorem pcEquiv_eval_subWith {closure : Finset PC}
+    {s₁ s₂ : State} {b : Branch Sub PC}
+    (hb_closed : ∀ φ ∈ closure, isa.pc_lift b.sub φ ∈ closure)
+    (h_equiv : (pcSetoidWith isa closure).r s₁ s₂) :
+    (pcSetoidWith isa closure).r (isa.eval_sub b.sub s₁) (isa.eval_sub b.sub s₂) := by
+  intro φ hφ
+  constructor
+  · intro h
+    rw [← isa.sat_lift s₂ b.sub φ]
+    rw [← isa.sat_lift s₁ b.sub φ] at h
+    exact (h_equiv (isa.pc_lift b.sub φ) (hb_closed φ hφ)).mp h
+  · intro h
+    rw [← isa.sat_lift s₁ b.sub φ]
+    rw [← isa.sat_lift s₂ b.sub φ] at h
+    exact (h_equiv (isa.pc_lift b.sub φ) (hb_closed φ hφ)).mpr h
+
+variable [Fintype PC]
+
+/-- PC-equivalence over a model's closure as a `Setoid`. -/
+def pcSetoid (model : Finset (Branch Sub PC)) : Setoid State where
+  r := (pcSetoidWith isa (pcClosure isa model)).r
+  iseqv := (pcSetoidWith isa (pcClosure isa model)).iseqv
 
 /-- If two states are PC-equivalent (over the closure) and a branch in the
     model fires from one, it fires from the other. -/
@@ -183,7 +218,8 @@ theorem pcEquiv_branch_fires {model : Finset (Branch Sub PC)}
     (h_equiv : (pcSetoid isa model).r s₁ s₂)
     (h_fires : isa.satisfies s₁ b.pc) :
     isa.satisfies s₂ b.pc :=
-  (h_equiv b.pc (pcClosure_contains_model_pcs isa model b hb)).mp h_fires
+  pcEquiv_branch_firesWith isa
+    (pcClosure_contains_model_pcs isa model b hb) h_equiv h_fires
 
 /-- If two states are PC-equivalent (over the closure), their successors
     under any branch in the model are also PC-equivalent.
@@ -196,17 +232,9 @@ theorem pcEquiv_eval_sub {model : Finset (Branch Sub PC)}
     {s₁ s₂ : State} {b : Branch Sub PC}
     (hb : b ∈ model)
     (h_equiv : (pcSetoid isa model).r s₁ s₂) :
-    (pcSetoid isa model).r (isa.eval_sub b.sub s₁) (isa.eval_sub b.sub s₂) := by
-  intro φ hφ
-  constructor
-  · intro h
-    rw [← isa.sat_lift s₂ b.sub φ]
-    rw [← isa.sat_lift s₁ b.sub φ] at h
-    exact (h_equiv (isa.pc_lift b.sub φ) (pcClosure_closed isa model b hb φ hφ)).mp h
-  · intro h
-    rw [← isa.sat_lift s₁ b.sub φ]
-    rw [← isa.sat_lift s₂ b.sub φ] at h
-    exact (h_equiv (isa.pc_lift b.sub φ) (pcClosure_closed isa model b hb φ hφ)).mpr h
+    (pcSetoid isa model).r (isa.eval_sub b.sub s₁) (isa.eval_sub b.sub s₂) :=
+  pcEquiv_eval_subWith isa
+    (fun φ hφ => pcClosure_closed isa model b hb φ hφ) h_equiv
 
 end PCEquiv
 
@@ -316,22 +344,23 @@ Each equivalence class is characterized by its "PC signature" — the
 subset of closure PCs it satisfies. Distinct classes have distinct
 signatures, and signatures are subsets of the closure. -/
 
-section Finiteness
+section PCSignature
 
-variable {Sub PC State : Type*} [DecidableEq PC] [Fintype PC]
+variable {Sub PC State : Type*} [DecidableEq PC]
   (isa : SymbolicISA Sub PC State)
   [h_dec : ∀ (s : State) (φ : PC), Decidable (isa.satisfies s φ)]
 
-/-- The PC signature of a state: which closure PCs it satisfies. -/
-noncomputable def pcSignature (model : Finset (Branch Sub PC)) (s : State) : Finset PC :=
-  (pcClosure isa model).filter (fun φ => isa.satisfies s φ)
+/-- The PC signature of a state relative to an explicit closure. -/
+noncomputable def pcSignatureWith (closure : Finset PC) (s : State) : Finset PC :=
+  closure.filter (fun φ => isa.satisfies s φ)
 
-/-- Equivalent states have the same signature. -/
-theorem pcSignature_eq_of_equiv
-    {model : Finset (Branch Sub PC)} {s₁ s₂ : State}
-    (h : (pcSetoid isa model).r s₁ s₂) :
-    pcSignature isa model s₁ = pcSignature isa model s₂ := by
-  unfold pcSignature
+/-- Equivalent states over an explicit closure have the same signature. -/
+theorem pcSignature_eq_of_equivWith
+    {closure : Finset PC} {s₁ s₂ : State}
+    (h : (pcSetoidWith isa closure).r s₁ s₂) :
+    pcSignatureWith isa closure s₁ = pcSignatureWith isa closure s₂ := by
+  change pcEquiv isa closure s₁ s₂ at h
+  unfold pcSignatureWith
   ext φ
   constructor
   · intro hφ
@@ -341,23 +370,50 @@ theorem pcSignature_eq_of_equiv
     rw [Finset.mem_filter] at hφ ⊢
     exact ⟨hφ.1, (h φ hφ.1).mpr hφ.2⟩
 
-/-- States with the same signature are equivalent. -/
-theorem equiv_of_pcSignature_eq
-    {model : Finset (Branch Sub PC)} {s₁ s₂ : State}
-    (h : pcSignature isa model s₁ = pcSignature isa model s₂) :
-    (pcSetoid isa model).r s₁ s₂ := by
+/-- States with the same explicit-closure signature are equivalent over that closure. -/
+theorem equiv_of_pcSignature_eqWith
+    {closure : Finset PC} {s₁ s₂ : State}
+    (h : pcSignatureWith isa closure s₁ = pcSignatureWith isa closure s₂) :
+    (pcSetoidWith isa closure).r s₁ s₂ := by
+  change pcEquiv isa closure s₁ s₂
   intro φ hφ
   constructor
   · intro hsat
-    have h1 : φ ∈ pcSignature isa model s₁ :=
+    have h1 : φ ∈ pcSignatureWith isa closure s₁ :=
       Finset.mem_filter.mpr ⟨hφ, hsat⟩
     rw [h] at h1
     exact (Finset.mem_filter.mp h1).2
   · intro hsat
-    have h1 : φ ∈ pcSignature isa model s₂ :=
+    have h1 : φ ∈ pcSignatureWith isa closure s₂ :=
       Finset.mem_filter.mpr ⟨hφ, hsat⟩
     rw [← h] at h1
     exact (Finset.mem_filter.mp h1).2
+
+end PCSignature
+
+section Finiteness
+
+variable {Sub PC State : Type*} [DecidableEq PC] [Fintype PC]
+  (isa : SymbolicISA Sub PC State)
+  [h_dec : ∀ (s : State) (φ : PC), Decidable (isa.satisfies s φ)]
+
+/-- The PC signature of a state: which closure PCs it satisfies. -/
+noncomputable def pcSignature (model : Finset (Branch Sub PC)) (s : State) : Finset PC :=
+  pcSignatureWith isa (pcClosure isa model) s
+
+/-- Equivalent states have the same signature. -/
+theorem pcSignature_eq_of_equiv
+    {model : Finset (Branch Sub PC)} {s₁ s₂ : State}
+    (h : (pcSetoid isa model).r s₁ s₂) :
+    pcSignature isa model s₁ = pcSignature isa model s₂ :=
+  pcSignature_eq_of_equivWith isa h
+
+/-- States with the same signature are equivalent. -/
+theorem equiv_of_pcSignature_eq
+    {model : Finset (Branch Sub PC)} {s₁ s₂ : State}
+    (h : pcSignature isa model s₁ = pcSignature isa model s₂) :
+    (pcSetoid isa model).r s₁ s₂ :=
+  equiv_of_pcSignature_eqWith isa h
 
 /-- Signature characterizes equivalence classes: equal iff equivalent. -/
 theorem pcSignature_eq_iff_equiv
