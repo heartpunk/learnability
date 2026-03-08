@@ -5,6 +5,8 @@ import Instances.Examples.VexJrcxzSkipLeaFallthroughFixture
 import Instances.Examples.VexJrcxzSkipLeaTakenFixture
 import Instances.Examples.VexLoad64Example
 import Instances.Examples.VexLeaEaxRdiPlus5Example
+import Instances.Examples.VexLeaEcxRdiPlus5Example
+import Instances.Examples.VexLeaEcxRdiPlus5Fixture
 import Instances.Examples.VexLeaEaxRdiPlus5Fixture
 import Instances.Examples.VexLeaExample
 import Instances.Examples.VexLeaRdiPlus5Fixture
