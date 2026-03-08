@@ -88,6 +88,7 @@ def composeSymSub (sub₁ sub₂ : SymSub) : SymSub :=
 
 def applySymSub (sub : SymSub) (state : ConcreteState) : ConcreteState :=
   { rax := evalSymExpr state (sub .rax)
+  , rcx := evalSymExpr state (sub .rcx)
   , rdi := evalSymExpr state (sub .rdi)
   , rip := evalSymExpr state (sub .rip) }
 
@@ -137,7 +138,7 @@ theorem evalSymPC_subst (sub : SymSub) (pc : SymPC) (state : ConcreteState) :
 @[simp] theorem composeSymSub_apply (sub₁ sub₂ : SymSub) (state : ConcreteState) :
     applySymSub (composeSymSub sub₁ sub₂) state = applySymSub sub₂ (applySymSub sub₁ state) := by
   cases state with
-  | mk rax rdi rip =>
+  | mk rax rcx rdi rip =>
       simp [applySymSub, composeSymSub, evalSymExpr_subst]
 
 end VexISA

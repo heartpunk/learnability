@@ -51,6 +51,20 @@ def expr_to_data(arch, expr):
     raise ValueError(f"unsupported expr: {type(expr).__name__}")
 
 
+def cond_to_data(arch, expr):
+    if isinstance(expr, pyvex.expr.Binop):
+        if expr.op != "Iop_CmpEQ64":
+            raise ValueError(f"unsupported cond binop: {expr.op}")
+        if len(expr.args) != 2:
+            raise ValueError(f"unexpected arg count for {expr.op}: {len(expr.args)}")
+        return {
+            "tag": "eq64",
+            "lhs": expr_to_data(arch, expr.args[0]),
+            "rhs": expr_to_data(arch, expr.args[1]),
+        }
+    raise ValueError(f"unsupported condition expr: {type(expr).__name__}")
+
+
 def stmt_to_data(arch, stmt):
     if isinstance(stmt, pyvex.stmt.IMark):
         return None
@@ -58,6 +72,12 @@ def stmt_to_data(arch, stmt):
         return {"tag": "wrtmp", "tmp": stmt.tmp, "expr": expr_to_data(arch, stmt.data)}
     if isinstance(stmt, pyvex.stmt.Put):
         return {"tag": "put", "reg": reg_name(arch, stmt.offset), "expr": expr_to_data(arch, stmt.data)}
+    if isinstance(stmt, pyvex.stmt.Exit):
+        return {
+            "tag": "exit",
+            "cond": cond_to_data(arch, stmt.guard),
+            "target": int(stmt.dst.con.value),
+        }
     raise ValueError(f"unsupported stmt: {type(stmt).__name__}")
 
 
@@ -80,7 +100,16 @@ def lean_stmt(stmt: dict) -> str:
         return f".wrTmp {stmt['tmp']} ({lean_expr(stmt['expr'])})"
     if tag == "put":
         return f".put .{stmt['reg']} ({lean_expr(stmt['expr'])})"
+    if tag == "exit":
+        return f".exit ({lean_cond(stmt['cond'])}) 0x{stmt['target']:x}"
     raise ValueError(f"unsupported lean stmt tag: {tag}")
+
+
+def lean_cond(cond: dict) -> str:
+    tag = cond["tag"]
+    if tag == "eq64":
+        return f".eq64 ({lean_expr(cond['lhs'])}) ({lean_expr(cond['rhs'])})"
+    raise ValueError(f"unsupported lean cond tag: {tag}")
 
 
 def build_fixture(name: str, arch_name: str, base: int, code: bytes, inputs: dict[str, int]) -> dict:
@@ -112,11 +141,13 @@ def build_fixture(name: str, arch_name: str, base: int, code: bytes, inputs: dic
 
     expected = {
         "rax": out.solver.eval(out.regs.rax),
+        "rcx": out.solver.eval(out.regs.rcx),
         "rdi": out.solver.eval(out.regs.rdi),
         "rip": out.solver.eval(out.regs.rip),
     }
     concrete_input = {
         "rax": 0,
+        "rcx": inputs.get("rcx", 0),
         "rdi": inputs.get("rdi", 0),
         "rip": base,
     }
@@ -165,11 +196,13 @@ def block : Block :=
 
 def input : ConcreteState :=
   {{ rax := 0x{fixture['input']['rax']:x},
+    rcx := 0x{fixture['input']['rcx']:x},
     rdi := 0x{fixture['input']['rdi']:x},
     rip := 0x{fixture['input']['rip']:x} }}
 
 def expected : ConcreteState :=
   {{ rax := 0x{fixture['expected']['rax']:x},
+    rcx := 0x{fixture['expected']['rcx']:x},
     rdi := 0x{fixture['expected']['rdi']:x},
     rip := 0x{fixture['expected']['rip']:x} }}
 

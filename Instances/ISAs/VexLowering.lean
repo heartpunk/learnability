@@ -20,6 +20,8 @@ def lowerStmt : LowerState → Stmt → LowerState
       (sub, SymTempEnv.write temps tmp (lowerExpr sub temps expr))
   | (sub, temps), .put reg expr =>
       (SymSub.write sub reg (lowerExpr sub temps expr), temps)
+  | (sub, temps), .exit _cond _target =>
+      (sub, temps)
 
 
 def lowerStmts (stmts : List Stmt) : LowerState :=

@@ -57,6 +57,11 @@ private theorem lowerStmt_sound (input : ConcreteState) (stmt : Stmt)
           simpa [execStmt, lowerStmt, applySymSub, SymSub.write] using hExpr
       · intro tmp
         simp [execStmt, lowerStmt, hTemps]
+  | exit cond target =>
+      constructor
+      · simpa [execStmt, lowerStmt] using hState
+      · intro tmp
+        simp [execStmt, lowerStmt, hTemps]
 
 private theorem lowerStmts_sound_from (input : ConcreteState)
     (stmts : List Stmt) (concrete : ConcreteState × TempEnv) (symbolic : LowerState)

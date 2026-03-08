@@ -5,6 +5,7 @@ namespace VexISA
 
 inductive Reg where
   | rax
+  | rcx
   | rdi
   | rip
   deriving DecidableEq, Repr
@@ -16,9 +17,14 @@ inductive Expr where
   | add64 : Expr → Expr → Expr
   deriving DecidableEq, Repr
 
+inductive Cond where
+  | eq64 : Expr → Expr → Cond
+  deriving DecidableEq, Repr
+
 inductive Stmt where
   | wrTmp : Nat → Expr → Stmt
   | put : Reg → Expr → Stmt
+  | exit : Cond → UInt64 → Stmt
   deriving DecidableEq, Repr
 
 structure Block where
@@ -28,6 +34,7 @@ structure Block where
 
 structure ConcreteState where
   rax : UInt64
+  rcx : UInt64
   rdi : UInt64
   rip : UInt64
   deriving DecidableEq, Repr
@@ -49,12 +56,14 @@ def TempEnv.write (temps : TempEnv) (tmp : Nat) (value : UInt64) : TempEnv :=
 
 @[simp] def ConcreteState.read (state : ConcreteState) : Reg → UInt64
   | .rax => state.rax
+  | .rcx => state.rcx
   | .rdi => state.rdi
   | .rip => state.rip
 
 @[simp] def ConcreteState.write (state : ConcreteState) (reg : Reg) (value : UInt64) : ConcreteState :=
   match reg with
   | .rax => { state with rax := value }
+  | .rcx => { state with rcx := value }
   | .rdi => { state with rdi := value }
   | .rip => { state with rip := value }
 
@@ -72,9 +81,13 @@ def TempEnv.write (temps : TempEnv) (tmp : Nat) (value : UInt64) : TempEnv :=
   | .tmp tmp => temps tmp
   | .add64 lhs rhs => evalExpr state temps lhs + evalExpr state temps rhs
 
+@[simp] def evalCond (state : ConcreteState) (temps : TempEnv) : Cond → Bool
+  | .eq64 lhs rhs => evalExpr state temps lhs == evalExpr state temps rhs
+
 @[simp] def execStmt : ConcreteState × TempEnv → Stmt → ConcreteState × TempEnv
   | (state, temps), .wrTmp tmp expr => (state, temps.write tmp (evalExpr state temps expr))
   | (state, temps), .put reg expr => (state.write reg (evalExpr state temps expr), temps)
+  | (state, temps), .exit _cond _target => (state, temps)
 
 @[simp] def execBlock (block : Block) (input : ConcreteState) : ConcreteState :=
   let (state, _) := block.stmts.foldl execStmt (input, TempEnv.empty)

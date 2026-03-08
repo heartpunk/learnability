@@ -19,11 +19,13 @@ def block : Block :=
 
 def input : ConcreteState :=
   { rax := 0x0,
+    rcx := 0x0,
     rdi := 0x10,
     rip := 0x400000 }
 
 def expected : ConcreteState :=
   { rax := 0x15,
+    rcx := 0x0,
     rdi := 0x10,
     rip := 0x400004 }
 
