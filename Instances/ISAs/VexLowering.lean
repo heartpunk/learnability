@@ -52,35 +52,27 @@ def lowerBlock (block : Block) : Summary :=
   { sub := lowerBlockSub block
   , pc := .true }
 
-private def lowerStmtBranchesFrom (ps : PartialSummary) : Stmt → List Summary × List PartialSummary
-  | .wrTmp tmp expr =>
-      ([], [{ ps with temps := SymTempEnv.write ps.temps tmp (lowerExpr ps.sub ps.temps expr) }])
-  | .put reg expr =>
-      ([], [{ ps with sub := SymSub.write ps.sub reg (lowerExpr ps.sub ps.temps expr) }])
-  | .exit cond target =>
+def lowerSummariesFrom (ps : PartialSummary) : List Stmt → UInt64 → List Summary
+  | [], next =>
+      [ps.finish next]
+  | .wrTmp tmp expr :: stmts, next =>
+      lowerSummariesFrom
+        { ps with temps := SymTempEnv.write ps.temps tmp (lowerExpr ps.sub ps.temps expr) }
+        stmts next
+  | .put reg expr :: stmts, next =>
+      lowerSummariesFrom
+        { ps with sub := SymSub.write ps.sub reg (lowerExpr ps.sub ps.temps expr) }
+        stmts next
+  | .exit cond target :: stmts, next =>
       let φ := lowerCond ps.sub ps.temps cond
-      ( [ { sub := SymSub.write ps.sub .rip (.const target)
-          , pc := .and ps.pc φ } ]
-      , [ { ps with pc := .and ps.pc (.not φ) } ] )
-
-private def lowerStmtBranches (partials : List PartialSummary) (stmt : Stmt) :
-    List Summary × List PartialSummary :=
-  partials.foldr
-    (fun ps (accFinished, accActive) =>
-      let current := lowerStmtBranchesFrom ps stmt
-      (current.1 ++ accFinished, current.2 ++ accActive))
-    ([], [])
-
-private def lowerStmtsBranches : List Stmt → List PartialSummary → List Summary × List PartialSummary
-  | [], partials => ([], partials)
-  | stmt :: stmts, partials =>
-      let current := lowerStmtBranches partials stmt
-      let rest := lowerStmtsBranches stmts current.2
-      (current.1 ++ rest.1, rest.2)
+      { sub := SymSub.write ps.sub .rip (.const target)
+      , pc := .and ps.pc φ } ::
+      lowerSummariesFrom
+        { ps with pc := .and ps.pc (.not φ) }
+        stmts next
 
 def lowerBlockSummariesList (block : Block) : List Summary :=
-  let lowered := lowerStmtsBranches block.stmts [PartialSummary.init]
-  lowered.1 ++ lowered.2.map (fun ps => ps.finish block.next)
+  lowerSummariesFrom PartialSummary.init block.stmts block.next
 
 def lowerBlockSummaries (block : Block) : Finset Summary :=
   (lowerBlockSummariesList block).toFinset

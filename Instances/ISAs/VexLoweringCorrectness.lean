@@ -96,4 +96,132 @@ theorem lowerBlock_sound (block : Block) (input : ConcreteState) :
     Summary.apply (lowerBlock block) input = execBlock block input := by
   simpa [lowerBlock, Summary.apply] using lowerBlockSub_sound block input
 
+private def PartialSummaryMatches (input : ConcreteState)
+    (concrete : ConcreteState × TempEnv) (ps : PartialSummary) : Prop :=
+  concrete.1 = applySymSub ps.sub input ∧
+    ∀ tmp, concrete.2 tmp = evalSymExpr input (ps.temps tmp)
+
+private theorem partialInit_matches (input : ConcreteState) :
+    PartialSummaryMatches input (input, TempEnv.empty) PartialSummary.init := by
+  constructor
+  · simp [PartialSummary.init]
+  · intro tmp
+    simp [PartialSummary.init, TempEnv.empty, SymTempEnv.empty]
+
+private theorem lowerCond_sound
+    (input state : ConcreteState) (temps : TempEnv) (sub : SymSub) (symTemps : SymTempEnv)
+    (hState : state = applySymSub sub input)
+    (hTemps : ∀ tmp, temps tmp = evalSymExpr input (symTemps tmp))
+    (cond : Cond) :
+    evalCond state temps cond = evalSymPC input (lowerCond sub symTemps cond) := by
+  cases cond with
+  | eq64 lhs rhs =>
+      simp [lowerCond, lowerExpr_sound input state temps sub symTemps hState hTemps lhs,
+        lowerExpr_sound input state temps sub symTemps hState hTemps rhs]
+
+private theorem lowerSummariesFrom_sound_from
+    (input : ConcreteState) (fallthrough : UInt64) :
+    ∀ (stmts : List Stmt) (concrete : ConcreteState × TempEnv) (ps : PartialSummary),
+      PartialSummaryMatches input concrete ps →
+      Summary.enabled { sub := ps.sub, pc := ps.pc } input →
+      ∀ output, output ∈ execStmtsSuccs fallthrough stmts concrete →
+        ∃ summary ∈ (lowerSummariesFrom ps stmts fallthrough).toFinset,
+          Summary.enabled summary input ∧ Summary.apply summary input = output := by
+  intro stmts
+  induction stmts with
+  | nil =>
+      intro concrete ps hMatch hPc output hOut
+      rcases concrete with ⟨state, temps⟩
+      rcases hMatch with ⟨hState, hTemps⟩
+      have hOutput : output = { state with rip := fallthrough } := by
+        simpa using hOut
+      refine ⟨ps.finish fallthrough, ?_, ?_, ?_⟩
+      · simp [lowerSummariesFrom]
+      · simpa [PartialSummary.finish, Summary.enabled] using hPc
+      · rw [hOutput]
+        calc
+          Summary.apply (ps.finish fallthrough) input
+              = (applySymSub ps.sub input).write .rip fallthrough := by
+                  simpa [PartialSummary.finish, Summary.apply, ConcreteState.write] using
+                    (applySymSub_write ps.sub input .rip (.const fallthrough))
+          _ = { state with rip := fallthrough } := by
+                simpa [ConcreteState.write] using congrArg (fun st => st.write .rip fallthrough) hState.symm
+  | cons stmt stmts ih =>
+      intro concrete ps hMatch hPc output hOut
+      rcases concrete with ⟨state, temps⟩
+      rcases hMatch with ⟨hState, hTemps⟩
+      cases stmt with
+      | wrTmp tmp expr =>
+          let ps' : PartialSummary :=
+            { ps with temps := SymTempEnv.write ps.temps tmp (lowerExpr ps.sub ps.temps expr) }
+          have hMatch' : PartialSummaryMatches input (execStmt (state, temps) (.wrTmp tmp expr)) ps' := by
+            have hOld : LowerStateMatches input (state, temps) (ps.sub, ps.temps) := ⟨hState, hTemps⟩
+            have hOld' := lowerStmt_sound input (.wrTmp tmp expr) (state, temps) (ps.sub, ps.temps) hOld
+            simpa [ps', PartialSummaryMatches]
+          simpa [execStmtsSuccs, lowerSummariesFrom, ps'] using
+            ih (execStmt (state, temps) (.wrTmp tmp expr)) ps' hMatch' hPc output hOut
+      | put reg expr =>
+          let ps' : PartialSummary :=
+            { ps with sub := SymSub.write ps.sub reg (lowerExpr ps.sub ps.temps expr) }
+          have hMatch' : PartialSummaryMatches input (execStmt (state, temps) (.put reg expr)) ps' := by
+            have hOld : LowerStateMatches input (state, temps) (ps.sub, ps.temps) := ⟨hState, hTemps⟩
+            have hOld' := lowerStmt_sound input (.put reg expr) (state, temps) (ps.sub, ps.temps) hOld
+            simpa [ps', PartialSummaryMatches]
+          simpa [execStmtsSuccs, lowerSummariesFrom, ps'] using
+            ih (execStmt (state, temps) (.put reg expr)) ps' hMatch' hPc output hOut
+      | exit cond target =>
+          cases cond with
+          | eq64 lhs rhs =>
+              let φ := lowerCond ps.sub ps.temps (.eq64 lhs rhs)
+              have hCond : (evalExpr state temps lhs == evalExpr state temps rhs) = evalSymPC input φ := by
+                simpa [evalCond, φ] using
+                  lowerCond_sound input state temps ps.sub ps.temps hState hTemps (.eq64 lhs rhs)
+              by_cases hExit : (evalExpr state temps lhs == evalExpr state temps rhs) = true
+              · have hOutput : output = { state with rip := target } := by
+                  simpa [execStmtsSuccs, evalCond, hExit] using hOut
+                have hPhiTrue : evalSymPC input φ = true := by
+                  rw [← hCond]
+                  exact hExit
+                refine ⟨{ sub := SymSub.write ps.sub .rip (.const target), pc := .and ps.pc φ }, ?_, ?_, ?_⟩
+                · simp [lowerSummariesFrom, φ]
+                · rw [Summary.enabled, satisfiesSymPC, evalSymPC, hPc, hPhiTrue]
+                  simp
+                · rw [hOutput]
+                  calc
+                    Summary.apply { sub := SymSub.write ps.sub .rip (.const target), pc := .and ps.pc φ } input
+                        = (applySymSub ps.sub input).write .rip target := by
+                            simpa [Summary.apply, ConcreteState.write] using
+                              (applySymSub_write ps.sub input .rip (.const target))
+                    _ = { state with rip := target } := by
+                      simpa [ConcreteState.write] using congrArg (fun st => st.write .rip target) hState.symm
+              · have hEvalFalse : (evalExpr state temps lhs == evalExpr state temps rhs) = false := by
+                  cases hEval : (evalExpr state temps lhs == evalExpr state temps rhs) <;>
+                    simp [hEval] at hExit ⊢
+                let ps' : PartialSummary := { ps with pc := .and ps.pc (.not φ) }
+                have hPhiFalse : evalSymPC input φ = false := by
+                  rw [← hCond]
+                  exact hEvalFalse
+                have hPc' : Summary.enabled { sub := ps'.sub, pc := ps'.pc } input := by
+                  rw [Summary.enabled, satisfiesSymPC, evalSymPC, hPc]
+                  simp [hPhiFalse]
+                have hOut' : output ∈ execStmtsSuccs fallthrough stmts (state, temps) := by
+                  simpa [execStmtsSuccs, evalCond, hEvalFalse] using hOut
+                have hRec := ih (state, temps) ps' ⟨hState, hTemps⟩ hPc' output hOut'
+                rcases hRec with ⟨summary, hMem, hEnabled, hApply⟩
+                refine ⟨summary, ?_, hEnabled, hApply⟩
+                simp [lowerSummariesFrom, φ, ps', hMem]
+
+/-- Every concrete successor of a guarded VEX block is witnessed by an enabled lowered summary. -/
+theorem lowerBlockSummaries_sound (block : Block) (input output : ConcreteState)
+    (hOut : output ∈ execBlockSuccs block input) :
+    ∃ summary ∈ lowerBlockSummaries block,
+      Summary.enabled summary input ∧ Summary.apply summary input = output := by
+  have hPc : Summary.enabled { sub := PartialSummary.init.sub, pc := PartialSummary.init.pc } input := by
+    simp [PartialSummary.init, Summary.enabled, satisfiesSymPC]
+  obtain ⟨summary, hMem, hEnabled, hApply⟩ :=
+    lowerSummariesFrom_sound_from input block.next block.stmts (input, TempEnv.empty)
+      PartialSummary.init (partialInit_matches input) hPc output hOut
+  refine ⟨summary, ?_, hEnabled, hApply⟩
+  simpa [lowerBlockSummaries, lowerBlockSummariesList] using hMem
+
 end VexISA
