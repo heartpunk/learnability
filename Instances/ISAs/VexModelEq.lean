@@ -144,4 +144,48 @@ theorem extractiblePathModel_of_lowering
   intro s o
   exact lowerBlockPathSummaries_denotesObs_iff_execBlockPath Relevant observe blocks s o
 
+theorem composeLowerBlockPathSummaries_denotesState_iff_execBlockPath_append
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (Relevant : ConcreteState Reg → Prop)
+    (blocks₁ blocks₂ : List (Block Reg)) (s s' : ConcreteState Reg) :
+    VexModelDenotesObs Relevant (fun state => state)
+        (composeSummaryFinsets (lowerBlockPathSummaries blocks₁) (lowerBlockPathSummaries blocks₂)) s s' ↔
+      (Relevant s ∧ s' ∈ execBlockPath (blocks₁ ++ blocks₂) s) := by
+  rw [vexModelDenotesObs_iff_summarySuccsDenotesObs]
+  constructor
+  · rintro ⟨hRel, out, hMem, hEq⟩
+    subst hEq
+    exact ⟨hRel, by simpa [summarySuccs_composeLowerBlockPathSummaries_eq_execBlockPath_append blocks₁ blocks₂ s] using hMem⟩
+  · rintro ⟨hRel, hMem⟩
+    exact ⟨hRel, s', by simpa [summarySuccs_composeLowerBlockPathSummaries_eq_execBlockPath_append blocks₁ blocks₂ s] using hMem, rfl⟩
+
+/-- Path extraction commutes with composition at the strongest state-level model equivalence. -/
+theorem lowerBlockPathSummaries_append_modelEqState
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (Relevant : ConcreteState Reg → Prop)
+    (blocks₁ blocks₂ : List (Block Reg)) :
+    VexModelEqState Relevant
+      (composeSummaryFinsets (lowerBlockPathSummaries blocks₁) (lowerBlockPathSummaries blocks₂))
+      (lowerBlockPathSummaries (blocks₁ ++ blocks₂)) := by
+  intro s s'
+  exact Iff.trans
+    (by
+      simpa using
+        (composeLowerBlockPathSummaries_denotesState_iff_execBlockPath_append Relevant blocks₁ blocks₂ s s'))
+    (by
+      simpa using
+        (lowerBlockPathSummaries_denotesState_iff_execBlockPath Relevant (blocks₁ ++ blocks₂) s s').symm)
+
+/-- Path extraction commutes with composition up to observation-level model equivalence. -/
+theorem extractiblePathModel_compose
+    {Reg : Type} {Obs : Type*} [DecidableEq Reg] [Fintype Reg]
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (blocks₁ blocks₂ : List (Block Reg)) :
+    VexModelEq Relevant observe
+      (composeSummaryFinsets (lowerBlockPathSummaries blocks₁) (lowerBlockPathSummaries blocks₂))
+      (lowerBlockPathSummaries (blocks₁ ++ blocks₂)) :=
+  vexModelEqState_implies_vexModelEq Relevant observe
+    (lowerBlockPathSummaries_append_modelEqState Relevant blocks₁ blocks₂)
+
 end VexISA
