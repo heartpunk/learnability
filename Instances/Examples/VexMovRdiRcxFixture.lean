@@ -20,12 +20,14 @@ def input : ConcreteState :=
   { rax := 0x0,
     rcx := 0x10,
     rdi := 0x0,
-    rip := 0x400000 }
+    rip := 0x400000,
+    mem := ByteMem.empty }
 
 def expected : ConcreteState :=
   { rax := 0x0,
     rcx := 0x10,
     rdi := 0x10,
-    rip := 0x400003 }
+    rip := 0x400003,
+    mem := ByteMem.empty }
 
 end Instances.Examples.VexMovRdiRcxFixture

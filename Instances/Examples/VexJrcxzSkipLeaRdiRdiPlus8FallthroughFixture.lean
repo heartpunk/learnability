@@ -23,12 +23,14 @@ def input : ConcreteState :=
   { rax := 0x0,
     rcx := 0x1,
     rdi := 0x10,
-    rip := 0x400000 }
+    rip := 0x400000,
+    mem := ByteMem.empty }
 
 def expected : ConcreteState :=
   { rax := 0x0,
     rcx := 0x1,
     rdi := 0x18,
-    rip := 0x400006 }
+    rip := 0x400006,
+    mem := ByteMem.empty }
 
 end Instances.Examples.VexJrcxzSkipLeaRdiRdiPlus8FallthroughFixture

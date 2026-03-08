@@ -47,11 +47,13 @@
   },
   "input": {
     "rax": 0,
+    "rcx": 0,
     "rdi": 16,
     "rip": 4194304
   },
   "expected": {
     "rax": 21,
+    "rcx": 0,
     "rdi": 16,
     "rip": 4194308
   }
