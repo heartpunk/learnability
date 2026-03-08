@@ -251,6 +251,432 @@ theorem loopWitnessComplete_iff_sound_and_unrollBound
   · rintro ⟨hsound, hbound⟩
     exact loopWitnessComplete_of_sound_and_unrollBound spec body K hsound hbound
 
+/-- Finite path-family witness for at-most-`K` iterations when each iteration may pick
+    any body path from `bodyPaths`. Shorter prefixes remain included at every depth. -/
+def branchingLoopWitness
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (bodyPaths : Finset (List (Block Reg))) : Nat → Finset (List (Block Reg))
+  | 0 => {[]}
+  | n + 1 =>
+      branchingLoopWitness bodyPaths n ∪
+        bodyPaths.biUnion (fun body =>
+          (branchingLoopWitness bodyPaths n).image (fun tail => body ++ tail))
+
+@[simp] theorem branchingLoopWitness_zero
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (bodyPaths : Finset (List (Block Reg))) :
+    branchingLoopWitness bodyPaths 0 = {[]} := rfl
+
+@[simp] theorem branchingLoopWitness_succ
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (bodyPaths : Finset (List (Block Reg))) (n : Nat) :
+    branchingLoopWitness bodyPaths (n + 1) =
+      branchingLoopWitness bodyPaths n ∪
+        bodyPaths.biUnion (fun body =>
+          (branchingLoopWitness bodyPaths n).image (fun tail => body ++ tail)) := rfl
+
+theorem nil_mem_branchingLoopWitness
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (bodyPaths : Finset (List (Block Reg))) (K : Nat) :
+    [] ∈ branchingLoopWitness bodyPaths K := by
+  induction K with
+  | zero =>
+      simp [branchingLoopWitness]
+  | succ n ih =>
+      exact Finset.mem_union.mpr (Or.inl ih)
+
+theorem cons_mem_branchingLoopWitness
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    {bodyPaths : Finset (List (Block Reg))}
+    {body tail : List (Block Reg)} {n : Nat}
+    (hbody : body ∈ bodyPaths)
+    (htail : tail ∈ branchingLoopWitness bodyPaths n) :
+    body ++ tail ∈ branchingLoopWitness bodyPaths (n + 1) := by
+  rw [branchingLoopWitness_succ]
+  exact Finset.mem_union.mpr <| Or.inr <|
+    Finset.mem_biUnion.mpr ⟨body, hbody, Finset.mem_image.mpr ⟨tail, htail, rfl⟩⟩
+
+theorem branchingLoopWitness_mono
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (bodyPaths : Finset (List (Block Reg))) :
+    ∀ n, branchingLoopWitness bodyPaths n ⊆ branchingLoopWitness bodyPaths (n + 1) := by
+  intro n path hpath
+  rw [branchingLoopWitness_succ]
+  exact Finset.mem_union.mpr (Or.inl hpath)
+
+theorem branchingLoopWitness_mono'
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (bodyPaths : Finset (List (Block Reg))) :
+    ∀ {n m}, n ≤ m →
+      branchingLoopWitness bodyPaths n ⊆ branchingLoopWitness bodyPaths m := by
+  intro n m hnm
+  induction hnm with
+  | refl =>
+      exact Finset.Subset.refl _
+  | @step m hnm ih =>
+      exact Finset.Subset.trans ih (branchingLoopWitness_mono bodyPaths m)
+
+/-- A branching loop witness is complete when the at-most-`K` family of
+    branch-sensitive body-path concatenations covers exactly the loop region. -/
+def BranchingLoopWitnessComplete
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (spec : LoopRegionSpec Reg Obs)
+    (bodyPaths : Finset (List (Block Reg))) (K : Nat) : Prop :=
+  WitnessComplete (LoopRegion spec) (branchingLoopWitness bodyPaths K)
+
+/-- Soundness half of the branching witness completeness story. -/
+def BranchingLoopWitnessSound
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (spec : LoopRegionSpec Reg Obs)
+    (bodyPaths : Finset (List (Block Reg))) (K : Nat) : Prop :=
+  ∀ s o,
+    ExecPathFamilyDenotesObs spec.Relevant spec.observe
+      (branchingLoopWitness bodyPaths K) s o →
+        spec.DenotesObs s o
+
+/-- Coverage half of the branching witness completeness story. -/
+def BranchingLoopUnrollBound
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (spec : LoopRegionSpec Reg Obs)
+    (bodyPaths : Finset (List (Block Reg))) (K : Nat) : Prop :=
+  ∀ s o,
+    spec.DenotesObs s o →
+      ExecPathFamilyDenotesObs spec.Relevant spec.observe
+        (branchingLoopWitness bodyPaths K) s o
+
+/-- Concrete while-loop specialization of the branching coverage obligation. -/
+abbrev WhileBranchingLoopUnrollBound
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (program : Program Reg) (ip_reg : Reg)
+    (summary : VexLoopSummary Reg)
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (bodyPaths : Finset (List (Block Reg))) (K : Nat) : Prop :=
+  BranchingLoopUnrollBound
+    (whileLoopRegionSpec program ip_reg summary Relevant observe)
+    bodyPaths K
+
+theorem branchingLoopWitnessComplete_of_sound_and_unrollBound
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (spec : LoopRegionSpec Reg Obs)
+    (bodyPaths : Finset (List (Block Reg))) (K : Nat)
+    (hsound : BranchingLoopWitnessSound spec bodyPaths K)
+    (hbound : BranchingLoopUnrollBound spec bodyPaths K) :
+    BranchingLoopWitnessComplete spec bodyPaths K := by
+  intro s o
+  constructor
+  · exact hsound s o
+  · exact hbound s o
+
+theorem branchingLoopWitnessComplete_iff_sound_and_unrollBound
+    {Reg : Type} {Obs : Type} [DecidableEq Reg] [Fintype Reg]
+    (spec : LoopRegionSpec Reg Obs)
+    (bodyPaths : Finset (List (Block Reg))) (K : Nat) :
+    BranchingLoopWitnessComplete spec bodyPaths K ↔
+      BranchingLoopWitnessSound spec bodyPaths K ∧
+        BranchingLoopUnrollBound spec bodyPaths K := by
+  constructor
+  · intro hcomplete
+    refine ⟨?_, ?_⟩
+    · intro s o hExec
+      exact (hcomplete s o).mp hExec
+    · intro s o hDenotes
+      exact (hcomplete s o).mpr hDenotes
+  · rintro ⟨hsound, hbound⟩
+    exact branchingLoopWitnessComplete_of_sound_and_unrollBound
+      spec bodyPaths K hsound hbound
+
+/-- Reinterpret a VEX summary as a generic branch so the quotient machinery from
+    `SymExec/Quotient.lean` can be reused directly. -/
+def summaryAsBranch
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (summary : Summary Reg) : Branch (SymSub Reg) (SymPC Reg) :=
+  { sub := summary.sub
+    pc := summary.pc }
+
+@[simp] theorem summaryAsBranch_sub
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (summary : Summary Reg) :
+    (summaryAsBranch summary).sub = summary.sub := rfl
+
+@[simp] theorem summaryAsBranch_pc
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (summary : Summary Reg) :
+    (summaryAsBranch summary).pc = summary.pc := rfl
+
+/-- A pure guard branch for lifting loop-control PCs into the quotient model. -/
+def guardBranch
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (pc : SymPC Reg) : Branch (SymSub Reg) (SymPC Reg) :=
+  { sub := SymSub.id
+    pc := pc }
+
+/-- The symbolic model used for PC-equivalence on the branching-witness route:
+    all summaries reachable from the chosen body paths, plus the continue/exit guards. -/
+def branchingLoopModel
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (summary : VexLoopSummary Reg)
+    (bodyPaths : Finset (List (Block Reg))) :
+    Finset (Branch (SymSub Reg) (SymPC Reg)) :=
+  (lowerPathFamilySummaries bodyPaths).image summaryAsBranch ∪
+    {guardBranch summary.continues, guardBranch summary.exits}
+
+theorem summaryAsBranch_mem_branchingLoopModel
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (summary : VexLoopSummary Reg)
+    {bodyPaths : Finset (List (Block Reg))}
+    {path : List (Block Reg)} {σ : Summary Reg}
+    (hpath : path ∈ bodyPaths)
+    (hσ : σ ∈ lowerBlockPathSummaries path) :
+    summaryAsBranch σ ∈ branchingLoopModel summary bodyPaths := by
+  refine Finset.mem_union.mpr (Or.inl ?_)
+  refine Finset.mem_image.mpr ?_
+  refine ⟨σ, ?_, rfl⟩
+  exact Finset.mem_biUnion.mpr ⟨path, hpath, hσ⟩
+
+theorem continues_mem_branchingLoopModel
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (summary : VexLoopSummary Reg)
+    (bodyPaths : Finset (List (Block Reg))) :
+    guardBranch summary.continues ∈ branchingLoopModel summary bodyPaths := by
+  refine Finset.mem_union.mpr (Or.inr ?_)
+  simp [guardBranch]
+
+theorem exits_mem_branchingLoopModel
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (summary : VexLoopSummary Reg)
+    (bodyPaths : Finset (List (Block Reg))) :
+    guardBranch summary.exits ∈ branchingLoopModel summary bodyPaths := by
+  refine Finset.mem_union.mpr (Or.inr ?_)
+  simp [guardBranch]
+
+/-- One live branch class = one chosen concrete body path, one symbolic summary from
+    that path, and one incoming PC-signature class for the loop model. -/
+structure LiveBranchClass (Reg : Type) [DecidableEq Reg] [Fintype Reg] where
+  path : List (Block Reg)
+  summary : Summary Reg
+  signature : Finset (SymPC Reg)
+
+section BranchClassCompression
+
+variable {Reg : Type} {Obs : Type}
+variable [DecidableEq Reg] [Fintype Reg]
+variable [∀ (s : ConcreteState Reg) (φ : SymPC Reg),
+  Decidable ((vexSummaryISA Reg).satisfies s φ)]
+
+/-- A live class is realized at `s` when its path is available, its summary is one of the
+    lowered summaries for that path, the summary fires at `s`, and `s` has the recorded
+    PC-signature in the loop model. -/
+noncomputable def LiveBranchClass.Realizes
+    (bodyPaths : Finset (List (Block Reg)))
+    (closure : Finset (SymPC Reg))
+    (cls : LiveBranchClass Reg)
+    (s : ConcreteState Reg) : Prop :=
+  cls.path ∈ bodyPaths ∧
+    cls.summary ∈ lowerBlockPathSummaries cls.path ∧
+    Summary.enabled cls.summary s ∧
+    pcSignatureWith (vexSummaryISA Reg) closure s = cls.signature
+
+/-- A realized live class tracks the actual deterministic body step and one concrete path
+    that executes that step. This is the explicit symbolic-to-concrete bridge hypothesis. -/
+noncomputable def LiveBranchClass.RealizesBodyStep
+    (loop : VexLoopSummary Reg)
+    (bodyPaths : Finset (List (Block Reg)))
+    (closure : Finset (SymPC Reg))
+    (cls : LiveBranchClass Reg)
+    (s : ConcreteState Reg) : Prop :=
+  cls.Realizes bodyPaths closure s ∧
+    Summary.apply cls.summary s = loop.bodyEffect s ∧
+    loop.bodyEffect s ∈ execBlockPath cls.path s
+
+/-- Every concrete body step admits a representative live class from `bodyPaths`. -/
+noncomputable def BodyPathStepRealizable
+    (loop : VexLoopSummary Reg)
+    (bodyPaths : Finset (List (Block Reg)))
+    (closure : Finset (SymPC Reg)) : Prop :=
+  ∀ s, ∃ cls : LiveBranchClass Reg, cls.RealizesBodyStep loop bodyPaths closure s
+
+/-- No new live branch classes appear after `K`: every class used after `K` was already
+    realized at some iteration `≤ K` on the same concrete orbit. -/
+noncomputable def BranchClassesStable
+    (loop : VexLoopSummary Reg)
+    (bodyPaths : Finset (List (Block Reg)))
+    (closure : Finset (SymPC Reg)) (K : Nat) : Prop :=
+  ∀ s n, K < n →
+    ∃ cls : LiveBranchClass Reg, ∃ m, m ≤ K ∧
+      cls.RealizesBodyStep loop bodyPaths closure (loop.bodyEffect^[n] s) ∧
+      cls.RealizesBodyStep loop bodyPaths closure (loop.bodyEffect^[m] s)
+
+/-- The loop observation only depends on the PC-equivalence class induced by the chosen
+    body-path summaries and loop guards. -/
+noncomputable def PCObserveInvariant
+    (closure : Finset (SymPC Reg))
+    (observe : ConcreteState Reg → Obs) : Prop :=
+  ∀ {s₁ s₂},
+    (pcSetoidWith (vexSummaryISA Reg) closure).r s₁ s₂ →
+      observe s₁ = observe s₂
+
+theorem LiveBranchClass.pcEquiv_of_realizes
+    {bodyPaths : Finset (List (Block Reg))}
+    {closure : Finset (SymPC Reg)}
+    {cls : LiveBranchClass Reg}
+    {s₁ s₂ : ConcreteState Reg}
+    (h₁ : cls.Realizes bodyPaths closure s₁)
+    (h₂ : cls.Realizes bodyPaths closure s₂) :
+    (pcSetoidWith (vexSummaryISA Reg) closure).r s₁ s₂ := by
+  rcases h₁ with ⟨_, _, _, hsig₁⟩
+  rcases h₂ with ⟨_, _, _, hsig₂⟩
+  exact equiv_of_pcSignature_eqWith (isa := vexSummaryISA Reg)
+    (closure := closure) (hsig₁.trans hsig₂.symm)
+
+theorem LiveBranchClass.summary_enabled_of_realizes
+    {loop : VexLoopSummary Reg}
+    {bodyPaths : Finset (List (Block Reg))}
+    {closure : Finset (SymPC Reg)}
+    {cls : LiveBranchClass Reg}
+    {s₁ s₂ : ConcreteState Reg}
+    (h_contains : ∀ b ∈ branchingLoopModel loop bodyPaths, b.pc ∈ closure)
+    (h₁ : cls.Realizes bodyPaths closure s₁)
+    (h₂ : cls.Realizes bodyPaths closure s₂) :
+    Summary.enabled cls.summary s₂ := by
+  have hequiv := LiveBranchClass.pcEquiv_of_realizes (cls := cls) h₁ h₂
+  rcases h₁ with ⟨hpath, hsummary, henabled, _⟩
+  have hmem :
+      summaryAsBranch cls.summary ∈ branchingLoopModel loop bodyPaths :=
+    summaryAsBranch_mem_branchingLoopModel loop hpath hsummary
+  exact pcEquiv_branch_firesWith
+    (isa := vexSummaryISA Reg)
+    (closure := closure)
+    (h_contains _ hmem)
+    hequiv
+    henabled
+
+theorem LiveBranchClass.successor_pcEquiv_of_realizes
+    {loop : VexLoopSummary Reg}
+    {bodyPaths : Finset (List (Block Reg))}
+    {closure : Finset (SymPC Reg)}
+    {cls : LiveBranchClass Reg}
+    {s₁ s₂ : ConcreteState Reg}
+    (h_closed :
+      ∀ b ∈ branchingLoopModel loop bodyPaths, ∀ φ ∈ closure,
+        (vexSummaryISA Reg).pc_lift b.sub φ ∈ closure)
+    (h₁ : cls.Realizes bodyPaths closure s₁)
+    (h₂ : cls.Realizes bodyPaths closure s₂) :
+    (pcSetoidWith (vexSummaryISA Reg) closure).r
+      (Summary.apply cls.summary s₁)
+      (Summary.apply cls.summary s₂) := by
+  have hequiv := LiveBranchClass.pcEquiv_of_realizes (cls := cls) h₁ h₂
+  rcases h₁ with ⟨hpath, hsummary, _, _⟩
+  have hmem :
+      summaryAsBranch cls.summary ∈ branchingLoopModel loop bodyPaths :=
+    summaryAsBranch_mem_branchingLoopModel loop hpath hsummary
+  simpa [Summary.apply, summaryAsBranch] using
+    pcEquiv_eval_subWith
+      (isa := vexSummaryISA Reg)
+      (closure := closure)
+      (b := summaryAsBranch cls.summary)
+      (fun φ hφ => h_closed _ hmem φ hφ)
+      hequiv
+
+/-- Any bounded number of concrete loop iterations is already realized by the branching
+    witness, provided each concrete body step has a body-path representative. -/
+theorem branchingLoopWitness_reaches_iterate
+    (loop : VexLoopSummary Reg)
+    (bodyPaths : Finset (List (Block Reg)))
+    (closure : Finset (SymPC Reg))
+    (hstep : BodyPathStepRealizable loop bodyPaths closure) :
+    ∀ n s,
+      ∃ blocks ∈ branchingLoopWitness bodyPaths n,
+        iterateBody (isa := vexSummaryISA Reg) loop n s ∈ execBlockPath blocks s := by
+  intro n
+  induction n with
+  | zero =>
+      intro s
+      refine ⟨[], by simp [branchingLoopWitness], ?_⟩
+      simp [iterateBody, execBlockPath]
+  | succ n ih =>
+      intro s
+      obtain ⟨cls, hcls⟩ := hstep s
+      obtain ⟨tail, htailMem, htailExec⟩ := ih (loop.bodyEffect s)
+      rcases hcls with ⟨hreal, happly, hpathExec⟩
+      rcases hreal with ⟨hpath, _, _, _⟩
+      refine ⟨cls.path ++ tail, cons_mem_branchingLoopWitness hpath htailMem, ?_⟩
+      rw [iterateBody_succ (isa := vexSummaryISA Reg) loop n s]
+      rw [execBlockPath_append]
+      refine Finset.mem_biUnion.mpr ?_
+      refine ⟨loop.bodyEffect s, ?_, ?_⟩
+      · simpa [happly] using hpathExec
+      · exact htailExec
+
+/-- Branch-class stabilization compresses every loop observation into the bounded branching
+    witness. The proof uses: repeated live class -> repeated PC signature -> repeated
+    loop-control outcome (`pcEquiv_branch_fires`) -> bounded concrete orbit, while
+    `pcEquiv_eval_sub` is available as the one-step congruence for downstream tail proofs. -/
+theorem whileLoopBranchingUnrollBound_of_branchClassesStable
+    (program : Program Reg) (ip_reg : Reg)
+    (loop : VexLoopSummary Reg)
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (bodyPaths : Finset (List (Block Reg)))
+    (closure : Finset (SymPC Reg)) (K : Nat)
+    (hstep : BodyPathStepRealizable loop bodyPaths closure)
+    (hstable : BranchClassesStable loop bodyPaths closure K)
+    (hobs : PCObserveInvariant closure observe) :
+    WhileBranchingLoopUnrollBound program ip_reg loop Relevant observe bodyPaths K := by
+  intro s o hDenotes
+  rcases hDenotes with ⟨hRel, s', hWhile, hObs⟩
+  rcases hWhile with ⟨n, hIter, hCont, hExit⟩
+  simp only [iterateBody] at hIter
+  by_cases hn : n ≤ K
+  · obtain ⟨blocks, hMem, hExec⟩ :=
+      branchingLoopWitness_reaches_iterate loop bodyPaths closure hstep n s
+    exact ⟨blocks, branchingLoopWitness_mono' bodyPaths hn hMem,
+      ⟨hRel, s', by simpa [hIter.symm] using hExec, hObs⟩⟩
+  · push_neg at hn
+    obtain ⟨cls, m, hm, hClsN, hClsM⟩ := hstable s n hn
+    have hm_lt_n : m < n := by omega
+    have hEqvMN :
+        (pcSetoidWith (vexSummaryISA Reg) closure).r
+          (loop.bodyEffect^[m] s)
+          (loop.bodyEffect^[n] s) :=
+      LiveBranchClass.pcEquiv_of_realizes (cls := cls) hClsM.1 hClsN.1
+    have hObsM : observe (loop.bodyEffect^[m] s) = o := by
+      have hEqObs :
+          observe (loop.bodyEffect^[m] s) = observe (loop.bodyEffect^[n] s) :=
+        hobs hEqvMN
+      rw [hIter] at hEqObs
+      exact hEqObs.trans hObs
+    obtain ⟨blocks, hMem, hExec⟩ :=
+      branchingLoopWitness_reaches_iterate loop bodyPaths closure hstep m s
+    exact ⟨blocks, branchingLoopWitness_mono' bodyPaths hm hMem,
+      ⟨hRel, loop.bodyEffect^[m] s, hExec, hObsM⟩⟩
+
+/-- Packaging theorem: once the branching witness is known sound, branch-class stability
+    discharges the missing coverage half and yields witness completeness. -/
+theorem whileBranchingLoopWitnessComplete_of_branchClassesStable
+    (program : Program Reg) (ip_reg : Reg)
+    (loop : VexLoopSummary Reg)
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (bodyPaths : Finset (List (Block Reg)))
+    (closure : Finset (SymPC Reg)) (K : Nat)
+    (hsound :
+      BranchingLoopWitnessSound
+        (whileLoopRegionSpec program ip_reg loop Relevant observe)
+        bodyPaths K)
+    (hstep : BodyPathStepRealizable loop bodyPaths closure)
+    (hstable : BranchClassesStable loop bodyPaths closure K)
+    (hobs : PCObserveInvariant closure observe) :
+    BranchingLoopWitnessComplete
+      (whileLoopRegionSpec program ip_reg loop Relevant observe)
+      bodyPaths K := by
+  apply branchingLoopWitnessComplete_of_sound_and_unrollBound
+  · exact hsound
+  · exact whileLoopBranchingUnrollBound_of_branchClassesStable
+      program ip_reg loop Relevant observe bodyPaths closure K hstep hstable hobs
+
+end BranchClassCompression
+
 /-- For the concrete while-based loop region, witness soundness follows once every
     repeated body path up to the bound denotes a bounded while execution. This is the
     easy direction: bounded witness behaviors are real loop behaviors. -/
