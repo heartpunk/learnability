@@ -29,6 +29,11 @@ def parse_reg_assignment(text: str) -> tuple[str, int]:
     return name, int(value, 0)
 
 
+def parse_mem_assignment(text: str) -> tuple[int, int]:
+    addr, value = text.split("=", 1)
+    return int(addr, 0), int(value, 0)
+
+
 def arch_from_name(name: str):
     lowered = name.lower()
     if lowered == "amd64":
@@ -47,6 +52,12 @@ def expr_to_data(arch, expr):
         return {"tag": "tmp", "tmp": expr.tmp}
     if isinstance(expr, pyvex.expr.Const):
         return {"tag": "const", "value": int(expr.con.value)}
+    if isinstance(expr, pyvex.expr.Load):
+        if expr.end != "Iend_LE":
+            raise ValueError(f"unsupported load endness: {expr.end}")
+        if expr.ty != "Ity_I64":
+            raise ValueError(f"unsupported load type: {expr.ty}")
+        return {"tag": "load64", "addr": expr_to_data(arch, expr.addr)}
     if isinstance(expr, pyvex.expr.Binop):
         if expr.op != "Iop_Add64":
             raise ValueError(f"unsupported binop: {expr.op}")
@@ -111,6 +122,8 @@ def lean_expr(expr: dict) -> str:
         return f".tmp {expr['tmp']}"
     if tag == "const":
         return f".const 0x{expr['value']:x}"
+    if tag == "load64":
+        return f".load64 ({lean_expr(expr['addr'])})"
     if tag == "add64":
         return f".add64 ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
     raise ValueError(f"unsupported lean expr tag: {tag}")
@@ -134,7 +147,29 @@ def lean_cond(cond: dict) -> str:
     raise ValueError(f"unsupported lean cond tag: {tag}")
 
 
-def build_fixture(name: str, arch_name: str, base: int, code: bytes, inputs: dict[str, int]) -> dict:
+def normalize_mem64le(mem64le: dict[int, int]) -> list[dict[str, int]]:
+    return [
+        {"addr": addr, "value": value}
+        for addr, value in sorted(mem64le.items())
+    ]
+
+
+def lean_mem64le(mem64le: list[dict[str, int]]) -> str:
+    expr = "ByteMem.empty"
+    for cell in mem64le:
+        expr = f"(ByteMem.write64le {expr} 0x{cell['addr']:x} 0x{cell['value']:x})"
+    return expr
+
+
+def build_fixture(
+    name: str,
+    arch_name: str,
+    base: int,
+    code: bytes,
+    inputs: dict[str, int],
+    input_mem64le: dict[int, int] | None = None,
+    watch_mem64le: list[int] | None = None,
+) -> dict:
     arch = arch_from_name(arch_name)
     irsb = pyvex.IRSB(code, base, arch)
     statements = []
@@ -157,22 +192,34 @@ def build_fixture(name: str, arch_name: str, base: int, code: bytes, inputs: dic
     state.memory.store(base, code)
     for reg, value in inputs.items():
         setattr(state.regs, reg, value)
+    input_mem64le = input_mem64le or {}
+    for addr, value in input_mem64le.items():
+        state.memory.store(addr, value.to_bytes(8, byteorder="little"))
     succ = project.factory.successors(state)
     if len(succ.successors) != 1:
         raise ValueError(f"expected one successor, got {len(succ.successors)}")
     out = succ.successors[0]
 
+    watch_mem64le = watch_mem64le or sorted(input_mem64le.keys())
     expected = {
         "rax": out.solver.eval(out.regs.rax),
         "rcx": out.solver.eval(out.regs.rcx),
         "rdi": out.solver.eval(out.regs.rdi),
         "rip": out.solver.eval(out.regs.rip),
+        "mem64le": [
+            {
+                "addr": addr,
+                "value": int.from_bytes(out.solver.eval(out.memory.load(addr, 8), cast_to=bytes), "little"),
+            }
+            for addr in watch_mem64le
+        ],
     }
     concrete_input = {
         "rax": 0,
         "rcx": inputs.get("rcx", 0),
         "rdi": inputs.get("rdi", 0),
         "rip": base,
+        "mem64le": normalize_mem64le(input_mem64le),
     }
 
     return {
@@ -230,6 +277,8 @@ def resolve_lean_target(
 def write_lean(fixture: dict, lean_path: Path, lean_namespace: str) -> Path:
     stmts = ",\n      ".join(lean_stmt(stmt) for stmt in fixture["block"]["stmts"])
     byte_list = ", ".join(f"0x{b:02x}" for b in fixture["bytes"])
+    input_mem = lean_mem64le(fixture["input"].get("mem64le", []))
+    expected_mem = lean_mem64le(fixture["expected"].get("mem64le", []))
     lean = f"""import Instances.ISAs.VexISA
 
 set_option autoImplicit false
@@ -252,14 +301,14 @@ def input : ConcreteState :=
     rcx := 0x{fixture['input']['rcx']:x},
     rdi := 0x{fixture['input']['rdi']:x},
     rip := 0x{fixture['input']['rip']:x},
-    mem := ByteMem.empty }}
+    mem := {input_mem} }}
 
 def expected : ConcreteState :=
   {{ rax := 0x{fixture['expected']['rax']:x},
     rcx := 0x{fixture['expected']['rcx']:x},
     rdi := 0x{fixture['expected']['rdi']:x},
     rip := 0x{fixture['expected']['rip']:x},
-    mem := ByteMem.empty }}
+    mem := {expected_mem} }}
 
 end {lean_namespace}
 """
@@ -274,12 +323,14 @@ def emit_fixture(
     base: int,
     code: bytes,
     inputs: dict[str, int],
+    input_mem64le: dict[int, int],
+    watch_mem64le: list[int],
     *,
     lean_output: str | None,
     lean_namespace: str | None,
     derive_from_name: bool,
 ) -> tuple[Path, Path]:
-    fixture = build_fixture(name, arch_name, base, code, inputs)
+    fixture = build_fixture(name, arch_name, base, code, inputs, input_mem64le, watch_mem64le)
     lean_path, resolved_namespace = resolve_lean_target(
         name,
         lean_output,
@@ -309,6 +360,8 @@ def main() -> None:
     parser.add_argument("--base", type=lambda s: int(s, 0))
     parser.add_argument("--bytes")
     parser.add_argument("--input-reg", action="append", default=[])
+    parser.add_argument("--input-mem64le", action="append", default=[])
+    parser.add_argument("--watch-mem64le", action="append", default=[])
     parser.add_argument("--lean-output")
     parser.add_argument("--lean-namespace")
     args = parser.parse_args()
@@ -316,12 +369,19 @@ def main() -> None:
     if args.manifest:
         for spec in load_manifest_specs(Path(args.manifest)):
             inputs = {reg: parse_intlike(value) for reg, value in spec.get("input_regs", {}).items()}
+            input_mem64le = {
+                parse_intlike(addr): parse_intlike(value)
+                for addr, value in spec.get("input_mem64le", {}).items()
+            }
+            watch_mem64le = [parse_intlike(addr) for addr in spec.get("watch_mem64le", [])]
             json_path, lean_path = emit_fixture(
                 spec["name"],
                 spec["arch"],
                 parse_intlike(spec["base"]),
                 bytes.fromhex(spec["bytes"]),
                 inputs,
+                input_mem64le,
+                watch_mem64le,
                 lean_output=spec.get("lean_output"),
                 lean_namespace=spec.get("lean_namespace") or spec.get("lean_module"),
                 derive_from_name=True,
@@ -340,12 +400,16 @@ def main() -> None:
 
     code = bytes.fromhex(args.bytes)
     inputs = dict(parse_reg_assignment(item) for item in args.input_reg)
+    input_mem64le = dict(parse_mem_assignment(item) for item in args.input_mem64le)
+    watch_mem64le = [int(item, 0) for item in args.watch_mem64le]
     json_path, lean_path = emit_fixture(
         args.name,
         args.arch,
         args.base,
         code,
         inputs,
+        input_mem64le,
+        watch_mem64le,
         lean_output=args.lean_output,
         lean_namespace=args.lean_namespace,
         derive_from_name=False,
