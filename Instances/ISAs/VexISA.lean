@@ -1,3 +1,5 @@
+import Mathlib.Data.Finset.Basic
+
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
 
@@ -92,5 +94,26 @@ def TempEnv.write (temps : TempEnv) (tmp : Nat) (value : UInt64) : TempEnv :=
 @[simp] def execBlock (block : Block) (input : ConcreteState) : ConcreteState :=
   let (state, _) := block.stmts.foldl execStmt (input, TempEnv.empty)
   { state with rip := block.next }
+
+@[simp] def execStmtsSuccs (fallthrough : UInt64) :
+    List Stmt → ConcreteState × TempEnv → Finset ConcreteState
+  | [], (state, _) =>
+      { { state with rip := fallthrough } }
+  | stmt :: stmts, cfg =>
+      match stmt with
+      | .wrTmp _ _ =>
+          execStmtsSuccs fallthrough stmts (execStmt cfg stmt)
+      | .put _ _ =>
+          execStmtsSuccs fallthrough stmts (execStmt cfg stmt)
+      | .exit cond target =>
+          let state := cfg.1
+          let temps := cfg.2
+          if evalCond state temps cond then
+            { { state with rip := target } }
+          else
+            execStmtsSuccs fallthrough stmts cfg
+
+@[simp] def execBlockSuccs (block : Block) (input : ConcreteState) : Finset ConcreteState :=
+  execStmtsSuccs block.next block.stmts (input, TempEnv.empty)
 
 end VexISA
