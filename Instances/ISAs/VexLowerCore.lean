@@ -1,3 +1,4 @@
+import Mathlib.Data.Fintype.Basic
 import Instances.ISAs.VexSummary
 
 set_option autoImplicit false
@@ -5,30 +6,33 @@ set_option relaxedAutoImplicit false
 
 namespace VexISA
 
-structure PartialSummary where
-  sub : SymSub
-  pc : SymPC
-  temps : SymTempEnv
+structure PartialSummary (Reg : Type) where
+  sub : SymSub Reg
+  pc : SymPC Reg
+  temps : SymTempEnv Reg
 
-def PartialSummary.init : PartialSummary :=
+def PartialSummary.init {Reg : Type} : PartialSummary Reg :=
   { sub := SymSub.id
   , pc := .true
   , temps := SymTempEnv.empty }
 
-def PartialSummary.finish (ps : PartialSummary) (next : UInt64) : Summary :=
-  { sub := SymSub.write ps.sub .rip (.const next)
+def PartialSummary.finish {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ps : PartialSummary Reg) (ip_reg : Reg) (next : UInt64) : Summary Reg :=
+  { sub := SymSub.write ps.sub ip_reg (.const next)
   , pc := ps.pc }
 
-abbrev LowerState := SymSub × SymTempEnv
+abbrev LowerState (Reg : Type) := SymSub Reg × SymTempEnv Reg
 
-def lowerExpr (sub : SymSub) (temps : SymTempEnv) : Expr → SymExpr
+def lowerExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (sub : SymSub Reg) (temps : SymTempEnv Reg) : Expr Reg → SymExpr Reg
   | .const value => .const value
   | .get reg => sub.regs reg
   | .tmp tmp => temps tmp
   | .add64 lhs rhs => .add64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .load64 addr => .load64 sub.mem (lowerExpr sub temps addr)
 
-def lowerCond (sub : SymSub) (temps : SymTempEnv) : Cond → SymPC
+def lowerCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (sub : SymSub Reg) (temps : SymTempEnv Reg) : Cond Reg → SymPC Reg
   | .eq64 lhs rhs => .eq (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
 
 end VexISA

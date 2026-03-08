@@ -1,4 +1,4 @@
-import Instances.ISAs.VexISA
+import Instances.ISAs.VexAmd64
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -9,27 +9,28 @@ open VexISA
 
 def bytes : List UInt8 := [0x48, 0x8d, 0x04, 0x0f]
 
-def block : Block :=
-  { stmts := [
+def block : Amd64Block :=
+  mkAmd64Block [
       .wrTmp 2 (.get .rdi),
       .wrTmp 4 (.get .rcx),
       .wrTmp 1 (.add64 (.tmp 2) (.tmp 4)),
       .put .rax (.tmp 1)
-    ],
-    next := 0x400004 }
+    ] 0x400004
 
-def input : ConcreteState :=
-  { rax := 0x0,
-    rcx := 0x3,
-    rdi := 0x10,
-    rip := 0x400000,
-    mem := ByteMem.empty }
+def input : Amd64ConcreteState :=
+  mkAmd64State
+    0x0
+    0x3
+    0x10
+    0x400000
+    ByteMem.empty
 
-def expected : ConcreteState :=
-  { rax := 0x13,
-    rcx := 0x3,
-    rdi := 0x10,
-    rip := 0x400004,
-    mem := ByteMem.empty }
+def expected : Amd64ConcreteState :=
+  mkAmd64State
+    0x13
+    0x3
+    0x10
+    0x400004
+    ByteMem.empty
 
 end Instances.Examples.VexLeaRaxRdiPlusRcxFixture

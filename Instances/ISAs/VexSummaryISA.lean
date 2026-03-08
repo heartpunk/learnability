@@ -1,3 +1,4 @@
+import Mathlib.Data.Fintype.Basic
 import Core.SymbolicISA
 import Instances.ISAs.VexSummary
 
@@ -6,7 +7,8 @@ set_option relaxedAutoImplicit false
 
 namespace VexISA
 
-private theorem substSymPC_compose (sub₁ sub₂ : SymSub) (pc : SymPC) :
+private theorem substSymPC_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (sub₁ sub₂ : SymSub Reg) (pc : SymPC Reg) :
     substSymPC (composeSymSub sub₁ sub₂) pc = substSymPC sub₁ (substSymPC sub₂ pc) := by
   induction pc with
   | true => rfl
@@ -14,8 +16,9 @@ private theorem substSymPC_compose (sub₁ sub₂ : SymSub) (pc : SymPC) :
   | and φ ψ ihφ ihψ => simp [substSymPC, ihφ, ihψ]
   | not φ ih => simp [substSymPC, ih]
 
-/-- `SymbolicISA` instance for the current register-only VEX summary algebra. -/
-def vexSummaryISA : SymbolicISA SymSub SymPC ConcreteState where
+/-- `SymbolicISA` instance for the current VEX summary algebra. -/
+def vexSummaryISA (Reg : Type) [DecidableEq Reg] [Fintype Reg] :
+    SymbolicISA (SymSub Reg) (SymPC Reg) (ConcreteState Reg) where
   id_sub := SymSub.id
   compose_sub := composeSymSub
   eval_sub := applySymSub
@@ -28,21 +31,19 @@ def vexSummaryISA : SymbolicISA SymSub SymPC ConcreteState where
   compose_id_left := by
     intro sub
     apply SymSub.ext
-    · exact substSymExpr_id (sub.regs .rax)
-    · exact substSymExpr_id (sub.regs .rcx)
-    · exact substSymExpr_id (sub.regs .rdi)
-    · exact substSymExpr_id (sub.regs .rip)
+    · funext reg
+      exact substSymExpr_id (sub.regs reg)
     · exact substSymMem_id sub.mem
   compose_id_right := by
     intro sub
-    apply SymSub.ext <;> rfl
+    apply SymSub.ext
+    · rfl
+    · rfl
   compose_assoc := by
     intro sub₁ sub₂ sub₃
     apply SymSub.ext
-    · exact (substSymExpr_compose sub₁ sub₂ (sub₃.regs .rax)).symm
-    · exact (substSymExpr_compose sub₁ sub₂ (sub₃.regs .rcx)).symm
-    · exact (substSymExpr_compose sub₁ sub₂ (sub₃.regs .rdi)).symm
-    · exact (substSymExpr_compose sub₁ sub₂ (sub₃.regs .rip)).symm
+    · funext reg
+      exact (substSymExpr_compose sub₁ sub₂ (sub₃.regs reg)).symm
     · exact (substSymMem_compose sub₁ sub₂ sub₃.mem).symm
   sat_true := by
     intro state

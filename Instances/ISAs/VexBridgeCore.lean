@@ -1,3 +1,4 @@
+import Mathlib.Data.Fintype.Basic
 import Instances.ISAs.VexConcrete
 import Instances.ISAs.VexLowerCore
 
@@ -7,34 +8,39 @@ set_option relaxedAutoImplicit false
 namespace VexISA
 
 /-- Public bridge invariant relating a concrete threaded state to symbolic substitutions and temps. -/
-def BridgeInvariant (input : ConcreteState)
-    (concrete : ConcreteState × TempEnv) (sub : SymSub) (temps : SymTempEnv) : Prop :=
+def BridgeInvariant {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (input : ConcreteState Reg)
+    (concrete : ConcreteState Reg × TempEnv) (sub : SymSub Reg) (temps : SymTempEnv Reg) : Prop :=
   concrete.1 = applySymSub sub input ∧
     ∀ tmp, concrete.2 tmp = evalSymExpr input (temps tmp)
 
-abbrev LowerStateMatches (input : ConcreteState)
-    (concrete : ConcreteState × TempEnv) (symbolic : LowerState) : Prop :=
+abbrev LowerStateMatches {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (input : ConcreteState Reg)
+    (concrete : ConcreteState Reg × TempEnv) (symbolic : LowerState Reg) : Prop :=
   BridgeInvariant input concrete symbolic.1 symbolic.2
 
-abbrev PartialSummaryMatches (input : ConcreteState)
-    (concrete : ConcreteState × TempEnv) (ps : PartialSummary) : Prop :=
+abbrev PartialSummaryMatches {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (input : ConcreteState Reg)
+    (concrete : ConcreteState Reg × TempEnv) (ps : PartialSummary Reg) : Prop :=
   BridgeInvariant input concrete ps.sub ps.temps
 
-structure LinearStmtBridgeCase (stmt : LinearStmt) where
-  exec : ConcreteState × TempEnv → ConcreteState × TempEnv
-  lower : LowerState → LowerState
+structure LinearStmtBridgeCase {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (stmt : LinearStmt Reg) where
+  exec : ConcreteState Reg × TempEnv → ConcreteState Reg × TempEnv
+  lower : LowerState Reg → LowerState Reg
   sound :
     ∀ input concrete symbolic,
       LowerStateMatches input concrete symbolic →
       LowerStateMatches input (exec concrete) (lower symbolic)
 
-structure BranchStmtBridgeCase (stmt : BranchStmt) where
-  fires : ConcreteState × TempEnv → Bool
-  taken : ConcreteState × TempEnv → ConcreteState
-  cont : ConcreteState × TempEnv → ConcreteState × TempEnv
-  lowerGuard : PartialSummary → SymPC
-  lowerTaken : PartialSummary → Summary
-  lowerContinue : PartialSummary → PartialSummary
+structure BranchStmtBridgeCase {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ip_reg : Reg) (stmt : BranchStmt Reg) where
+  fires : ConcreteState Reg × TempEnv → Bool
+  taken : ConcreteState Reg × TempEnv → ConcreteState Reg
+  cont : ConcreteState Reg × TempEnv → ConcreteState Reg × TempEnv
+  lowerGuard : PartialSummary Reg → SymPC Reg
+  lowerTaken : PartialSummary Reg → Summary Reg
+  lowerContinue : PartialSummary Reg → PartialSummary Reg
   fires_iff_guard :
     ∀ input concrete ps,
       PartialSummaryMatches input concrete ps →
@@ -59,11 +65,11 @@ structure BranchStmtBridgeCase (stmt : BranchStmt) where
         (Summary.enabled { sub := ps.sub, pc := ps.pc } input ∧
           evalSymPC input (lowerGuard ps) = false)
 
-private theorem lowerExpr_sound
-    (input state : ConcreteState) (temps : TempEnv) (sub : SymSub) (symTemps : SymTempEnv)
+private theorem lowerExpr_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (input state : ConcreteState Reg) (temps : TempEnv) (sub : SymSub Reg) (symTemps : SymTempEnv Reg)
     (hState : state = applySymSub sub input)
     (hTemps : ∀ tmp, temps tmp = evalSymExpr input (symTemps tmp))
-    (expr : Expr) :
+    (expr : Expr Reg) :
     evalExpr state temps expr = evalSymExpr input (lowerExpr sub symTemps expr) := by
   induction expr with
   | const value => rfl
@@ -78,11 +84,11 @@ private theorem lowerExpr_sound
       simpa [evalExpr, lowerExpr] using
         congrArg (fun value => ByteMem.read64le (applySymSub sub input).mem value) ih
 
-private theorem lowerCond_sound
-    (input state : ConcreteState) (temps : TempEnv) (sub : SymSub) (symTemps : SymTempEnv)
+private theorem lowerCond_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (input state : ConcreteState Reg) (temps : TempEnv) (sub : SymSub Reg) (symTemps : SymTempEnv Reg)
     (hState : state = applySymSub sub input)
     (hTemps : ∀ tmp, temps tmp = evalSymExpr input (symTemps tmp))
-    (cond : Cond) :
+    (cond : Cond Reg) :
     evalCond state temps cond = evalSymPC input (lowerCond sub symTemps cond) := by
   cases cond with
   | eq64 lhs rhs =>
@@ -90,18 +96,29 @@ private theorem lowerCond_sound
         lowerExpr_sound input state temps sub symTemps hState hTemps lhs,
         lowerExpr_sound input state temps sub symTemps hState hTemps rhs]
 
-private theorem applySymSub_writeMem (sub : SymSub) (input : ConcreteState) (mem : SymMem) :
+private theorem applySymSub_writeMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (sub : SymSub Reg) (input : ConcreteState Reg) (mem : SymMem Reg) :
     applySymSub (SymSub.writeMem sub mem) input =
       { applySymSub sub input with mem := evalSymMem input mem } := by
-  cases input
-  rfl
+  apply ConcreteState.ext
+  · funext reg
+    rfl
+  · rfl
 
-private theorem applySymSub_write (sub : SymSub) (input : ConcreteState) (reg : Reg) (expr : SymExpr) :
+private theorem applySymSub_write {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (sub : SymSub Reg) (input : ConcreteState Reg) (reg : Reg) (expr : SymExpr Reg) :
     applySymSub (SymSub.write sub reg expr) input =
       (applySymSub sub input).write reg (evalSymExpr input expr) := by
-  cases reg <;> cases input <;> rfl
+  apply ConcreteState.ext
+  · funext reg'
+    by_cases h : reg' = reg
+    · subst h
+      simp [applySymSub, SymSub.write, ConcreteState.write]
+    · simp [applySymSub, SymSub.write, ConcreteState.write, h]
+  · rfl
 
-@[inline] def linearStmtBridge : (stmt : LinearStmt) → LinearStmtBridgeCase stmt
+@[inline] def linearStmtBridge {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
+    (stmt : LinearStmt Reg) → LinearStmtBridgeCase stmt
   | .wrTmp tmp expr =>
       { exec := fun cfg =>
           match cfg with
@@ -137,8 +154,13 @@ private theorem applySymSub_write (sub : SymSub) (input : ConcreteState) (reg : 
           constructor
           · subst hState
             have hExpr := lowerExpr_sound input (applySymSub sub input) temps sub symTemps rfl hTemps expr
-            cases reg <;>
-              simpa [applySymSub, SymSub.write] using hExpr
+            calc
+              (applySymSub sub input).write reg (evalExpr (applySymSub sub input) temps expr)
+                  = (applySymSub sub input).write reg (evalSymExpr input (lowerExpr sub symTemps expr)) := by
+                      simp [hExpr]
+              _ = applySymSub (SymSub.write sub reg (lowerExpr sub symTemps expr)) input := by
+                      symm
+                      simpa using applySymSub_write sub input reg (lowerExpr sub symTemps expr)
           · intro tmp
             simpa using hTemps tmp }
   | .store64 addr value =>
@@ -160,29 +182,39 @@ private theorem applySymSub_write (sub : SymSub) (input : ConcreteState) (reg : 
           · subst hState
             have hAddr := lowerExpr_sound input (applySymSub sub input) temps sub symTemps rfl hTemps addr
             have hValue := lowerExpr_sound input (applySymSub sub input) temps sub symTemps rfl hTemps value
-            cases hSub : applySymSub sub input with
-            | mk rax rcx rdi rip mem =>
-                rw [hSub] at hAddr hValue
-                simp [applySymSub] at hSub
-                rcases hSub with ⟨hRax, hRcx, hRdi, hRip, hMem⟩
-                simp [applySymSub, SymSub.writeMem, hAddr, hValue, hRax, hRcx, hRdi, hRip, hMem]
+            calc
+              { applySymSub sub input with
+                  mem := ByteMem.write64le (applySymSub sub input).mem
+                    (evalExpr (applySymSub sub input) temps addr)
+                    (evalExpr (applySymSub sub input) temps value) }
+                  = { applySymSub sub input with
+                        mem := evalSymMem input (SymMem.store64 sub.mem (lowerExpr sub symTemps addr) (lowerExpr sub symTemps value)) } := by
+                      rw [hAddr, hValue]
+                      rfl
+              _ = applySymSub (SymSub.writeMem sub (SymMem.store64 sub.mem (lowerExpr sub symTemps addr) (lowerExpr sub symTemps value))) input := by
+                      symm
+                      simpa using applySymSub_writeMem sub input
+                        (SymMem.store64 sub.mem (lowerExpr sub symTemps addr) (lowerExpr sub symTemps value))
           · intro tmp
             simpa using hTemps tmp }
 
-@[inline] def execLinearStmt (cfg : ConcreteState × TempEnv) (stmt : LinearStmt) : ConcreteState × TempEnv :=
+@[inline] def execLinearStmt {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (cfg : ConcreteState Reg × TempEnv) (stmt : LinearStmt Reg) : ConcreteState Reg × TempEnv :=
   (linearStmtBridge stmt).exec cfg
 
-@[inline] def lowerLinearStmt (state : LowerState) (stmt : LinearStmt) : LowerState :=
+@[inline] def lowerLinearStmt {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (state : LowerState Reg) (stmt : LinearStmt Reg) : LowerState Reg :=
   (linearStmtBridge stmt).lower state
 
-@[inline] def branchStmtBridge : (stmt : BranchStmt) → BranchStmtBridgeCase stmt
+@[inline] def branchStmtBridge {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ip_reg : Reg) : (stmt : BranchStmt Reg) → BranchStmtBridgeCase ip_reg stmt
   | .exit cond target =>
       { fires := fun concrete => evalCond concrete.1 concrete.2 cond
-        taken := fun concrete => { concrete.1 with rip := target }
+        taken := fun concrete => concrete.1.write ip_reg target
         cont := fun concrete => concrete
         lowerGuard := fun ps => lowerCond ps.sub ps.temps cond
         lowerTaken := fun ps =>
-          { sub := SymSub.write ps.sub .rip (.const target)
+          { sub := SymSub.write ps.sub ip_reg (.const target)
           , pc := .and ps.pc (lowerCond ps.sub ps.temps cond) }
         lowerContinue := fun ps =>
           { ps with pc := .and ps.pc (.not (lowerCond ps.sub ps.temps cond)) }
@@ -195,19 +227,22 @@ private theorem applySymSub_write (sub : SymSub) (input : ConcreteState) (reg : 
           intro input concrete ps hMatch hFires
           rcases concrete with ⟨state, temps⟩
           rcases hMatch with ⟨hState, hTemps⟩
-          cases cond with
-          | eq64 lhs rhs =>
-              have hApply :
-                  Summary.apply { sub := SymSub.write ps.sub .rip (.const target), pc := .and ps.pc (lowerCond ps.sub ps.temps (.eq64 lhs rhs)) } input =
-                    { state with rip := target } := by
-                calc
-                  Summary.apply { sub := SymSub.write ps.sub .rip (.const target), pc := .and ps.pc (lowerCond ps.sub ps.temps (.eq64 lhs rhs)) } input
-                      = (applySymSub ps.sub input).write .rip target := by
-                          simpa [Summary.apply, ConcreteState.write] using
-                            (applySymSub_write ps.sub input .rip (.const target))
-                  _ = { state with rip := target } := by
-                        simpa [ConcreteState.write] using congrArg (fun st => st.write .rip target) hState.symm
-              simpa using hApply
+          have hApply :
+              Summary.apply { sub := SymSub.write ps.sub ip_reg (.const target),
+                              pc := .and ps.pc (lowerCond ps.sub ps.temps cond) } input =
+                state.write ip_reg target := by
+            calc
+              Summary.apply { sub := SymSub.write ps.sub ip_reg (.const target),
+                              pc := .and ps.pc (lowerCond ps.sub ps.temps cond) } input
+                  = (applySymSub ps.sub input).write ip_reg target := by
+                      simpa [Summary.apply] using
+                        (applySymSub_write ps.sub input ip_reg (.const target))
+              _ = state.write ip_reg target := by
+                    exact congrArg (fun st => st.write ip_reg target) hState.symm
+          change Summary.apply { sub := SymSub.write ps.sub ip_reg (.const target),
+                                 pc := .and ps.pc (lowerCond ps.sub ps.temps cond) } input =
+            state.write ip_reg target
+          exact hApply
         continue_matches := by
           intro input concrete ps hMatch
           simpa [PartialSummaryMatches, BridgeInvariant]
@@ -240,17 +275,14 @@ private theorem applySymSub_write (sub : SymSub) (input : ConcreteState) (reg : 
             rw [Summary.enabled, satisfiesSymPC] at hParent ⊢
             simp [evalSymPC, hParent, hGuardFalse] }
 
-example :
-    (branchStmtBridge (.exit (.eq64 (.get .rcx) (.const 0)) 0x400006)).fires
-      ({ rax := 0, rcx := 0, rdi := 0, rip := 0, mem := ByteMem.empty }, TempEnv.empty) = true := by
-  native_decide
+@[inline] def execBranchContinue {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ip_reg : Reg) (cfg : ConcreteState Reg × TempEnv) (stmt : BranchStmt Reg) :
+    ConcreteState Reg × TempEnv :=
+  (branchStmtBridge ip_reg stmt).cont cfg
 
-@[inline] def execBranchContinue (cfg : ConcreteState × TempEnv) (stmt : BranchStmt) :
-    ConcreteState × TempEnv :=
-  (branchStmtBridge stmt).cont cfg
-
-@[inline] def lowerBranchContinue (state : LowerState) (stmt : BranchStmt) : LowerState :=
-  let ps := (branchStmtBridge stmt).lowerContinue
+@[inline] def lowerBranchContinue {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ip_reg : Reg) (state : LowerState Reg) (stmt : BranchStmt Reg) : LowerState Reg :=
+  let ps := (branchStmtBridge ip_reg stmt).lowerContinue
     { sub := state.1, pc := .true, temps := state.2 }
   (ps.sub, ps.temps)
 

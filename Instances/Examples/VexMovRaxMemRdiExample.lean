@@ -8,8 +8,8 @@ open VexISA
 open Instances.Examples.VexMovRaxMemRdiFixture
 
 example : execBlock block input = expected := by
-  decide
+  native_decide
 
 example : Summary.apply (lowerBlock block) input = expected := by
   rw [VexISA.lowerBlock_sound]
-  decide
+  native_decide

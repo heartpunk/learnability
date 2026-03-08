@@ -10,35 +10,35 @@ open VexISA
 namespace Instances.Examples.VexJrcxzSkipLeaTakenFixture
 
 example : expected ∈ execBlockSuccs block input := by
-  decide
+  native_decide
 
 example :
     ∃ summary ∈ lowerBlockSummaries block,
       Summary.enabled summary input ∧ Summary.apply summary input = expected := by
-  exact lowerBlockSummaries_sound block input expected (by decide)
+  exact lowerBlockSummaries_sound block input expected (by native_decide)
 
-example (summary : Summary)
+example (summary : Summary Amd64Reg)
     (hMem : summary ∈ lowerBlockSummaries block)
     (hEnabled : Summary.enabled summary input) :
     Summary.apply summary input = expected := by
-  exact lowerBlockSummaries_complete_eq_of_unique block input expected summary (by decide) hMem hEnabled
+  exact lowerBlockSummaries_complete_eq_of_unique block input expected summary (by native_decide) hMem hEnabled
 
 end Instances.Examples.VexJrcxzSkipLeaTakenFixture
 
 namespace Instances.Examples.VexJrcxzSkipLeaFallthroughFixture
 
 example : expected ∈ execBlockSuccs block input := by
-  decide
+  native_decide
 
 example :
     ∃ summary ∈ lowerBlockSummaries block,
       Summary.enabled summary input ∧ Summary.apply summary input = expected := by
-  exact lowerBlockSummaries_sound block input expected (by decide)
+  exact lowerBlockSummaries_sound block input expected (by native_decide)
 
-example (summary : Summary)
+example (summary : Summary Amd64Reg)
     (hMem : summary ∈ lowerBlockSummaries block)
     (hEnabled : Summary.enabled summary input) :
     Summary.apply summary input = expected := by
-  exact lowerBlockSummaries_complete_eq_of_unique block input expected summary (by decide) hMem hEnabled
+  exact lowerBlockSummaries_complete_eq_of_unique block input expected summary (by native_decide) hMem hEnabled
 
 end Instances.Examples.VexJrcxzSkipLeaFallthroughFixture

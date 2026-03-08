@@ -289,7 +289,7 @@ def write_lean(fixture: dict, lean_path: Path, lean_namespace: str) -> Path:
     byte_list = ", ".join(f"0x{b:02x}" for b in fixture["bytes"])
     input_mem = lean_mem64le(fixture["input"].get("mem64le", []))
     expected_mem = lean_mem64le(fixture["expected"].get("mem64le", []))
-    lean = f"""import Instances.ISAs.VexISA
+    lean = f"""import Instances.ISAs.VexAmd64
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -300,25 +300,26 @@ open VexISA
 
 def bytes : List UInt8 := [{byte_list}]
 
-def block : Block :=
-  {{ stmts := [
+def block : Amd64Block :=
+  mkAmd64Block [
       {stmts}
-    ],
-    next := 0x{fixture['block']['next']:x} }}
+    ] 0x{fixture['block']['next']:x}
 
-def input : ConcreteState :=
-  {{ rax := 0x{fixture['input']['rax']:x},
-    rcx := 0x{fixture['input']['rcx']:x},
-    rdi := 0x{fixture['input']['rdi']:x},
-    rip := 0x{fixture['input']['rip']:x},
-    mem := {input_mem} }}
+def input : Amd64ConcreteState :=
+  mkAmd64State
+    0x{fixture['input']['rax']:x}
+    0x{fixture['input']['rcx']:x}
+    0x{fixture['input']['rdi']:x}
+    0x{fixture['input']['rip']:x}
+    {input_mem}
 
-def expected : ConcreteState :=
-  {{ rax := 0x{fixture['expected']['rax']:x},
-    rcx := 0x{fixture['expected']['rcx']:x},
-    rdi := 0x{fixture['expected']['rdi']:x},
-    rip := 0x{fixture['expected']['rip']:x},
-    mem := {expected_mem} }}
+def expected : Amd64ConcreteState :=
+  mkAmd64State
+    0x{fixture['expected']['rax']:x}
+    0x{fixture['expected']['rcx']:x}
+    0x{fixture['expected']['rdi']:x}
+    0x{fixture['expected']['rip']:x}
+    {expected_mem}
 
 end {lean_namespace}
 """

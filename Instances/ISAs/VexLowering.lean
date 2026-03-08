@@ -1,3 +1,4 @@
+import Mathlib.Data.Fintype.Basic
 import Instances.ISAs.VexBridgeCore
 
 set_option autoImplicit false
@@ -5,39 +6,46 @@ set_option relaxedAutoImplicit false
 
 namespace VexISA
 
-def lowerStmt : LowerState → Stmt → LowerState
+def lowerStmt {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ip_reg : Reg) : LowerState Reg → Stmt Reg → LowerState Reg
   | state, .linear stmt =>
       lowerLinearStmt state stmt
   | state, .branch stmt =>
-      lowerBranchContinue state stmt
+      lowerBranchContinue ip_reg state stmt
 
-def lowerStmts (stmts : List Stmt) : LowerState :=
-  stmts.foldl lowerStmt (SymSub.id, SymTempEnv.empty)
+def lowerStmts {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ip_reg : Reg) (stmts : List (Stmt Reg)) : LowerState Reg :=
+  stmts.foldl (lowerStmt ip_reg) (SymSub.id, SymTempEnv.empty)
 
-def lowerBlockSub (block : Block) : SymSub :=
-  SymSub.write (lowerStmts block.stmts).1 .rip (.const block.next)
+def lowerBlockSub {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (block : Block Reg) : SymSub Reg :=
+  SymSub.write (lowerStmts block.ip_reg block.stmts).1 block.ip_reg (.const block.next)
 
-def lowerBlock (block : Block) : Summary :=
+def lowerBlock {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (block : Block Reg) : Summary Reg :=
   { sub := lowerBlockSub block
   , pc := .true }
 
-def lowerSummariesFrom (ps : PartialSummary) : List Stmt → UInt64 → List Summary
+def lowerSummariesFrom {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ip_reg : Reg) (ps : PartialSummary Reg) : List (Stmt Reg) → UInt64 → List (Summary Reg)
   | [], next =>
-      [ps.finish next]
+      [ps.finish ip_reg next]
   | .linear stmt :: stmts, next =>
       let lowered := lowerLinearStmt (ps.sub, ps.temps) stmt
-      lowerSummariesFrom
+      lowerSummariesFrom ip_reg
         { ps with sub := lowered.1, temps := lowered.2 }
         stmts next
   | .branch stmt :: stmts, next =>
-      let bridge := branchStmtBridge stmt
+      let bridge := branchStmtBridge ip_reg stmt
       bridge.lowerTaken ps ::
-      lowerSummariesFrom (bridge.lowerContinue ps) stmts next
+      lowerSummariesFrom ip_reg (bridge.lowerContinue ps) stmts next
 
-def lowerBlockSummariesList (block : Block) : List Summary :=
-  lowerSummariesFrom PartialSummary.init block.stmts block.next
+def lowerBlockSummariesList {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (block : Block Reg) : List (Summary Reg) :=
+  lowerSummariesFrom block.ip_reg PartialSummary.init block.stmts block.next
 
-def lowerBlockSummaries (block : Block) : Finset Summary :=
+def lowerBlockSummaries {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (block : Block Reg) : Finset (Summary Reg) :=
   (lowerBlockSummariesList block).toFinset
 
 end VexISA
