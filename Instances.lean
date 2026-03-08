@@ -1,4 +1,7 @@
 import Instances.Examples.BranchExample
+import Instances.Examples.VexJrcxzSkipLeaExample
+import Instances.Examples.VexJrcxzSkipLeaFallthroughFixture
+import Instances.Examples.VexJrcxzSkipLeaTakenFixture
 import Instances.Examples.VexLeaExample
 import Instances.Examples.VexLeaRdiPlus5Fixture
 import Instances.ISAs.MachineISA
