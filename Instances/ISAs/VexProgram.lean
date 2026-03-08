@@ -113,6 +113,22 @@ theorem summarySuccs_composeSummaryFinsets {Reg : Type} [DecidableEq Reg] [Finty
     exact (summaryDenotes_composeSummaryFinsets_iff left right input output).2
       ⟨mid, (mem_summarySuccs left input mid).1 hLeft, (mem_summarySuccs right mid output).1 hRight⟩
 
+/-- Associativity of `Finset.biUnion` at the membership level. -/
+theorem finset_biUnion_assoc {α β γ : Type}
+    [DecidableEq α] [DecidableEq β] [DecidableEq γ]
+    (s : Finset α) (t : α → Finset β) (u : β → Finset γ) :
+    s.biUnion (fun a => (t a).biUnion u) = (s.biUnion t).biUnion u := by
+  ext x
+  constructor
+  · intro h
+    rcases Finset.mem_biUnion.mp h with ⟨a, ha, h⟩
+    rcases Finset.mem_biUnion.mp h with ⟨b, hb, hx⟩
+    exact Finset.mem_biUnion.mpr ⟨b, Finset.mem_biUnion.mpr ⟨a, ha, hb⟩, hx⟩
+  · intro h
+    rcases Finset.mem_biUnion.mp h with ⟨b, hb, hx⟩
+    rcases Finset.mem_biUnion.mp hb with ⟨a, ha, hb⟩
+    exact Finset.mem_biUnion.mpr ⟨a, ha, Finset.mem_biUnion.mpr ⟨b, hb, hx⟩⟩
+
 /-- Execute a fixed list of blocks concretely, threading successors forward. -/
 def execBlockPath {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
     List (Block Reg) → ConcreteState Reg → Finset (ConcreteState Reg)
@@ -126,6 +142,32 @@ def lowerBlockPathSummaries {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
   | [] => {Summary.id}
   | block :: blocks =>
       composeSummaryFinsets (lowerBlockSummaries block) (lowerBlockPathSummaries blocks)
+
+/-- Concrete execution of fixed lifted VEX block paths composes by append. -/
+theorem execBlockPath_append {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (blocks₁ blocks₂ : List (Block Reg)) :
+    ∀ input,
+      execBlockPath (blocks₁ ++ blocks₂) input =
+        Finset.biUnion (execBlockPath blocks₁ input) (fun mid => execBlockPath blocks₂ mid) := by
+  induction blocks₁ with
+  | nil =>
+      intro input
+      simp [execBlockPath]
+  | cons block blocks ih =>
+      intro input
+      calc
+        execBlockPath ((block :: blocks) ++ blocks₂) input
+            = Finset.biUnion (execBlockSuccs block input) (fun mid => execBlockPath (blocks ++ blocks₂) mid) := by
+                rfl
+        _ = Finset.biUnion (execBlockSuccs block input)
+              (fun mid => Finset.biUnion (execBlockPath blocks mid) (fun out => execBlockPath blocks₂ out)) := by
+                simp [ih]
+        _ = Finset.biUnion (Finset.biUnion (execBlockSuccs block input) (fun mid => execBlockPath blocks mid))
+              (fun out => execBlockPath blocks₂ out) := by
+                exact finset_biUnion_assoc (execBlockSuccs block input) (fun mid => execBlockPath blocks mid)
+                  (fun out => execBlockPath blocks₂ out)
+        _ = Finset.biUnion (execBlockPath (block :: blocks) input) (fun out => execBlockPath blocks₂ out) := by
+                rfl
 
 /-- ICTAC-style composition theorem for fixed lifted VEX block paths. -/
 theorem summarySuccs_lowerBlockPathSummaries_eq_execBlockPath {Reg : Type} [DecidableEq Reg] [Fintype Reg]
@@ -161,5 +203,26 @@ theorem summarySuccs_lowerBlockPathSummaries_eq_execBlockPath {Reg : Type} [Deci
                 simp [summarySuccs_lowerBlockSummaries_eq_execBlockSuccs, ih]
         _ = execBlockPath (block :: blocks) input := by
                 rfl
+
+/-- Executable composition theorem for fixed lifted VEX block paths. -/
+theorem summarySuccs_composeLowerBlockPathSummaries_eq_execBlockPath_append
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (blocks₁ blocks₂ : List (Block Reg)) (input : ConcreteState Reg) :
+    summarySuccs
+        (composeSummaryFinsets (lowerBlockPathSummaries blocks₁) (lowerBlockPathSummaries blocks₂))
+        input =
+      execBlockPath (blocks₁ ++ blocks₂) input := by
+  calc
+    summarySuccs
+        (composeSummaryFinsets (lowerBlockPathSummaries blocks₁) (lowerBlockPathSummaries blocks₂))
+        input
+        = Finset.biUnion (summarySuccs (lowerBlockPathSummaries blocks₁) input)
+            (fun mid => summarySuccs (lowerBlockPathSummaries blocks₂) mid) := by
+              exact summarySuccs_composeSummaryFinsets (lowerBlockPathSummaries blocks₁) (lowerBlockPathSummaries blocks₂) input
+    _ = Finset.biUnion (execBlockPath blocks₁ input) (fun mid => execBlockPath blocks₂ mid) := by
+          simp [summarySuccs_lowerBlockPathSummaries_eq_execBlockPath]
+    _ = execBlockPath (blocks₁ ++ blocks₂) input := by
+          symm
+          exact execBlockPath_append blocks₁ blocks₂ input
 
 end VexISA
