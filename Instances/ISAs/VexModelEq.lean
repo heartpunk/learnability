@@ -258,4 +258,74 @@ theorem summaryProgramStepDenotesState_iff_execProgramStep
   · rintro ⟨hRel, hStep⟩
     exact ⟨hRel, sOut, (programStep_iff_summaryStep program ip_reg s sOut).mp hStep, rfl⟩
 
+/-- Observation-level denotation of a finite concrete fetched-block program trace. -/
+def ExecProgramTraceDenotesObs
+    {Reg : Type} {Obs : Type*} [DecidableEq Reg] [Fintype Reg]
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (program : Program Reg) (ip_reg : Reg)
+    (s : ConcreteState Reg) (o : Obs) : Prop :=
+  Relevant s ∧ ∃ s', Relation.ReflTransGen (ProgramStep program ip_reg) s s' ∧ observe s' = o
+
+/-- Observation-level denotation of a finite lowered-summary fetched-block program trace. -/
+def SummaryProgramTraceDenotesObs
+    {Reg : Type} {Obs : Type*} [DecidableEq Reg] [Fintype Reg]
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (program : Program Reg) (ip_reg : Reg)
+    (s : ConcreteState Reg) (o : Obs) : Prop :=
+  Relevant s ∧ ∃ s', Relation.ReflTransGen (ProgramSummaryStep program ip_reg) s s' ∧ observe s' = o
+
+/-- A fetched-block VEX program is extractible at the finite-trace level when concrete
+    and lowered-summary traces induce the same observed behavior on all relevant inputs. -/
+def ExtractibleProgramTrace
+    {Reg : Type} {Obs : Type*} [DecidableEq Reg] [Fintype Reg]
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (program : Program Reg) (ip_reg : Reg) : Prop :=
+  ∀ s o,
+    SummaryProgramTraceDenotesObs Relevant observe program ip_reg s o ↔
+      ExecProgramTraceDenotesObs Relevant observe program ip_reg s o
+
+theorem summaryProgramTraceDenotesObs_iff_execProgramTrace
+    {Reg : Type} {Obs : Type*} [DecidableEq Reg] [Fintype Reg]
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (program : Program Reg) (ip_reg : Reg)
+    (s : ConcreteState Reg) (o : Obs) :
+    SummaryProgramTraceDenotesObs Relevant observe program ip_reg s o ↔
+      ExecProgramTraceDenotesObs Relevant observe program ip_reg s o := by
+  constructor
+  · rintro ⟨hRel, sOut, hTrace, hObs⟩
+    exact ⟨hRel, sOut, (programStep_rtc_iff_summaryStep_rtc program ip_reg s sOut).mpr hTrace, hObs⟩
+  · rintro ⟨hRel, sOut, hTrace, hObs⟩
+    exact ⟨hRel, sOut, (programStep_rtc_iff_summaryStep_rtc program ip_reg s sOut).mp hTrace, hObs⟩
+
+/-- Lowered-summary finite fetched-block traces are observation-level adequate models
+    of concrete fetched-block program traces. -/
+theorem extractibleProgramTrace_of_lowering
+    {Reg : Type} {Obs : Type*} [DecidableEq Reg] [Fintype Reg]
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (program : Program Reg) (ip_reg : Reg) :
+    ExtractibleProgramTrace Relevant observe program ip_reg := by
+  intro s o
+  exact summaryProgramTraceDenotesObs_iff_execProgramTrace Relevant observe program ip_reg s o
+
+theorem summaryProgramTraceDenotesState_iff_execProgramTrace
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (Relevant : ConcreteState Reg → Prop)
+    (program : Program Reg) (ip_reg : Reg)
+    (s sOut : ConcreteState Reg) :
+    SummaryProgramTraceDenotesObs Relevant (fun state => state) program ip_reg s sOut ↔
+      (Relevant s ∧ Relation.ReflTransGen (ProgramStep program ip_reg) s sOut) := by
+  constructor
+  · rintro ⟨hRel, out, hTrace, hEq⟩
+    have hTrace' : Relation.ReflTransGen (ProgramStep program ip_reg) s out :=
+      (programStep_rtc_iff_summaryStep_rtc program ip_reg s out).mpr hTrace
+    subst hEq
+    exact ⟨hRel, hTrace'⟩
+  · rintro ⟨hRel, hTrace⟩
+    exact ⟨hRel, sOut, (programStep_rtc_iff_summaryStep_rtc program ip_reg s sOut).mp hTrace, rfl⟩
+
 end VexISA
