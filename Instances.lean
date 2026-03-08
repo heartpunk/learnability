@@ -16,4 +16,5 @@ import Instances.ISAs.VexISA
 import Instances.ISAs.VexSummary
 import Instances.ISAs.VexLowering
 import Instances.ISAs.VexLoweringCorrectness
+import Instances.ISAs.VexBridge
 import Instances.ISAs.VexSummaryISA
