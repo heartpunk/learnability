@@ -6,6 +6,8 @@ import Instances.Examples.VexJrcxzSkipLeaTakenFixture
 import Instances.Examples.VexLoad64Example
 import Instances.Examples.VexLeaExample
 import Instances.Examples.VexLeaRdiPlus5Fixture
+import Instances.Examples.VexMovEaxEdiExample
+import Instances.Examples.VexMovEaxEdiFixture
 import Instances.Examples.VexMovRaxMemRdiExample
 import Instances.Examples.VexMovRaxMemRdiFixture
 import Instances.Examples.VexMovMemRdiRaxExample

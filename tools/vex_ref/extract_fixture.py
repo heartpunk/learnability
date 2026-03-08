@@ -52,6 +52,12 @@ def expr_to_data(arch, expr):
         return {"tag": "tmp", "tmp": expr.tmp}
     if isinstance(expr, pyvex.expr.Const):
         return {"tag": "const", "value": int(expr.con.value)}
+    if isinstance(expr, pyvex.expr.Unop):
+        if expr.op == "Iop_64to32":
+            return {"tag": "low32", "expr": expr_to_data(arch, expr.args[0])}
+        if expr.op == "Iop_32Uto64":
+            return {"tag": "uext32", "expr": expr_to_data(arch, expr.args[0])}
+        raise ValueError(f"unsupported unop: {expr.op}")
     if isinstance(expr, pyvex.expr.Load):
         if expr.end != "Iend_LE":
             raise ValueError(f"unsupported load endness: {expr.end}")
@@ -130,6 +136,10 @@ def lean_expr(expr: dict) -> str:
         return f".tmp {expr['tmp']}"
     if tag == "const":
         return f".const 0x{expr['value']:x}"
+    if tag == "low32":
+        return f".low32 ({lean_expr(expr['expr'])})"
+    if tag == "uext32":
+        return f".uext32 ({lean_expr(expr['expr'])})"
     if tag == "load64":
         return f".load64 ({lean_expr(expr['addr'])})"
     if tag == "add64":
