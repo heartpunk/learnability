@@ -6,6 +6,22 @@ set_option relaxedAutoImplicit false
 
 namespace VexISA
 
+def pcOr {Reg : Type} (φ ψ : SymPC Reg) : SymPC Reg :=
+  .not (.and (.not φ) (.not ψ))
+
+def lowerAmd64CalculateConditionZero {Reg : Type}
+    (ccOp ccDep1 ccDep2 : SymExpr Reg) : SymPC Reg :=
+  let addCase : SymPC Reg :=
+    .and (.eq ccOp (.const 0x3))
+      (.eq (.uext32 (.add64 (.low32 ccDep1) (.low32 ccDep2))) (.const 0))
+  let subCase : SymPC Reg :=
+    .and (.eq ccOp (.const 0x7))
+      (.eq (.low32 ccDep1) (.low32 ccDep2))
+  let logicCase : SymPC Reg :=
+    .and (.eq ccOp (.const 0x13))
+      (.eq (.low32 ccDep1) (.const 0))
+  pcOr addCase (pcOr subCase logicCase)
+
 structure PartialSummary (Reg : Type) where
   sub : SymSub Reg
   pc : SymPC Reg
@@ -37,5 +53,13 @@ def lowerExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 def lowerCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub : SymSub Reg) (temps : SymTempEnv Reg) : Cond Reg → SymPC Reg
   | .eq64 lhs rhs => .eq (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .amd64CalculateCondition code ccOp ccDep1 ccDep2 _ccNdep =>
+      if code = 0x4 then
+        lowerAmd64CalculateConditionZero
+          (lowerExpr sub temps ccOp)
+          (lowerExpr sub temps ccDep1)
+          (lowerExpr sub temps ccDep2)
+      else
+        .not .true
 
 end VexISA

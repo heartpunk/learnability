@@ -19,19 +19,27 @@ def block : Amd64Block :=
     ] 0x400006
 
 def input : Amd64ConcreteState :=
-  mkAmd64State
+  mkAmd64StateCC
     0x0
     0x0
     0x10
     0x400000
+    0x0
+    0x0
+    0x0
+    0x0
     ByteMem.empty
 
 def expected : Amd64ConcreteState :=
-  mkAmd64State
+  mkAmd64StateCC
     0x0
     0x0
     0x10
     0x400006
+    0x0
+    0x0
+    0x0
+    0x0
     ByteMem.empty
 
 end Instances.Examples.VexJrcxzSkipLeaRaxRdiPlusRcxTakenFixture

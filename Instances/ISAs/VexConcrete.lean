@@ -6,6 +6,17 @@ set_option relaxedAutoImplicit false
 
 namespace VexISA
 
+def evalAmd64CalculateConditionZero
+    (ccOp ccDep1 ccDep2 _ccNdep : UInt64) : Bool :=
+  if ccOp = 0x3 then
+    mask32 (mask32 ccDep1 + mask32 ccDep2) == 0
+  else if ccOp = 0x7 then
+    mask32 ccDep1 == mask32 ccDep2
+  else if ccOp = 0x13 then
+    mask32 ccDep1 == 0
+  else
+    false
+
 @[simp] def evalExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) (temps : TempEnv) : Expr Reg → UInt64
   | .const value => value
@@ -20,5 +31,14 @@ namespace VexISA
 @[simp] def evalCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) (temps : TempEnv) : Cond Reg → Bool
   | .eq64 lhs rhs => evalExpr state temps lhs == evalExpr state temps rhs
+  | .amd64CalculateCondition code ccOp ccDep1 ccDep2 ccNdep =>
+      if code = 0x4 then
+        evalAmd64CalculateConditionZero
+          (evalExpr state temps ccOp)
+          (evalExpr state temps ccDep1)
+          (evalExpr state temps ccDep2)
+          (evalExpr state temps ccNdep)
+      else
+        false
 
 end VexISA

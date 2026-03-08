@@ -59,6 +59,10 @@
     "rcx": 0,
     "rdi": 16,
     "rip": 4194304,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
     "mem64le": []
   },
   "expected": {
@@ -66,6 +70,10 @@
     "rcx": 0,
     "rdi": 16,
     "rip": 4194309,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
     "mem64le": []
   }
 }

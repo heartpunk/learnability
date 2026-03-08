@@ -145,6 +145,30 @@
       }
     },
     {
+      "name": "amd64_jz_only_taken",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "7402",
+      "input_regs": {
+        "cc_op": "0x3",
+        "cc_dep1": "0xffffffff",
+        "cc_dep2": "0x1",
+        "cc_ndep": "0x0"
+      }
+    },
+    {
+      "name": "amd64_jz_only_fallthrough",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "7402",
+      "input_regs": {
+        "cc_op": "0x3",
+        "cc_dep1": "0x2",
+        "cc_dep2": "0x3",
+        "cc_ndep": "0x0"
+      }
+    },
+    {
       "name": "amd64_jrcxz_skip_mov_rax_rdi_taken",
       "arch": "amd64",
       "base": "0x400000",

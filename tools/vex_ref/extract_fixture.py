@@ -113,6 +113,26 @@ def cond_binop_to_data(arch, expr):
     raise ValueError(f"unsupported condition binop: {type(expr).__name__}")
 
 
+def cond_ccall_to_data(arch, expr):
+    if not isinstance(expr, pyvex.expr.CCall):
+        raise ValueError(f"unsupported condition ccall: {type(expr).__name__}")
+    if getattr(expr.cee, "name", None) != "amd64g_calculate_condition":
+        raise ValueError(f"unsupported condition helper: {getattr(expr.cee, 'name', None)}")
+    if len(expr.args) != 5:
+        raise ValueError(f"unexpected arg count for amd64g_calculate_condition: {len(expr.args)}")
+    code_arg, cc_op, cc_dep1, cc_dep2, cc_ndep = expr.args
+    if not isinstance(code_arg, pyvex.expr.Const):
+        raise ValueError("amd64g_calculate_condition code must be constant")
+    return {
+        "tag": "amd64CalculateCondition",
+        "code": int(code_arg.con.value),
+        "cc_op": expr_to_data(arch, cc_op),
+        "cc_dep1": expr_to_data(arch, cc_dep1),
+        "cc_dep2": expr_to_data(arch, cc_dep2),
+        "cc_ndep": expr_to_data(arch, cc_ndep),
+    }
+
+
 def cond_to_data(arch, expr, tmp_conds):
     if isinstance(expr, pyvex.expr.RdTmp):
         if expr.tmp not in tmp_conds:
@@ -120,6 +140,8 @@ def cond_to_data(arch, expr, tmp_conds):
         return tmp_conds[expr.tmp]
     if isinstance(expr, pyvex.expr.Binop):
         return cond_binop_to_data(arch, expr)
+    if isinstance(expr, pyvex.expr.CCall):
+        return cond_ccall_to_data(arch, expr)
     raise ValueError(f"unsupported condition expr: {type(expr).__name__}")
 
 
@@ -135,6 +157,9 @@ def stmt_to_data(arch, stmt, tmp_conds):
             return None
         if isinstance(stmt.data, pyvex.expr.RdTmp) and stmt.data.tmp in tmp_conds:
             tmp_conds[stmt.tmp] = tmp_conds[stmt.data.tmp]
+            return None
+        if isinstance(stmt.data, pyvex.expr.CCall):
+            tmp_conds[stmt.tmp] = cond_ccall_to_data(arch, stmt.data)
             return None
         if isinstance(stmt.data, pyvex.expr.Unop) and stmt.data.op in ("Iop_1Uto64", "Iop_64to1"):
             if len(stmt.data.args) != 1:
@@ -201,6 +226,14 @@ def lean_cond(cond: dict) -> str:
     tag = cond["tag"]
     if tag == "eq64":
         return f".eq64 ({lean_expr(cond['lhs'])}) ({lean_expr(cond['rhs'])})"
+    if tag == "amd64CalculateCondition":
+        return (
+            f".amd64CalculateCondition 0x{cond['code']:x} "
+            f"({lean_expr(cond['cc_op'])}) "
+            f"({lean_expr(cond['cc_dep1'])}) "
+            f"({lean_expr(cond['cc_dep2'])}) "
+            f"({lean_expr(cond['cc_ndep'])})"
+        )
     raise ValueError(f"unsupported lean cond tag: {tag}")
 
 

@@ -1,0 +1,93 @@
+{
+  "name": "amd64_jz_only_fallthrough",
+  "arch": "amd64",
+  "base": 4194304,
+  "bytes": [
+    116,
+    2
+  ],
+  "vex_pretty": "IRSB {\n   t0:Ity_I1 t1:Ity_I64 t2:Ity_I64 t3:Ity_I64 t4:Ity_I64 t5:Ity_I64 t6:Ity_I64\n\n   00 | ------ IMark(0x400000, 2, 0) ------\n   01 | t1 = GET:I64(cc_op)\n   02 | t2 = GET:I64(cc_dep1)\n   03 | t3 = GET:I64(cc_dep2)\n   04 | t4 = GET:I64(cc_ndep)\n   05 | t5 = amd64g_calculate_condition(0x0000000000000004,t1,t2,t3,t4):Ity_I64\n   06 | t0 = 64to1(t5)\n   07 | if (t0) { PUT(rip) = 0x400004; Ijk_Boring }\n   NEXT: PUT(rip) = 0x0000000000400002; Ijk_Boring\n}",
+  "block": {
+    "stmts": [
+      {
+        "tag": "wrtmp",
+        "tmp": 1,
+        "expr": {
+          "tag": "get",
+          "reg": "cc_op"
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 2,
+        "expr": {
+          "tag": "get",
+          "reg": "cc_dep1"
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 3,
+        "expr": {
+          "tag": "get",
+          "reg": "cc_dep2"
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 4,
+        "expr": {
+          "tag": "get",
+          "reg": "cc_ndep"
+        }
+      },
+      {
+        "tag": "exit",
+        "cond": {
+          "tag": "amd64CalculateCondition",
+          "code": 4,
+          "cc_op": {
+            "tag": "tmp",
+            "tmp": 1
+          },
+          "cc_dep1": {
+            "tag": "tmp",
+            "tmp": 2
+          },
+          "cc_dep2": {
+            "tag": "tmp",
+            "tmp": 3
+          },
+          "cc_ndep": {
+            "tag": "tmp",
+            "tmp": 4
+          }
+        },
+        "target": 4194308
+      }
+    ],
+    "next": 4194306
+  },
+  "input": {
+    "rax": 0,
+    "rcx": 0,
+    "rdi": 0,
+    "rip": 4194304,
+    "cc_op": 3,
+    "cc_dep1": 2,
+    "cc_dep2": 3,
+    "cc_ndep": 0,
+    "mem64le": []
+  },
+  "expected": {
+    "rax": 0,
+    "rcx": 0,
+    "rdi": 0,
+    "rip": 4194306,
+    "cc_op": 3,
+    "cc_dep1": 2,
+    "cc_dep2": 3,
+    "cc_ndep": 0,
+    "mem64le": []
+  }
+}
