@@ -12,7 +12,8 @@ from angr import options as angr_options
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = ROOT / "tools" / "vex_ref" / "fixtures"
-LEAN_FIXTURE = ROOT / "Instances" / "Examples" / "VexLeaRdiPlus5Fixture.lean"
+DEFAULT_LEAN_FIXTURE = ROOT / "Instances" / "Examples" / "VexLeaRdiPlus5Fixture.lean"
+DEFAULT_LEAN_NAMESPACE = "Instances.Examples.VexLeaRdiPlus5Fixture"
 
 
 def parse_reg_assignment(text: str) -> tuple[str, int]:
@@ -51,7 +52,7 @@ def expr_to_data(arch, expr):
     raise ValueError(f"unsupported expr: {type(expr).__name__}")
 
 
-def cond_to_data(arch, expr):
+def cond_binop_to_data(arch, expr):
     if isinstance(expr, pyvex.expr.Binop):
         if expr.op != "Iop_CmpEQ64":
             raise ValueError(f"unsupported cond binop: {expr.op}")
@@ -62,21 +63,34 @@ def cond_to_data(arch, expr):
             "lhs": expr_to_data(arch, expr.args[0]),
             "rhs": expr_to_data(arch, expr.args[1]),
         }
+    raise ValueError(f"unsupported condition binop: {type(expr).__name__}")
+
+
+def cond_to_data(arch, expr, tmp_conds):
+    if isinstance(expr, pyvex.expr.RdTmp):
+        if expr.tmp not in tmp_conds:
+            raise ValueError(f"unsupported exit tmp guard: t{expr.tmp}")
+        return tmp_conds[expr.tmp]
+    if isinstance(expr, pyvex.expr.Binop):
+        return cond_binop_to_data(arch, expr)
     raise ValueError(f"unsupported condition expr: {type(expr).__name__}")
 
 
-def stmt_to_data(arch, stmt):
+def stmt_to_data(arch, stmt, tmp_conds):
     if isinstance(stmt, pyvex.stmt.IMark):
         return None
     if isinstance(stmt, pyvex.stmt.WrTmp):
+        if isinstance(stmt.data, pyvex.expr.Binop) and stmt.data.op == "Iop_CmpEQ64":
+            tmp_conds[stmt.tmp] = cond_binop_to_data(arch, stmt.data)
+            return None
         return {"tag": "wrtmp", "tmp": stmt.tmp, "expr": expr_to_data(arch, stmt.data)}
     if isinstance(stmt, pyvex.stmt.Put):
         return {"tag": "put", "reg": reg_name(arch, stmt.offset), "expr": expr_to_data(arch, stmt.data)}
     if isinstance(stmt, pyvex.stmt.Exit):
         return {
             "tag": "exit",
-            "cond": cond_to_data(arch, stmt.guard),
-            "target": int(stmt.dst.con.value),
+            "cond": cond_to_data(arch, stmt.guard, tmp_conds),
+            "target": int(stmt.dst.value),
         }
     raise ValueError(f"unsupported stmt: {type(stmt).__name__}")
 
@@ -116,8 +130,9 @@ def build_fixture(name: str, arch_name: str, base: int, code: bytes, inputs: dic
     arch = arch_from_name(arch_name)
     irsb = pyvex.IRSB(code, base, arch)
     statements = []
+    tmp_conds = {}
     for stmt in irsb.statements:
-        data = stmt_to_data(arch, stmt)
+        data = stmt_to_data(arch, stmt, tmp_conds)
         if data is not None:
             statements.append(data)
     if not isinstance(irsb.next, pyvex.expr.Const):
@@ -134,7 +149,7 @@ def build_fixture(name: str, arch_name: str, base: int, code: bytes, inputs: dic
     state.memory.store(base, code)
     for reg, value in inputs.items():
         setattr(state.regs, reg, value)
-    succ = project.factory.successors(state, num_inst=1)
+    succ = project.factory.successors(state)
     if len(succ.successors) != 1:
         raise ValueError(f"expected one successor, got {len(succ.successors)}")
     out = succ.successors[0]
@@ -174,7 +189,7 @@ def write_json(fixture: dict) -> Path:
     return out
 
 
-def write_lean(fixture: dict) -> Path:
+def write_lean(fixture: dict, lean_path: Path, lean_namespace: str) -> Path:
     stmts = ",\n      ".join(lean_stmt(stmt) for stmt in fixture["block"]["stmts"])
     byte_list = ", ".join(f"0x{b:02x}" for b in fixture["bytes"])
     lean = f"""import Instances.ISAs.VexISA
@@ -182,7 +197,7 @@ def write_lean(fixture: dict) -> Path:
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
 
-namespace Instances.Examples.VexLeaRdiPlus5Fixture
+namespace {lean_namespace}
 
 open VexISA
 
@@ -206,11 +221,11 @@ def expected : ConcreteState :=
     rdi := 0x{fixture['expected']['rdi']:x},
     rip := 0x{fixture['expected']['rip']:x} }}
 
-end Instances.Examples.VexLeaRdiPlus5Fixture
+end {lean_namespace}
 """
-    LEAN_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-    LEAN_FIXTURE.write_text(lean)
-    return LEAN_FIXTURE
+    lean_path.parent.mkdir(parents=True, exist_ok=True)
+    lean_path.write_text(lean)
+    return lean_path
 
 
 def main() -> None:
@@ -220,13 +235,17 @@ def main() -> None:
     parser.add_argument("--base", required=True, type=lambda s: int(s, 0))
     parser.add_argument("--bytes", required=True)
     parser.add_argument("--input-reg", action="append", default=[])
+    parser.add_argument("--lean-output")
+    parser.add_argument("--lean-namespace")
     args = parser.parse_args()
 
     code = bytes.fromhex(args.bytes)
     inputs = dict(parse_reg_assignment(item) for item in args.input_reg)
     fixture = build_fixture(args.name, args.arch, args.base, code, inputs)
+    lean_path = Path(args.lean_output) if args.lean_output else DEFAULT_LEAN_FIXTURE
+    lean_namespace = args.lean_namespace or DEFAULT_LEAN_NAMESPACE
     json_path = write_json(fixture)
-    lean_path = write_lean(fixture)
+    lean_path = write_lean(fixture, lean_path, lean_namespace)
     print(json_path)
     print(lean_path)
 
