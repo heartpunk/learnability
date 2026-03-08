@@ -86,4 +86,36 @@ def LoopRegion
     (spec : LoopRegionSpec Reg Obs) :
     (LoopRegion spec).DenotesObs = spec.DenotesObs := rfl
 
+/-- Repeat a lifted loop-body path `n` times by concatenation. -/
+def repeatBlockPath
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (body : List (Block Reg)) : Nat → List (Block Reg)
+  | 0 => []
+  | n + 1 => body ++ repeatBlockPath body n
+
+/-- Finite path-family witness for at-most-`K` iterations of a loop body path. -/
+def boundedLoopWitness
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (body : List (Block Reg)) (K : Nat) : Finset (List (Block Reg)) :=
+  (Finset.range (K + 1)).image (repeatBlockPath body)
+
+@[simp] theorem repeatBlockPath_zero
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (body : List (Block Reg)) :
+    repeatBlockPath body 0 = [] := rfl
+
+@[simp] theorem repeatBlockPath_succ
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (body : List (Block Reg)) (n : Nat) :
+    repeatBlockPath body (n + 1) = body ++ repeatBlockPath body n := rfl
+
+theorem nil_mem_boundedLoopWitness
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (body : List (Block Reg)) (K : Nat) :
+    [] ∈ boundedLoopWitness body K := by
+  refine Finset.mem_image.mpr ?_
+  refine ⟨0, ?_, ?_⟩
+  · simp
+  · simp [repeatBlockPath_zero]
+
  end VexISA
