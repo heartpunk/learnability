@@ -6,20 +6,6 @@ set_option relaxedAutoImplicit false
 
 namespace VexISA
 
-private theorem substSymExpr_id (expr : SymExpr) :
-    substSymExpr SymSub.id expr = expr := by
-  induction expr with
-  | const value => rfl
-  | reg reg => cases reg <;> rfl
-  | add64 lhs rhs ihL ihR => simp [substSymExpr, ihL, ihR]
-
-private theorem substSymExpr_compose (sub₁ sub₂ : SymSub) (expr : SymExpr) :
-    substSymExpr (composeSymSub sub₁ sub₂) expr = substSymExpr sub₁ (substSymExpr sub₂ expr) := by
-  induction expr with
-  | const value => rfl
-  | reg reg => rfl
-  | add64 lhs rhs ihL ihR => simp [substSymExpr, ihL, ihR]
-
 private theorem substSymPC_compose (sub₁ sub₂ : SymSub) (pc : SymPC) :
     substSymPC (composeSymSub sub₁ sub₂) pc = substSymPC sub₁ (substSymPC sub₂ pc) := by
   induction pc with
@@ -41,16 +27,23 @@ def vexSummaryISA : SymbolicISA SymSub SymPC ConcreteState where
   eval_id := applySymSub_id
   compose_id_left := by
     intro sub
-    funext reg
-    simpa [composeSymSub, SymSub.id] using substSymExpr_id (sub reg)
+    apply SymSub.ext
+    · exact substSymExpr_id (sub.regs .rax)
+    · exact substSymExpr_id (sub.regs .rcx)
+    · exact substSymExpr_id (sub.regs .rdi)
+    · exact substSymExpr_id (sub.regs .rip)
+    · exact substSymMem_id sub.mem
   compose_id_right := by
     intro sub
-    funext reg
-    simp [composeSymSub, SymSub.id, substSymExpr]
+    apply SymSub.ext <;> rfl
   compose_assoc := by
     intro sub₁ sub₂ sub₃
-    funext reg
-    simpa [composeSymSub] using (substSymExpr_compose sub₁ sub₂ (sub₃ reg)).symm
+    apply SymSub.ext
+    · exact (substSymExpr_compose sub₁ sub₂ (sub₃.regs .rax)).symm
+    · exact (substSymExpr_compose sub₁ sub₂ (sub₃.regs .rcx)).symm
+    · exact (substSymExpr_compose sub₁ sub₂ (sub₃.regs .rdi)).symm
+    · exact (substSymExpr_compose sub₁ sub₂ (sub₃.regs .rip)).symm
+    · exact (substSymMem_compose sub₁ sub₂ sub₃.mem).symm
   sat_true := by
     intro state
     rfl

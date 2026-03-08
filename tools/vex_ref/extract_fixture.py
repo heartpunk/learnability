@@ -213,13 +213,15 @@ def input : ConcreteState :=
   {{ rax := 0x{fixture['input']['rax']:x},
     rcx := 0x{fixture['input']['rcx']:x},
     rdi := 0x{fixture['input']['rdi']:x},
-    rip := 0x{fixture['input']['rip']:x} }}
+    rip := 0x{fixture['input']['rip']:x},
+    mem := ByteMem.empty }}
 
 def expected : ConcreteState :=
   {{ rax := 0x{fixture['expected']['rax']:x},
     rcx := 0x{fixture['expected']['rcx']:x},
     rdi := 0x{fixture['expected']['rdi']:x},
-    rip := 0x{fixture['expected']['rip']:x} }}
+    rip := 0x{fixture['expected']['rip']:x},
+    mem := ByteMem.empty }}
 
 end {lean_namespace}
 """

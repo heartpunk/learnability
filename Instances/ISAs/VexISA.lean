@@ -5,6 +5,42 @@ set_option relaxedAutoImplicit false
 
 namespace VexISA
 
+abbrev ByteCell := UInt64 × UInt8
+abbrev ByteMem := List ByteCell
+
+def ByteMem.empty : ByteMem := []
+
+def ByteMem.eraseAddr (mem : ByteMem) (addr : UInt64) : ByteMem :=
+  mem.filter (fun cell => cell.1 ≠ addr)
+
+@[simp] def ByteMem.readByte : ByteMem → UInt64 → UInt8
+  | [], _ => 0
+  | (cellAddr, value) :: rest, addr =>
+      if cellAddr = addr then value else ByteMem.readByte rest addr
+
+def ByteMem.writeByte (mem : ByteMem) (addr : UInt64) (value : UInt8) : ByteMem :=
+  (addr, value) :: ByteMem.eraseAddr mem addr
+
+private def ByteMem.read64leAux (mem : ByteMem) (addr : UInt64) : Nat → UInt64
+  | 0 => 0
+  | n + 1 =>
+      let rest := ByteMem.read64leAux mem addr n
+      let byte := UInt64.ofNat ((ByteMem.readByte mem (addr + UInt64.ofNat n)).toNat)
+      rest ||| UInt64.shiftLeft byte (UInt64.ofNat (8 * n))
+
+def ByteMem.read64le (mem : ByteMem) (addr : UInt64) : UInt64 :=
+  ByteMem.read64leAux mem addr 8
+
+private def ByteMem.write64leAux (mem : ByteMem) (addr value : UInt64) : Nat → ByteMem
+  | 0 => mem
+  | n + 1 =>
+      let shifted := UInt64.shiftRight value (UInt64.ofNat (8 * n))
+      let byte := UInt8.ofNat (UInt64.toNat shifted)
+      ByteMem.write64leAux (ByteMem.writeByte mem (addr + UInt64.ofNat n) byte) addr value n
+
+def ByteMem.write64le (mem : ByteMem) (addr value : UInt64) : ByteMem :=
+  ByteMem.write64leAux mem addr value 8
+
 inductive Reg where
   | rax
   | rcx
@@ -39,6 +75,7 @@ structure ConcreteState where
   rcx : UInt64
   rdi : UInt64
   rip : UInt64
+  mem : ByteMem
   deriving DecidableEq, Repr
 
 abbrev TempEnv := Nat → UInt64

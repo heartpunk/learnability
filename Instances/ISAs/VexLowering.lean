@@ -21,7 +21,7 @@ def PartialSummary.finish (ps : PartialSummary) (next : UInt64) : Summary :=
 
 def lowerExpr (sub : SymSub) (temps : SymTempEnv) : Expr → SymExpr
   | .const value => .const value
-  | .get reg => sub reg
+  | .get reg => sub.regs reg
   | .tmp tmp => temps tmp
   | .add64 lhs rhs => .add64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
 
