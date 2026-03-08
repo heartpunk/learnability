@@ -77,8 +77,10 @@ private theorem lowerExpr_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       rw [hState]
       simpa [lowerExpr] using ConcreteState.read_applySymSub sub input reg
   | tmp tmp => simp [lowerExpr, hTemps]
-  | low32 expr ih => simp [evalExpr, lowerExpr, ih, mask32]
-  | uext32 expr ih => simp [evalExpr, lowerExpr, ih, mask32]
+  | narrow32 expr ih => simp [evalExpr, lowerExpr, ih, mask32]
+  | zext64 expr ih => simp [evalExpr, lowerExpr, ih, mask32]
+  | add32 lhs rhs ihL ihR =>
+      simp [evalExpr, lowerExpr, ihL, ihR, mask32]
   | add64 lhs rhs ihL ihR =>
       simp [lowerExpr, ihL, ihR]
   | load64 addr ih =>

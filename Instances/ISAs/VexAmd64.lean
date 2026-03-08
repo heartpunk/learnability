@@ -11,10 +11,14 @@ inductive Amd64Reg where
   | rcx
   | rdi
   | rip
+  | cc_op
+  | cc_dep1
+  | cc_dep2
+  | cc_ndep
   deriving DecidableEq, Repr
 
 instance : Fintype Amd64Reg :=
-  ⟨{.rax, .rcx, .rdi, .rip}, by
+  ⟨{.rax, .rcx, .rdi, .rip, .cc_op, .cc_dep1, .cc_dep2, .cc_ndep}, by
     intro reg
     cases reg <;> simp⟩
 
@@ -29,16 +33,34 @@ abbrev Amd64ConcreteState := ConcreteState Amd64Reg
 def mkAmd64Block (stmts : List Amd64Stmt) (next : UInt64) : Amd64Block :=
   { stmts := stmts, ip_reg := .rip, next := next }
 
-def mkAmd64State (rax rcx rdi rip : UInt64) (mem : ByteMem) : Amd64ConcreteState :=
+def mkAmd64StateCC
+    (rax rcx rdi rip cc_op cc_dep1 cc_dep2 cc_ndep : UInt64) (mem : ByteMem) : Amd64ConcreteState :=
   { regs := fun
       | .rax => rax
       | .rcx => rcx
       | .rdi => rdi
       | .rip => rip
+      | .cc_op => cc_op
+      | .cc_dep1 => cc_dep1
+      | .cc_dep2 => cc_dep2
+      | .cc_ndep => cc_ndep
   , mem := mem }
+
+def mkAmd64State (rax rcx rdi rip : UInt64) (mem : ByteMem) : Amd64ConcreteState :=
+  mkAmd64StateCC rax rcx rdi rip 0 0 0 0 mem
 
 instance : Repr Amd64ConcreteState where
   reprPrec state _ :=
-    repr (state.read .rax, state.read .rcx, state.read .rdi, state.read .rip, state.mem)
+    repr
+      ( state.read .rax
+      , state.read .rcx
+      , state.read .rdi
+      , state.read .rip
+      , state.read .cc_op
+      , state.read .cc_dep1
+      , state.read .cc_dep2
+      , state.read .cc_ndep
+      , state.mem
+      )
 
 end VexISA

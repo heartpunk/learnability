@@ -49,11 +49,22 @@ inductive Expr (Reg : Type) where
   | const : UInt64 → Expr Reg
   | get : Reg → Expr Reg
   | tmp : Nat → Expr Reg
-  | low32 : Expr Reg → Expr Reg
-  | uext32 : Expr Reg → Expr Reg
+  | narrow32 : Expr Reg → Expr Reg
+  | zext64 : Expr Reg → Expr Reg
+  | add32 : Expr Reg → Expr Reg → Expr Reg
   | add64 : Expr Reg → Expr Reg → Expr Reg
   | load64 : Expr Reg → Expr Reg
   deriving DecidableEq, Repr
+
+namespace Expr
+
+@[match_pattern] abbrev low32 {Reg : Type} (expr : Expr Reg) : Expr Reg :=
+  .narrow32 expr
+
+@[match_pattern] abbrev uext32 {Reg : Type} (expr : Expr Reg) : Expr Reg :=
+  .zext64 expr
+
+end Expr
 
 inductive Cond (Reg : Type) where
   | eq64 : Expr Reg → Expr Reg → Cond Reg
