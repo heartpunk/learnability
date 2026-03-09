@@ -77,3 +77,5 @@ import Instances.ISAs.VexWitness
 import Instances.ISAs.VexSummaryISA
 
 import Instances.Examples.Phase4LoopStabilization
+
+import Instances.Examples.Phase5Capstone
