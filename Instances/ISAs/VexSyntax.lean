@@ -56,19 +56,48 @@ def ByteMem.write64le (mem : ByteMem) (addr value : UInt64) : ByteMem :=
   ByteMem.write64leAux mem addr value 8
 
 inductive Expr (Reg : Type) where
+  /-- Literal 64-bit constant. -/
   | const : UInt64 → Expr Reg
+  /-- Read the current value of a machine register. -/
   | get : Reg → Expr Reg
+  /-- Read the current value of a temporary SSA slot. -/
   | tmp : Nat → Expr Reg
+  /-- Keep only the low 32 bits of the input and return them as a `UInt64`. -/
   | narrow32 : Expr Reg → Expr Reg
+  /--
+  Treat the input as a 32-bit quantity embedded in `UInt64` and zero-extend it by discarding
+  any high bits above bit 31.
+  -/
   | zext64 : Expr Reg → Expr Reg
+  /--
+  Add the low 32 bits of both operands modulo `2^32`, then return the wrapped result as a
+  zero-extended `UInt64`.
+  -/
   | add32 : Expr Reg → Expr Reg → Expr Reg
+  /-- Add two 64-bit words with `UInt64` wraparound semantics. -/
   | add64 : Expr Reg → Expr Reg → Expr Reg
+  /-- Subtract two 64-bit words with `UInt64` wraparound semantics. -/
   | sub64 : Expr Reg → Expr Reg → Expr Reg
+  /-- Bitwise exclusive-or on 64-bit words. -/
   | xor64 : Expr Reg → Expr Reg → Expr Reg
+  /-- Bitwise and on 64-bit words. -/
   | and64 : Expr Reg → Expr Reg → Expr Reg
+  /-- Bitwise or on 64-bit words. -/
   | or64 : Expr Reg → Expr Reg → Expr Reg
+  /--
+  Logical left shift on a 64-bit word. Shift counts are reduced modulo 64 by masking with
+  `0x3F` before shifting.
+  -/
   | shl64 : Expr Reg → Expr Reg → Expr Reg
+  /--
+  Logical right shift on a 64-bit word. Shift counts are reduced modulo 64 by masking with
+  `0x3F` before shifting.
+  -/
   | shr64 : Expr Reg → Expr Reg → Expr Reg
+  /--
+  Read 8 bytes from memory in little-endian order at the computed address. Missing bytes default
+  to `0` because `ByteMem.readByte` zero-fills absent cells.
+  -/
   | load64 : Expr Reg → Expr Reg
   deriving DecidableEq, Repr
 
@@ -83,9 +112,16 @@ namespace Expr
 end Expr
 
 inductive Cond (Reg : Type) where
+  /-- Compare two 64-bit expressions for equality. -/
   | eq64 : Expr Reg → Expr Reg → Cond Reg
+  /-- Unsigned 64-bit less-than comparison on `UInt64` values. -/
   | lt64 : Expr Reg → Expr Reg → Cond Reg
+  /-- Unsigned 64-bit less-than-or-equal comparison on `UInt64` values. -/
   | le64 : Expr Reg → Expr Reg → Cond Reg
+  /--
+  Partial AMD64 condition-code helper. The current semantics only implement the zero-condition
+  slice used by the existing `jz`-style fixtures; unsupported codes evaluate to `false`.
+  -/
   | amd64CalculateCondition : UInt64 → Expr Reg → Expr Reg → Expr Reg → Expr Reg → Cond Reg
   deriving DecidableEq, Repr
 

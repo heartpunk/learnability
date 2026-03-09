@@ -133,6 +133,17 @@ Branch conditions  Eq64, LT64U, LE64U, amd64 helper     direct exits plus the cu
 CFG shape          fallthrough + single guarded exit    not multi-block, not general CFG
 ```
 
+## Hand-Authored Edge Cases
+
+```text
+Module                         Covered semantics
+----------------------------   --------------------------------------------------------------
+VexOpcodeEdgeCases.lean        narrow32/zext64 mask to low 32 bits
+                               add32 wraps modulo 2^32 and zero-extends
+                               shl64/shr64 mask shift counts with 0x3F
+                               lt64/le64 are unsigned comparisons
+```
+
 ## Supported Raw VEX IR Patterns
 
 ```text
