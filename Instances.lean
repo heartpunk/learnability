@@ -76,6 +76,7 @@ import Instances.ISAs.VexBridge
 import Instances.ISAs.VexProgram
 import Instances.ISAs.VexModelEq
 import Instances.ISAs.VexWitness
+import Instances.ISAs.VexSubsystem
 import Instances.ISAs.VexSummaryISA
 
 import Instances.Examples.Phase4LoopStabilization

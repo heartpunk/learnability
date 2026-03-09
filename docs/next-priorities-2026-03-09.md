@@ -17,12 +17,16 @@ The opcode grind is progressing in parallel. That is not the current bottleneck.
 1. **Fetched CFG / subsystem theorem path**
    - Why: this is the missing middle layer between isolated path theorems and real extracted subsystems from binaries.
    - Deliverable: a small theorem/API that packages a fetched program region and connects it to finite path-family witnesses.
-   - Status: next active task.
+   - Status: initial theorem/API added in `Instances/ISAs/VexSubsystem.lean`.
+     The repo now has `FetchedSubsystemWitness` and the adequacy theorem
+     `extractedModel_of_fetchedSubsystemWitness`. Next step is a nontrivial
+     fetched-subsystem example or stronger region packaging.
 
 2. **Refinement-backed subsystem theorem**
    - Why: `Refinement.lean` exists, but the non-toy subsystem-level STS1 story is still not packaged cleanly.
    - Deliverable: one real subsystem theorem/example that uses the refinement pipeline on a fetched multi-block program region.
-   - Status: blocked on a cleaner fetched-region object.
+   - Status: unblocked by the fetched-subsystem witness layer. This is now the
+     next theorem/example target.
 
 3. **Byte-width path (`load8`, byte extensions)**
    - Why: this is the main realism gap for parser-like binaries.
