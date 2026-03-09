@@ -19,8 +19,9 @@ The opcode grind is progressing in parallel. That is not the current bottleneck.
    - Deliverable: a small theorem/API that packages a fetched program region and connects it to finite path-family witnesses.
    - Status: initial theorem/API added in `Instances/ISAs/VexSubsystem.lean`.
      The repo now has `FetchedSubsystemWitness` and the adequacy theorem
-     `extractedModel_of_fetchedSubsystemWitness`. Next step is a nontrivial
-     fetched-subsystem example or stronger region packaging.
+     `extractedModel_of_fetchedSubsystemWitness`. A first deterministic two-block
+     fetched-CFG example now exists in `Instances/Examples/FetchedCFGSubsystem.lean`.
+     Next step is stronger region packaging or a refinement-backed fetched subsystem.
 
 2. **Refinement-backed subsystem theorem**
    - Why: `Refinement.lean` exists, but the non-toy subsystem-level STS1 story is still not packaged cleanly.
