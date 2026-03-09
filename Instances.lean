@@ -76,6 +76,7 @@ import Instances.ISAs.VexLoweringCorrectness
 import Instances.ISAs.VexBridge
 import Instances.ISAs.VexProgram
 import Instances.ISAs.VexDeserialize
+import Instances.ISAs.VexDeserializeTests
 import Instances.ISAs.VexModelEq
 import Instances.ISAs.VexWitness
 import Instances.ISAs.VexSubsystem

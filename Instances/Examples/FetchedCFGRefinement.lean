@@ -17,37 +17,29 @@ noncomputable local instance :
   simpa [satisfiesSymPC] using
     (inferInstance : Decidable (evalSymPC s φ = true))
 
+/-- A fetched block that writes the program IP register to a constant.
+    Executing it twice has the same effect as executing it once. -/
 def block : Block Reg :=
-  { stmts := [Stmt.put .r0 (.add64 (.get .r0) (.const 1))]
+  { stmts := [Stmt.put .r1 (.const 1)]
     ip_reg := .r1
     next := 1 }
 
+private theorem execBlock_eq_write
+    (s : ConcreteState Reg) :
+    execBlock block s = s.write .r1 1 := by
+  ext reg <;> simp [block, execBlock, execStmt, execLinearStmt, linearStmtBridge, ConcreteState.write]
+
 def program : Program Reg where
-  blocks
-    | 1 => none
-    | _ => some block
+  blocks _ := some block
 
 def witnessPaths : Finset (List (Block Reg)) :=
   {[], [block]}
 
-private theorem fetchBlock_not_halt
-    (s : ConcreteState Reg) (h1 : s.read .r1 ≠ 1) :
-    fetchBlock program .r1 s = some block := by
-  change (match s.regs .r1 with | 1 => none | _ => some block) = some block
-  by_cases h : s.regs .r1 = 1
-  · exfalso
-    exact h1 (by simpa using h)
-  · simp [h]
-
-private theorem no_programStep_halt
-    (s : ConcreteState Reg) (h1 : s.read .r1 = 1) :
-    ¬ ∃ s', ProgramStep program .r1 s s' := by
-  intro h
-  rcases h with ⟨s', hStep⟩
-  rcases hStep with ⟨block', hFetch, _⟩
-  change (match s.regs .r1 with | 1 => none | _ => some block) = some block' at hFetch
-  rw [show s.regs .r1 = 1 by simpa using h1] at hFetch
-  simp at hFetch
+private theorem execBlock_idempotent
+    (s : ConcreteState Reg) :
+    execBlock block (execBlock block s) = execBlock block s := by
+  rw [execBlock_eq_write, execBlock_eq_write]
+  ext reg <;> simp [ConcreteState.write]
 
 private theorem self_mem_execBlockPath_nil
     (s : ConcreteState Reg) :
@@ -58,6 +50,41 @@ private theorem execBlock_mem_execBlockPath_singleton
     (s : ConcreteState Reg) :
     execBlock block s ∈ execBlockPath [block] s := by
   simp [execBlockPath, execBlockSuccs, block, execBlock]
+
+def expectedSummary : Summary Reg := lowerBlock block
+
+def expectedPathSummary : Summary Reg := Summary.compose expectedSummary Summary.id
+
+private theorem lowerPathFamilySummaries_eq_expected :
+    lowerPathFamilySummaries witnessPaths = {Summary.id, expectedPathSummary} := by
+  native_decide
+
+private theorem trace_cases
+    (s s' : ConcreteState Reg)
+    (hTrace : Relation.ReflTransGen (ProgramStep program .r1) s s') :
+    s' = s ∨ s' = execBlock block s := by
+  induction hTrace with
+  | refl =>
+      exact Or.inl rfl
+  | @tail b c hPrev hStep ih =>
+      rcases ih with rfl | hExec
+      · exact Or.inr <| by
+          rcases hStep with ⟨block', hFetch, hSyntax⟩
+          have hb : block' = block := by
+            simp [fetchBlock, currentIp, program] at hFetch
+            exact hFetch.symm
+          subst hb
+          simpa [SyntaxDenotes, block, execBlockSuccs, execBlock] using hSyntax
+      · exact Or.inr <| by
+          subst hExec
+          rcases hStep with ⟨block', hFetch, hSyntax⟩
+          have hb : block' = block := by
+            simp [fetchBlock, currentIp, program] at hFetch
+            exact hFetch.symm
+          subst hb
+          have hc : c = execBlock block (execBlock block s) := by
+            simpa [SyntaxDenotes, block, execBlockSuccs, execBlock] using hSyntax
+          simpa [execBlock_idempotent] using hc
 
 private theorem witnessComplete :
     WitnessComplete
@@ -76,57 +103,22 @@ private theorem witnessComplete :
       subst hs'
       exact ⟨trivial, _, Relation.ReflTransGen.refl, hObs⟩
     · rcases hExec with ⟨_, s', hPath, hObs⟩
-      have hStep : ProgramStep program .r1 s s' := by
-        refine ⟨block, fetchBlock_not_halt s ?_, ?_⟩
-        · intro h1
-          have hs' : s' = execBlock block s := by
-            simpa [execBlockPath, SyntaxDenotes, block, execBlockSuccs, execBlock] using hPath
-          have hsEq := congrArg (fun st => st.read .r1) hs'
-          simp [block, execBlock, h1] at hsEq
-        · simpa [SyntaxDenotes, execBlockPath, block, execBlockSuccs, execBlock] using hPath
-      exact ⟨trivial, s', Relation.ReflTransGen.tail Relation.ReflTransGen.refl hStep, hObs⟩
+      have hs' : s' = execBlock block s := by
+        simpa [execBlockPath, SyntaxDenotes, block, execBlockSuccs, execBlock] using hPath
+      subst hs'
+      have hStep : ProgramStep program .r1 s (execBlock block s) := by
+        refine ⟨block, by simp [fetchBlock, currentIp, program], ?_⟩
+        simp [SyntaxDenotes, block, execBlockSuccs, execBlock]
+      exact ⟨trivial, _, Relation.ReflTransGen.tail Relation.ReflTransGen.refl hStep, hObs⟩
   · intro h
     rcases h with ⟨_, s', hTrace, hObs⟩
-    by_cases h1 : s.read .r1 = 1
-    · cases hTrace with
-      | refl =>
-          refine ⟨[], by simp [witnessPaths], ⟨trivial, s', ?_, hObs⟩⟩
-          simpa using self_mem_execBlockPath_nil s
-      | tail hPrev hStep =>
-          cases hPrev with
-          | refl =>
-              exfalso
-              exact no_programStep_halt s h1 ⟨_, hStep⟩
-          | tail hPrev hStep =>
-              exfalso
-              exact no_programStep_halt s h1 ⟨_, hStep⟩
-    · cases hTrace with
-      | refl =>
-          refine ⟨[], by simp [witnessPaths], ⟨trivial, s', ?_, hObs⟩⟩
-          simpa using self_mem_execBlockPath_nil s
-      | tail hPrev hStep =>
-          cases hPrev with
-          | refl =>
-              refine ⟨[block], by simp [witnessPaths], ⟨trivial, s', ?_, hObs⟩⟩
-              rcases hStep with ⟨block', hFetch, hSyntax⟩
-              have hb : block' = block := by
-                rw [fetchBlock_not_halt s h1] at hFetch
-                exact Option.some.inj hFetch.symm
-              subst hb
-              simpa [SyntaxDenotes, execBlockPath, block, execBlockSuccs, execBlock] using hSyntax
-          | tail hPrev hStep =>
-              exfalso
-              have hs : s' = execBlock block s := by
-                cases hPrev with
-                | refl =>
-                    rcases hStep with ⟨block', hFetch, hSyntax⟩
-                    have hb : block' = block := by
-                      rw [fetchBlock_not_halt s h1] at hFetch
-                      exact Option.some.inj hFetch.symm
-                    subst hb
-                    simpa [SyntaxDenotes, block, execBlockSuccs, execBlock] using hSyntax
-              subst hs
-              exact no_programStep_halt (execBlock block s) (by simp [block, execBlock]) ⟨_, hStep⟩
+    have hs' : s' = s ∨ s' = execBlock block s :=
+      trace_cases s s' hTrace
+    rcases hs' with hs' | hs'
+    · refine ⟨[], by simp [witnessPaths], ⟨trivial, s', ?_, hObs⟩⟩
+      simpa [hs'] using self_mem_execBlockPath_nil s
+    · refine ⟨[block], by simp [witnessPaths], ⟨trivial, s', ?_, hObs⟩⟩
+      simpa [hs'] using execBlock_mem_execBlockPath_singleton s
 
 def witness : FetchedSubsystemWitness Reg (ConcreteState Reg) where
   program := program
@@ -142,17 +134,25 @@ def closure : Finset (SymPC Reg) := {SymPC.true}
 
 private theorem h_contains : ∀ b ∈ fetchedSubsystemBranchModel witness.paths, b.pc ∈ closure := by
   intro b hb
-  rcases Finset.mem_image.mp (Finset.mem_coe.mp hb) with ⟨summary, _, rfl⟩
-  simp [closure, summaryAsBranch]
+  rcases Finset.mem_image.mp hb with ⟨summary, hMem, rfl⟩
+  have hsMem : summary ∈ ({Summary.id, expectedPathSummary} : Finset (Summary Reg)) := by
+    simpa [lowerPathFamilySummaries_eq_expected] using hMem
+  have hs : summary = Summary.id ∨ summary = expectedPathSummary := by
+    simpa using hsMem
+  rcases hs with rfl | rfl <;> simp [closure, summaryAsBranch, expectedPathSummary]
 
 private theorem h_closed :
     ∀ b ∈ fetchedSubsystemBranchModel witness.paths, ∀ φ ∈ closure,
       (vexSummaryISA Reg).pc_lift b.sub φ ∈ closure := by
   intro b hb φ hφ
-  rcases Finset.mem_image.mp (Finset.mem_coe.mp hb) with ⟨summary, _, rfl⟩
+  rcases Finset.mem_image.mp hb with ⟨summary, hMem, rfl⟩
+  have hsMem : summary ∈ ({Summary.id, expectedPathSummary} : Finset (Summary Reg)) := by
+    simpa [lowerPathFamilySummaries_eq_expected] using hMem
+  have hs : summary = Summary.id ∨ summary = expectedPathSummary := by
+    simpa using hsMem
   have : φ = SymPC.true := by simpa [closure] using hφ
   subst this
-  simp [closure, vexSummaryISA]
+  rcases hs with rfl | rfl <;> simp [closure, vexSummaryISA, expectedPathSummary]
 
 private theorem h_semClosed :
     SemClosed (vexSummaryISA Reg) (fetchedSubsystemBranchModel witness.paths) closure :=
