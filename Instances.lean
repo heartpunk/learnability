@@ -54,6 +54,8 @@ import Instances.Examples.VexCmpRaxRdiJbeExample
 import Instances.Examples.VexCmpRaxRdiJbeTakenFixture
 import Instances.Examples.VexCmpRaxRdiJbeFallthroughFixture
 import Instances.Examples.VexOpcodeEdgeCases
+import Instances.Examples.VexShlEax2Example
+import Instances.Examples.VexShlEax2Fixture
 import Instances.Examples.Tier0Increment
 import Instances.Examples.Tier1Branch
 import Instances.Examples.Tier2MemBranch

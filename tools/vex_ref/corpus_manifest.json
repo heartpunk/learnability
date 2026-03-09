@@ -168,6 +168,15 @@
       }
     },
     {
+      "name": "amd64_shl_eax_2",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "c1e002",
+      "input_regs": {
+        "rax": "0x1"
+      }
+    },
+    {
       "name": "amd64_sub_eax_edi",
       "arch": "amd64",
       "base": "0x400000",

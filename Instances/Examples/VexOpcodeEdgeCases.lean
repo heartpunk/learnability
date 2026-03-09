@@ -81,6 +81,17 @@ private def sub32UnderflowEdge : Amd64Expr :=
 example : evalExpr edgeState emptyTemps sub32UnderflowEdge = 0xFFFF_FFFF := by
   native_decide
 
+private def shl32AndMaskEdge : Amd64Expr :=
+  .shl32 (.const 0x1) (.const 0x21)
+
+example : evalExpr edgeState emptyTemps shl32AndMaskEdge = 0x2 := by
+  native_decide
+
+example :
+    evalExpr edgeState emptyTemps shl32AndMaskEdge =
+      evalSymExpr edgeState (lowerExpr SymSub.id SymTempEnv.empty shl32AndMaskEdge) := by
+  native_decide
+
 example :
     evalExpr edgeState emptyTemps sub32UnderflowEdge =
       evalSymExpr edgeState (lowerExpr SymSub.id SymTempEnv.empty sub32UnderflowEdge) := by

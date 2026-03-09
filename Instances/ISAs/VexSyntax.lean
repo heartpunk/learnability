@@ -65,6 +65,12 @@ to the full 64-bit `UInt64` result.
 @[simp] def maskShift64 (amount : UInt64) : UInt64 :=
   amount &&& 0x3F
 
+@[simp] def maskShift32 (amount : UInt64) : UInt64 :=
+  amount &&& 0x1F
+
+@[simp] def shiftLeft32 (value amount : UInt64) : UInt64 :=
+  mask32 (UInt64.shiftLeft (mask32 value) (maskShift32 amount))
+
 @[simp] def shiftLeft64 (value amount : UInt64) : UInt64 :=
   UInt64.shiftLeft value (maskShift64 amount)
 
@@ -171,6 +177,12 @@ inductive Expr (Reg : Type) where
   `2^32`, then return the wrapped result as a zero-extended `UInt64`.
   -/
   | sub32 : Expr Reg → Expr Reg → Expr Reg
+  /--
+  Logical left shift on the low 32 bits of the input. The value is truncated to 32 bits before
+  shifting, the shift count is reduced modulo 32 by masking with `0x1F`, and the final result is
+  returned as a zero-extended `UInt64`.
+  -/
+  | shl32 : Expr Reg → Expr Reg → Expr Reg
   /-- Add two 64-bit words with `UInt64` wraparound semantics. -/
   | add64 : Expr Reg → Expr Reg → Expr Reg
   /-- Subtract two 64-bit words with `UInt64` wraparound semantics. -/
