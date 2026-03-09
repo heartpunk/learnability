@@ -704,9 +704,10 @@ is guaranteed by `finite_effect_convergence`. This bridges the pigeonhole
 principle to the loop witness completeness machinery.
 
 Note: `ConcreteState Reg` with `ByteMem = List ByteCell` is not `Fintype`.
-The `[Fintype (ConcreteState Reg)]` hypothesis applies to ISA instantiations
-with finite state, or to register-only quotient constructions where memory
-is factored out as external observation (staging boundary). -/
+The `branchClassesStable_of_orbit_cycling` theorem is the most broadly useful:
+it takes orbit cycling as a direct hypothesis, obtainable by domain-specific
+analysis or manual bound without requiring `Fintype`. The `_of_fintype` variant
+applies only to ISA instantiations whose state type is actually finite. -/
 
 /-- Orbit cycling implies branch-class stability: if every orbit position beyond K
     equals some earlier position, the same live branch class works at both.
