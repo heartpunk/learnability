@@ -699,15 +699,27 @@ theorem whileBranchingLoopWitnessComplete_of_branchClassesStable
 /-! ### Pigeonhole Stabilization
 
 Orbit cycling (every iterate beyond K equals some earlier iterate) implies
-branch-class stability. When the concrete state space is finite, orbit cycling
-is guaranteed by `finite_effect_convergence`. This bridges the pigeonhole
-principle to the loop witness completeness machinery.
+branch-class stability. This is the core bridge from concrete orbit behavior
+to the loop witness completeness machinery.
 
-Note: `ConcreteState Reg` with `ByteMem = List ByteCell` is not `Fintype`.
-The `branchClassesStable_of_orbit_cycling` theorem is the most broadly useful:
-it takes orbit cycling as a direct hypothesis, obtainable by domain-specific
-analysis or manual bound without requiring `Fintype`. The `_of_fintype` variant
-applies only to ISA instantiations whose state type is actually finite. -/
+For the programs this framework targets (parsers, operational semantics, type
+systems, grammars), the full proof of BranchClassesStable comes from the
+*finite variety* of the specification being implemented, not from the state
+space being finite. The argument:
+
+1. The closure captures the finite specification structure (finitely many PCs)
+2. PC signatures (subsets of closure) have at most 2^|closure| values
+3. SemClosed + BranchModel.Sound → same signature implies same next signature
+4. So the signature sequence is an orbit on a finite set → must cycle
+5. Same signature at two iterations → same LiveBranchClass realizes at both
+
+This requires SemClosed, BranchModel.Sound, h_contains, and BodyPathStepRealizable
+— all already hypotheses in the existing framework. The bound is K = 2^|closure|,
+determined by the specification variety, not the implementation state space.
+
+Note: this argument does NOT hold for arbitrary binaries. Programs that don't
+implement finite specifications will have closures that don't stabilize. The
+tool should detect and refuse such cases rather than diverging silently. -/
 
 /-- Orbit cycling implies branch-class stability: if every orbit position beyond K
     equals some earlier position, the same live branch class works at both.
@@ -725,33 +737,6 @@ theorem branchClassesStable_of_orbit_cycling
   obtain ⟨cls, hcls⟩ := hstep (loop.bodyEffect^[n] s)
   refine ⟨cls, m, hm, hcls, ?_⟩
   rwa [← heq]
-
-set_option linter.unusedSectionVars false in
-/-- Finite-state orbit cycling: if `ConcreteState Reg` is finite, bodyEffect's orbit
-    eventually revisits earlier states. Bridges `finite_effect_convergence` to the
-    orbit cycling hypothesis. -/
-theorem orbit_cycling_of_fintype
-    [Fintype (ConcreteState Reg)]
-    (loop : VexLoopSummary Reg) :
-    ∃ K, ∀ s, ∀ n, K < n →
-      ∃ m, m ≤ K ∧ loop.bodyEffect^[n] s = loop.bodyEffect^[m] s := by
-  obtain ⟨maxIter, hmax⟩ := finite_effect_convergence loop.bodyEffect
-  refine ⟨maxIter, fun s n hn => ?_⟩
-  obtain ⟨k, hk, heq⟩ := Finset.mem_image.mp (hmax n (by omega) s)
-  exact ⟨k, by { have := Finset.mem_range.mp hk; omega }, heq.symm⟩
-
-/-- Pigeonhole stabilization: if the concrete state space is finite and every body step
-    has a branch-path representative, then branch-class stability holds automatically.
-    Composes `orbit_cycling_of_fintype` with `branchClassesStable_of_orbit_cycling`. -/
-theorem branchClassesStable_of_fintype
-    [Fintype (ConcreteState Reg)]
-    (loop : VexLoopSummary Reg)
-    (bodyPaths : Finset (List (Block Reg)))
-    (closure : Finset (SymPC Reg))
-    (hstep : BodyPathStepRealizable loop bodyPaths closure) :
-    ∃ K, BranchClassesStable loop bodyPaths closure K := by
-  obtain ⟨K, hcycle⟩ := orbit_cycling_of_fintype loop
-  exact ⟨K, branchClassesStable_of_orbit_cycling loop bodyPaths closure K hstep hcycle⟩
 
 end BranchClassCompression
 

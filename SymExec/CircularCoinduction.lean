@@ -623,17 +623,13 @@ private theorem iterate_mod_of_periodic {α : Type*} {f : α → α} {x : α} {p
   conv_lhs => rw [show n = n % p + p * (n / p) from (Nat.mod_add_div n p).symm]
   rw [Function.iterate_add, Function.comp_apply, key]
 
-/-- If the state space is finite, the body effect's orbit must cycle.
-    This gives a concrete (though potentially large) stabilization bound. -/
-theorem finite_effect_convergence
+/-- Explicit bound: the orbit of any function on a finite type revisits within
+    `Fintype.card State + 1` steps. For `n ≥` this bound, `f^[n] s` equals
+    `f^[k] s` for some `k` below the bound. -/
+theorem finite_orbit_bound
     [Fintype State] [DecidableEq State]
-    (f : State → State) :
-    ∃ maxIter,
-      ∀ n, n ≥ maxIter →
-        ∀ s : State, f^[n] s ∈
-          Finset.image (fun k => f^[k] s) (Finset.range maxIter) := by
-  use Fintype.card State + 1
-  intro n hn s
+    (f : State → State) (n : Nat) (hn : n ≥ Fintype.card State + 1) (s : State) :
+    f^[n] s ∈ Finset.image (fun k => f^[k] s) (Finset.range (Fintype.card State + 1)) := by
   have h_card : Fintype.card State < Fintype.card (Fin (Fintype.card State + 1)) := by
     simp [Fintype.card_fin]
   obtain ⟨⟨i, hi⟩, ⟨j, hj⟩, hij, heq⟩ :=
@@ -666,8 +662,19 @@ theorem finite_effect_convergence
     omega
   have hn' : n ≥ a := by omega
   rw [h_reduce n hn']
-  apply Finset.mem_image.mpr
-  exact ⟨a + (n - a) % (b - a), Finset.mem_range.mpr (h_bound n hn'), rfl⟩
+  exact Finset.mem_image.mpr
+    ⟨a + (n - a) % (b - a), Finset.mem_range.mpr (h_bound n hn'), rfl⟩
+
+/-- If the state space is finite, the body effect's orbit must cycle.
+    Existential wrapper around `finite_orbit_bound`. -/
+theorem finite_effect_convergence
+    [Fintype State] [DecidableEq State]
+    (f : State → State) :
+    ∃ maxIter,
+      ∀ n, n ≥ maxIter →
+        ∀ s : State, f^[n] s ∈
+          Finset.image (fun k => f^[k] s) (Finset.range maxIter) :=
+  ⟨Fintype.card State + 1, finite_orbit_bound f⟩
 
 end FiniteConvergence
 
