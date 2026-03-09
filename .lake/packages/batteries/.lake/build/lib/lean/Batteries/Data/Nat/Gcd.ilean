@@ -1,0 +1,1 @@
+{"decls":{},"directImports":[["Batteries.Tactic.Alias",false,false,false]],"module":"Batteries.Data.Nat.Gcd","references":{"{\"c\":{\"m\":\"Batteries.Data.Nat.Gcd\",\"n\":\"Nat.Coprime.mul\"}}":{"definition":[18,6,18,17],"usages":[]},"{\"c\":{\"m\":\"Init.Data.Nat.Coprime\",\"n\":\"Nat.Coprime.mul_left\"}}":{"definition":null,"usages":[[18,21,18,37]]}},"version":5}

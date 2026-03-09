@@ -1,0 +1,1 @@
+{"decls":{},"directImports":[["Batteries.Data.Nat.Basic",false,false,false],["Batteries.Data.Nat.Bisect",false,false,false],["Batteries.Data.Nat.Bitwise",false,false,false],["Batteries.Data.Nat.Digits",false,false,false],["Batteries.Data.Nat.Gcd",false,false,false],["Batteries.Data.Nat.Lemmas",false,false,false]],"module":"Batteries.Data.Nat","references":{},"version":5}

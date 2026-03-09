@@ -1,0 +1,1 @@
+{"decls":{},"directImports":[["Batteries.Data.String.AsciiCasing",false,false,false],["Batteries.Data.String.Basic",false,false,false],["Batteries.Data.String.Legacy",false,false,false],["Batteries.Data.String.Lemmas",false,false,false],["Batteries.Data.String.Matcher",false,false,false]],"module":"Batteries.Data.String","references":{},"version":5}

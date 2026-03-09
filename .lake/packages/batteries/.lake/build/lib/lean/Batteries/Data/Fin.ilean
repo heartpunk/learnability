@@ -1,0 +1,1 @@
+{"decls":{},"directImports":[["Batteries.Data.Fin.Basic",false,false,false],["Batteries.Data.Fin.Fold",false,false,false],["Batteries.Data.Fin.Lemmas",false,false,false],["Batteries.Data.Fin.OfBits",false,false,false]],"module":"Batteries.Data.Fin","references":{},"version":5}
