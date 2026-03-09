@@ -13,6 +13,7 @@ inductive SymExpr (Reg : Type) where
   | low32 : SymExpr Reg → SymExpr Reg
   | uext32 : SymExpr Reg → SymExpr Reg
   | sext8to32 : SymExpr Reg → SymExpr Reg
+  | sext32to64 : SymExpr Reg → SymExpr Reg
   | add64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | sub64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | xor64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
@@ -131,6 +132,7 @@ mutual
   | .low32 expr => mask32 (evalSymExpr state expr)
   | .uext32 expr => mask32 (evalSymExpr state expr)
   | .sext8to32 expr => signExtend8to32 (evalSymExpr state expr)
+  | .sext32to64 expr => signExtend32to64 (evalSymExpr state expr)
   | .add64 lhs rhs => evalSymExpr state lhs + evalSymExpr state rhs
   | .sub64 lhs rhs => evalSymExpr state lhs - evalSymExpr state rhs
   | .xor64 lhs rhs => evalSymExpr state lhs ^^^ evalSymExpr state rhs
@@ -169,6 +171,7 @@ def substSymExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .low32 expr => .low32 (substSymExpr sub expr)
   | .uext32 expr => .uext32 (substSymExpr sub expr)
   | .sext8to32 expr => .sext8to32 (substSymExpr sub expr)
+  | .sext32to64 expr => .sext32to64 (substSymExpr sub expr)
   | .add64 lhs rhs => .add64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .sub64 lhs rhs => .sub64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .xor64 lhs rhs => .xor64 (substSymExpr sub lhs) (substSymExpr sub rhs)
@@ -254,6 +257,7 @@ theorem substSymExpr_id {Reg : Type} [DecidableEq Reg] [Fintype Reg] (expr : Sym
   | low32 expr => simp [substSymExpr, substSymExpr_id]
   | uext32 expr => simp [substSymExpr, substSymExpr_id]
   | sext8to32 expr => simp [substSymExpr, substSymExpr_id]
+  | sext32to64 expr => simp [substSymExpr, substSymExpr_id]
   | add64 lhs rhs =>
       simp [substSymExpr, substSymExpr_id]
   | sub64 lhs rhs =>
@@ -289,6 +293,7 @@ theorem substSymExpr_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | low32 expr => simp [substSymExpr, substSymExpr_compose]
   | uext32 expr => simp [substSymExpr, substSymExpr_compose]
   | sext8to32 expr => simp [substSymExpr, substSymExpr_compose]
+  | sext32to64 expr => simp [substSymExpr, substSymExpr_compose]
   | add64 lhs rhs =>
       simp [substSymExpr, substSymExpr_compose]
   | sub64 lhs rhs =>
@@ -325,6 +330,7 @@ theorem evalSymExpr_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | low32 expr => simp [substSymExpr, evalSymExpr_subst]
   | uext32 expr => simp [substSymExpr, evalSymExpr_subst]
   | sext8to32 expr => simp [substSymExpr, evalSymExpr_subst]
+  | sext32to64 expr => simp [substSymExpr, evalSymExpr_subst]
   | add64 lhs rhs =>
       simp [substSymExpr, evalSymExpr_subst]
   | sub64 lhs rhs =>

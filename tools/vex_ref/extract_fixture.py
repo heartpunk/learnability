@@ -83,6 +83,8 @@ def expr_to_data(arch, expr):
             return {"tag": "zext64", "expr": expr_to_data(arch, expr.args[0])}
         if expr.op == "Iop_8Sto32":
             return {"tag": "sext8to32", "expr": expr_to_data(arch, expr.args[0])}
+        if expr.op == "Iop_32Sto64":
+            return {"tag": "sext32to64", "expr": expr_to_data(arch, expr.args[0])}
         if expr.op in ("Iop_8Uto32", "Iop_8Uto64", "Iop_16Uto32", "Iop_16Uto64"):
             return expr_to_data(arch, expr.args[0])
         raise ValueError(f"unsupported unop: {expr.op}")
@@ -249,6 +251,8 @@ def lean_expr(expr: dict) -> str:
         return f".zext64 ({lean_expr(expr['expr'])})"
     if tag == "sext8to32":
         return f".sext8to32 ({lean_expr(expr['expr'])})"
+    if tag == "sext32to64":
+        return f".sext32to64 ({lean_expr(expr['expr'])})"
     if tag == "add32":
         return f".add32 ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
     if tag == "load":
