@@ -37,7 +37,7 @@
         "tag": "wrtmp",
         "tmp": 4,
         "expr": {
-          "tag": "low32",
+          "tag": "narrow32",
           "expr": {
             "tag": "tmp",
             "tmp": 1
@@ -48,7 +48,7 @@
         "tag": "wrtmp",
         "tmp": 3,
         "expr": {
-          "tag": "uext32",
+          "tag": "zext64",
           "expr": {
             "tag": "tmp",
             "tmp": 4
@@ -71,6 +71,10 @@
     "rcx": 0,
     "rdi": 1234605616436508552,
     "rip": 4194304,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
     "mem64le": []
   },
   "expected": {
@@ -78,6 +82,10 @@
     "rcx": 0,
     "rdi": 1234605616436508552,
     "rip": 4194307,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
     "mem64le": []
   }
 }

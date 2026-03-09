@@ -64,6 +64,17 @@ example :
       evalSymExpr widthState (lowerExpr SymSub.id SymTempEnv.empty load16Edge) := by
   native_decide
 
+private def load8MissingEdge : Amd64Expr :=
+  .load .w8 (.const 0x80)
+
+example : evalExpr edgeState emptyTemps load8MissingEdge = 0x0 := by
+  native_decide
+
+example :
+    evalExpr edgeState emptyTemps load8MissingEdge =
+      evalSymExpr edgeState (lowerExpr SymSub.id SymTempEnv.empty load8MissingEdge) := by
+  native_decide
+
 private def load32Edge : Amd64Expr :=
   .load .w32 (.const 0x10)
 
@@ -76,6 +87,9 @@ example :
   native_decide
 
 example : ByteMem.write .w16 widthMem 0x10 0xABCD = ByteMem.write64le ByteMem.empty 0x10 0x1122_3344_5566_ABCD := by
+  native_decide
+
+example : ByteMem.write .w8 widthMem 0x10 0xABCD = ByteMem.write64le ByteMem.empty 0x10 0x1122_3344_5566_77CD := by
   native_decide
 
 example : ByteMem.write .w32 widthMem 0x10 0xDEAD_BEEF = ByteMem.write64le ByteMem.empty 0x10 0x1122_3344_DEAD_BEEF := by

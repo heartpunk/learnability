@@ -1,0 +1,85 @@
+{
+  "name": "amd64_movzx_rax_mem_rdi",
+  "arch": "amd64",
+  "base": 4194304,
+  "bytes": [
+    72,
+    15,
+    182,
+    7
+  ],
+  "vex_pretty": "IRSB {\n   t0:Ity_I64 t1:Ity_I64 t2:Ity_I8 t3:Ity_I64\n\n   00 | ------ IMark(0x400000, 4, 0) ------\n   01 | t0 = GET:I64(rdi)\n   02 | t2 = LDle:I8(t0)\n   03 | t1 = 8Uto64(t2)\n   04 | PUT(rax) = t1\n   NEXT: PUT(rip) = 0x0000000000400004; Ijk_Boring\n}",
+  "block": {
+    "stmts": [
+      {
+        "tag": "wrtmp",
+        "tmp": 0,
+        "expr": {
+          "tag": "get",
+          "reg": "rdi"
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 2,
+        "expr": {
+          "tag": "load",
+          "width": "w8",
+          "addr": {
+            "tag": "tmp",
+            "tmp": 0
+          }
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 1,
+        "expr": {
+          "tag": "tmp",
+          "tmp": 2
+        }
+      },
+      {
+        "tag": "put",
+        "reg": "rax",
+        "expr": {
+          "tag": "tmp",
+          "tmp": 1
+        }
+      }
+    ],
+    "next": 4194308
+  },
+  "input": {
+    "rax": 0,
+    "rcx": 0,
+    "rdi": 32,
+    "rip": 4194304,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
+    "mem64le": [
+      {
+        "addr": 32,
+        "value": 1234605616436508552
+      }
+    ]
+  },
+  "expected": {
+    "rax": 136,
+    "rcx": 0,
+    "rdi": 32,
+    "rip": 4194308,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
+    "mem64le": [
+      {
+        "addr": 32,
+        "value": 1234605616436508552
+      }
+    ]
+  }
+}

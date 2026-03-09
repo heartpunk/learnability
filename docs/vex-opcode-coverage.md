@@ -37,7 +37,7 @@ lowered stmt tags    put, wrtmp, store:w8/w16/w32/w64, exit
 ## Corpus Inventory
 
 ```text
-Fixture count  39
+Fixture count  40
 ```
 
 ### Statement tag counts
@@ -45,8 +45,8 @@ Fixture count  39
 ```text
 Stmt tag   Count
 ---------  -----
-wrtmp        136
-put           77
+wrtmp        139
+put           78
 exit          18
 store:w64      1
 ```
@@ -56,8 +56,8 @@ store:w64      1
 ```text
 Expr / cond tag              Count
 ---------------------------  -----
-tmp                            165
-get                             69
+tmp                            168
+get                             70
 const                           50
 add32                            5
 add64                           16
@@ -67,14 +67,13 @@ and64                            1
 or64                             1
 shl64                            2
 shr64                            2
-narrow32                        16
-zext64                          15
-low32                            2
-uext32                           2
+narrow32                        18
+zext64                          17
 cond:eq64                       12
 cond:lt64                        2
 cond:le64                        2
 cond:amd64CalculateCondition     2
+load:w8                          1
 load:w64                         1
 ```
 
@@ -113,6 +112,7 @@ amd64_mov_eax_edi.json
 amd64_mov_ecx_edi.json
 amd64_mov_mem_rdi_rax.json
 amd64_mov_rax_mem_rdi.json
+amd64_movzx_rax_mem_rdi.json
 amd64_mov_rcx_rdi.json
 amd64_mov_rdi_rcx.json
 amd64_or_rax_rdi.json
@@ -130,7 +130,7 @@ Layer              Covered now                           Notes
 Registers          rax, rcx, rdi, rip + cc regs         still a tiny architectural slice
 Data movement      GET, PUT, tmp flow                   straight-line register transfer
 Arithmetic         Add32/Add64/Sub64 + bitwise/shifts   direct byte-backed fixtures now present
-Memory reads       load .w8/.w16/.w32/.w64 semantics    core semantics are generic; corpus currently uses w64
+Memory reads       load .w8/.w16/.w32/.w64 semantics    core semantics are generic; corpus now uses w8 and w64
 Memory writes      store .w8/.w16/.w32/.w64 semantics   core semantics are generic; corpus currently uses w64
 Branch conditions  Eq64, LT64U, LE64U, amd64 helper     direct exits plus the current jz helper slice
 CFG shape          fallthrough + single guarded exit    not multi-block, not general CFG
@@ -145,6 +145,7 @@ VexOpcodeEdgeCases.lean        narrow32/zext64 mask to low 32 bits
                                add32 wraps modulo 2^32 and zero-extends
                                shl64/shr64 mask shift counts with 0x3F
                                load/store widths preserve little-endian low-byte slices
+                               load .w8 zero-fills missing bytes
                                lt64/le64 are unsigned comparisons
 ```
 
@@ -170,7 +171,7 @@ IMark                  parsed/observed, not semantically interesting itself
 ```text
 Arithmetic / bitwise   Iop_Sar64 and the wider arithmetic/bitwise families
 Comparisons            CmpNE*, signed families, wider unsigned families
-Memory fixtures        dedicated byte-backed w8/w16/w32 load/store corpus coverage
+Memory fixtures        dedicated byte-backed w16/w32 loads and non-w64 stores
 Casts / width changes  sign extension, zero extension, truncation
 Flags / helpers        broader ccall helpers and flag computation machinery
 Effects                Dirty helpers, CAS, atomics
@@ -197,7 +198,7 @@ Tiny architectural register slice
 ## Immediate Next Coverage Targets
 
 ```text
-1. Byte-backed w8 memory fixture coverage on the parameterized load/store path
+1. Byte-backed w16/w32 memory fixtures and non-w64 store coverage
 2. Signed operations: Sar64 and signed comparison families
 3. More flags/helper coverage beyond the current zero-condition slice
 4. Wider register coverage before general CFG/control-flow work

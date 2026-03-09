@@ -47,6 +47,16 @@
       }
     },
     {
+      "name": "amd64_lea_eax_rdi_plus_5",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "8d4705",
+      "input_regs": {
+        "rax": "0xdeadbeefdeadbeef",
+        "rdi": "0x1122334455667788"
+      }
+    },
+    {
       "name": "amd64_lea_rax_rdi_plus_rcx",
       "arch": "amd64",
       "base": "0x400000",
@@ -84,6 +94,56 @@
         "rdi": "0x1122334455667788",
         "rcx": "0xdeadbeefdeadbeef"
       }
+    },
+    {
+      "name": "amd64_mov_eax_edi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "89f8",
+      "input_regs": {
+        "rax": "0xdeadbeefdeadbeef",
+        "rdi": "0x1122334455667788"
+      }
+    },
+    {
+      "name": "amd64_mov_rax_mem_rdi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "488b07",
+      "input_regs": {
+        "rdi": "0x20"
+      },
+      "input_mem64le": {
+        "0x20": "0x1122334455667788"
+      },
+      "watch_mem64le": ["0x20"]
+    },
+    {
+      "name": "amd64_mov_mem_rdi_rax",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "488907",
+      "input_regs": {
+        "rax": "0x1122334455667788",
+        "rdi": "0x20"
+      },
+      "input_mem64le": {
+        "0x20": "0xdeadbeefcafebabe"
+      },
+      "watch_mem64le": ["0x20"]
+    },
+    {
+      "name": "amd64_movzx_rax_mem_rdi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "480fb607",
+      "input_regs": {
+        "rdi": "0x20"
+      },
+      "input_mem64le": {
+        "0x20": "0x1122334455667788"
+      },
+      "watch_mem64le": ["0x20"]
     },
     {
       "name": "amd64_add_eax_edi",
