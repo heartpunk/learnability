@@ -12,7 +12,7 @@
     "stmts": [
       {
         "tag": "wrtmp",
-        "tmp": 0,
+        "tmp": 8,
         "expr": {
           "tag": "get",
           "reg": "rax"
@@ -20,27 +20,53 @@
       },
       {
         "tag": "wrtmp",
-        "tmp": 1,
+        "tmp": 7,
         "expr": {
           "tag": "narrow32",
           "expr": {
             "tag": "tmp",
-            "tmp": 0
+            "tmp": 8
           }
         }
       },
       {
         "tag": "wrtmp",
-        "tmp": 2,
+        "tmp": 9,
         "expr": {
-          "tag": "shl32",
+          "tag": "zext64",
+          "expr": {
+            "tag": "tmp",
+            "tmp": 7
+          }
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 3,
+        "expr": {
+          "tag": "shl64",
           "lhs": {
             "tag": "tmp",
-            "tmp": 1
+            "tmp": 9
           },
           "rhs": {
             "tag": "const",
             "value": 2
+          }
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 10,
+        "expr": {
+          "tag": "shl64",
+          "lhs": {
+            "tag": "tmp",
+            "tmp": 9
+          },
+          "rhs": {
+            "tag": "const",
+            "value": 1
           }
         }
       },
@@ -53,17 +79,6 @@
         }
       },
       {
-        "tag": "wrtmp",
-        "tmp": 3,
-        "expr": {
-          "tag": "zext64",
-          "expr": {
-            "tag": "tmp",
-            "tmp": 1
-          }
-        }
-      },
-      {
         "tag": "put",
         "reg": "cc_dep1",
         "expr": {
@@ -72,32 +87,32 @@
         }
       },
       {
-        "tag": "wrtmp",
-        "tmp": 4,
-        "expr": {
-          "tag": "zext64",
-          "expr": {
-            "tag": "tmp",
-            "tmp": 2
-          }
-        }
-      },
-      {
         "tag": "put",
         "reg": "cc_dep2",
         "expr": {
           "tag": "tmp",
-          "tmp": 4
+          "tmp": 10
         }
       },
       {
         "tag": "wrtmp",
-        "tmp": 5,
+        "tmp": 19,
+        "expr": {
+          "tag": "narrow32",
+          "expr": {
+            "tag": "tmp",
+            "tmp": 3
+          }
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 20,
         "expr": {
           "tag": "zext64",
           "expr": {
             "tag": "tmp",
-            "tmp": 2
+            "tmp": 19
           }
         }
       },
@@ -106,7 +121,7 @@
         "reg": "rax",
         "expr": {
           "tag": "tmp",
-          "tmp": 5
+          "tmp": 20
         }
       }
     ],
@@ -129,8 +144,8 @@
     "rdi": 0,
     "rip": 4194307,
     "cc_op": 31,
-    "cc_dep1": 1,
-    "cc_dep2": 4,
+    "cc_dep1": 4,
+    "cc_dep2": 2,
     "cc_ndep": 0,
     "mem64le": []
   }

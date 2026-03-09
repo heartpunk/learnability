@@ -7,20 +7,21 @@ namespace Instances.Examples.VexShlEax2Fixture
 
 open VexISA
 
-def bytes : List UInt8 := [0xC1, 0xE0, 0x02]
+def bytes : List UInt8 := [0xc1, 0xe0, 0x02]
 
 def block : Amd64Block :=
   mkAmd64Block [
-      .wrTmp 0 (.get .rax),
-      .wrTmp 1 (.narrow32 (.tmp 0)),
-      .wrTmp 2 (.shl32 (.tmp 1) (.const 0x2)),
-      .put .cc_op (.const 0x1F),
-      .wrTmp 3 (.zext64 (.tmp 1)),
+      .wrTmp 8 (.get .rax),
+      .wrTmp 7 (.narrow32 (.tmp 8)),
+      .wrTmp 9 (.zext64 (.tmp 7)),
+      .wrTmp 3 (.shl64 (.tmp 9) (.const 0x2)),
+      .wrTmp 10 (.shl64 (.tmp 9) (.const 0x1)),
+      .put .cc_op (.const 0x1f),
       .put .cc_dep1 (.tmp 3),
-      .wrTmp 4 (.zext64 (.tmp 2)),
-      .put .cc_dep2 (.tmp 4),
-      .wrTmp 5 (.zext64 (.tmp 2)),
-      .put .rax (.tmp 5)
+      .put .cc_dep2 (.tmp 10),
+      .wrTmp 19 (.narrow32 (.tmp 3)),
+      .wrTmp 20 (.zext64 (.tmp 19)),
+      .put .rax (.tmp 20)
     ] 0x400003
 
 def input : Amd64ConcreteState :=
@@ -41,9 +42,9 @@ def expected : Amd64ConcreteState :=
     0x0
     0x0
     0x400003
-    0x1F
-    0x1
+    0x1f
     0x4
+    0x2
     0x0
     ByteMem.empty
 

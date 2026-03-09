@@ -198,6 +198,32 @@
       "watch_mem64le": ["0x20"]
     },
     {
+      "name": "amd64_mov_eax_mem_rdi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "8b07",
+      "input_regs": {
+        "rdi": "0x20"
+      },
+      "input_mem64le": {
+        "0x20": "0x1122334455667788"
+      },
+      "watch_mem64le": ["0x20"]
+    },
+    {
+      "name": "amd64_movzx_eax_mem_rdi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "0fb707",
+      "input_regs": {
+        "rdi": "0x20"
+      },
+      "input_mem64le": {
+        "0x20": "0x1122334455667788"
+      },
+      "watch_mem64le": ["0x20"]
+    },
+    {
       "name": "amd64_add_eax_edi",
       "arch": "amd64",
       "base": "0x400000",

@@ -142,7 +142,7 @@ Registers          rax, rcx, rdi, rip + cc regs         still a tiny architectur
 Data movement      GET, PUT, tmp flow                   straight-line register transfer
 Arithmetic         Add32/Sub32/Add64/Sub64 + shifts     direct byte-backed fixtures now present
 Casts / width      narrow32/zext64/sext8to32/sext32to64 direct byte-backed fixtures now present for signed widening
-Memory reads       load .w8/.w16/.w32/.w64 semantics    core semantics are generic; corpus now uses w8 and w64
+Memory reads       load .w8/.w16/.w32/.w64 semantics    core semantics are generic; corpus now uses w8, w16, w32, and w64
 Memory writes      store .w8/.w16/.w32/.w64 semantics   core semantics are generic; corpus uses w8 and w64
 Branch conditions  Eq64, LT64U, LE64U, amd64 helper     direct exits plus the current jz helper slice
 CFG shape          fallthrough + single guarded exit    not multi-block, not general CFG
@@ -214,8 +214,8 @@ Tiny architectural register slice
 ## Immediate Next Coverage Targets
 
 ```text
-1. 32-bit shift-left support for the `int_val * 10` path
-2. Byte-backed `store .w8` coverage
-3. Byte-backed w16/w32 memory fixtures
-4. Signed operations: Sar64 and signed comparison families
+1. Signed operations: Sar64 and signed comparison families
+2. Byte-backed w16/w32 store coverage
+3. Wider register coverage before general CFG/control-flow work
+4. Machine call / return coverage beyond the current straight-line slice
 ```
