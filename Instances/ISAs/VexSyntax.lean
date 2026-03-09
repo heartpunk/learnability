@@ -57,6 +57,7 @@ inductive Expr (Reg : Type) where
   | xor64 : Expr Reg → Expr Reg → Expr Reg
   | and64 : Expr Reg → Expr Reg → Expr Reg
   | or64 : Expr Reg → Expr Reg → Expr Reg
+  | shl64 : Expr Reg → Expr Reg → Expr Reg
   | load64 : Expr Reg → Expr Reg
   deriving DecidableEq, Repr
 
