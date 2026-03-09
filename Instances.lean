@@ -36,6 +36,7 @@ import Instances.Examples.Tier4PathFamily
 import Instances.Examples.Tier5ProgramTrace
 import Instances.Examples.Tier6LoopWitness
 import Instances.Examples.Tier7BodyRefinement
+import Instances.Examples.Tier8WitnessedSubsystem
 import Instances.ISAs.MachineISA
 import Instances.ISAs.VexAmd64
 import Instances.ISAs.VexSyntax
