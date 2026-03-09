@@ -75,6 +75,17 @@ example :
       evalSymExpr edgeState (lowerExpr SymSub.id SymTempEnv.empty add32OverflowEdge) := by
   native_decide
 
+private def sub32UnderflowEdge : Amd64Expr :=
+  .sub32 (.const 0x0) (.const 0x1)
+
+example : evalExpr edgeState emptyTemps sub32UnderflowEdge = 0xFFFF_FFFF := by
+  native_decide
+
+example :
+    evalExpr edgeState emptyTemps sub32UnderflowEdge =
+      evalSymExpr edgeState (lowerExpr SymSub.id SymTempEnv.empty sub32UnderflowEdge) := by
+  native_decide
+
 private def load16Edge : Amd64Expr :=
   .load .w16 (.const 0x10)
 

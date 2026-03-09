@@ -11,7 +11,7 @@ Category   Supported constructors / ops
 Width      w8, w16, w32, w64
 Reg        rax, rcx, rdi, rip, cc_op, cc_dep1, cc_dep2, cc_ndep
 Expr       const, get, tmp, narrow32, zext64, add32, add64, sub64,
-           xor64, and64, or64, shl64, shr64, sext8to32, sext32to64, load
+           sub32, xor64, and64, or64, shl64, shr64, sext8to32, sext32to64, load
 Cond       eq64, lt64, le64, amd64CalculateCondition
 Stmt       wrTmp, put, store, exit
 ```
@@ -25,21 +25,21 @@ pyvex expr classes   Binop, Const, Get, Load, RdTmp
 pyvex stmt classes   Exit, IMark, Put, Store, WrTmp
 expr unops           Iop_64to32, Iop_32Uto64, Iop_8Sto32, Iop_32Sto64,
                      selected 8U/16U widenings collapsed by the extractor
-expr binops          Iop_Add32, Iop_Add64, Iop_Sub64, Iop_Xor64,
+expr binops          Iop_Add32, Iop_Sub32, Iop_Add64, Iop_Sub64, Iop_Xor64,
                      Iop_And64, Iop_Or64, Iop_Shl64, Iop_Shr64
 condition binops     Iop_CmpEQ32, Iop_CmpEQ64, Iop_CmpLT64U, Iop_CmpLE64U
 condition helpers    amd64g_calculate_condition
 load widths          Ity_I8, Ity_I16, Ity_I32, Ity_I64
 store widths         8, 16, 32, 64-bit little-endian payloads
 lowered expr tags    const, get, load:w8/w16/w32/w64, tmp, narrow32, zext64,
-                     sext8to32, sext32to64, add32, add64, sub64, xor64, and64, or64, shl64, shr64
+                     sext8to32, sext32to64, add32, sub32, add64, sub64, xor64, and64, or64, shl64, shr64
 lowered stmt tags    put, wrtmp, store:w8/w16/w32/w64, exit
 ```
 
 ## Corpus Inventory
 
 ```text
-Fixture count  42
+Fixture count  43
 ```
 
 ### Statement tag counts
@@ -47,8 +47,8 @@ Fixture count  42
 ```text
 Stmt tag   Count
 ---------  -----
-wrtmp        146
-put           80
+wrtmp        154
+put           84
 exit          18
 store:w64      1
 ```
@@ -58,10 +58,11 @@ store:w64      1
 ```text
 Expr / cond tag              Count
 ---------------------------  -----
-tmp                            175
-get                             72
-const                           50
+tmp                            185
+get                             74
+const                           51
 add32                            5
+sub32                            1
 add64                           16
 sub64                            1
 xor64                            1
@@ -124,6 +125,7 @@ amd64_mov_rdi_rcx.json
 amd64_or_rax_rdi.json
 amd64_shl_rax_3.json
 amd64_shr_rax_4.json
+amd64_sub_eax_edi.json
 amd64_sub_rax_rdi.json
 amd64_xor_rax_rdi.json
 ```
@@ -135,7 +137,7 @@ Layer              Covered now                           Notes
 -----------------  ------------------------------------  ---------------------------------------------------------
 Registers          rax, rcx, rdi, rip + cc regs         still a tiny architectural slice
 Data movement      GET, PUT, tmp flow                   straight-line register transfer
-Arithmetic         Add32/Add64/Sub64 + bitwise/shifts   direct byte-backed fixtures now present
+Arithmetic         Add32/Sub32/Add64/Sub64 + shifts     direct byte-backed fixtures now present
 Casts / width      narrow32/zext64/sext8to32/sext32to64 direct byte-backed fixtures now present for signed widening
 Memory reads       load .w8/.w16/.w32/.w64 semantics    core semantics are generic; corpus now uses w8 and w64
 Memory writes      store .w8/.w16/.w32/.w64 semantics   core semantics are generic; corpus currently uses w64
@@ -151,7 +153,7 @@ Module                         Covered semantics
 VexOpcodeEdgeCases.lean        narrow32/zext64 mask to low 32 bits
                                sext8to32 preserves the signed low-byte 32-bit pattern
                                sext32to64 sign-extends the signed low 32-bit pattern
-                               add32 wraps modulo 2^32 and zero-extends
+                               add32/sub32 wrap modulo 2^32 and zero-extend
                                shl64/shr64 mask shift counts with 0x3F
                                load/store widths preserve little-endian low-byte slices
                                load .w8 zero-fills missing bytes
@@ -169,7 +171,7 @@ Exit                   yes, equality, unsigned lt/le, and one amd64 helper
 Load                   yes, LDle:I8/I16/I32/I64
 Store                  yes, STle with 8/16/32/64-bit payloads
 Unops / casts          64to32, 32Uto64, 8Sto32, 32Sto64, selected collapsed 8U/16U widenings
-Binop arithmetic       Add32, Add64, Sub64, Xor64, And64, Or64, Shl64, Shr64
+Binop arithmetic       Add32, Sub32, Add64, Sub64, Xor64, And64, Or64, Shl64, Shr64
 Binop comparison       CmpEQ32, CmpEQ64, CmpLT64U, CmpLE64U
 Flag helper            amd64g_calculate_condition (current zero-condition slice)
 Temps                  yes, via WrTmp / RdTmp
@@ -208,8 +210,8 @@ Tiny architectural register slice
 ## Immediate Next Coverage Targets
 
 ```text
-1. 32-bit subtraction for Tiny C char arithmetic
-2. 32-bit shift-left support for the `int_val * 10` path
-3. Byte-backed `store .w8` coverage
-4. Byte-backed w16/w32 memory fixtures
+1. 32-bit shift-left support for the `int_val * 10` path
+2. Byte-backed `store .w8` coverage
+3. Byte-backed w16/w32 memory fixtures
+4. Signed operations: Sar64 and signed comparison families
 ```

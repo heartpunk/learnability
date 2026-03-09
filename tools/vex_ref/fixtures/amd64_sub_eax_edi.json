@@ -1,0 +1,155 @@
+{
+  "name": "amd64_sub_eax_edi",
+  "arch": "amd64",
+  "base": 4194304,
+  "bytes": [
+    41,
+    248
+  ],
+  "vex_pretty": "IRSB {\n   t0:Ity_I32 t1:Ity_I32 t2:Ity_I32 t3:Ity_I32 t4:Ity_I64 t5:Ity_I32 t6:Ity_I64 t7:Ity_I64 t8:Ity_I64 t9:Ity_I64 t10:Ity_I64\n\n   00 | ------ IMark(0x400000, 2, 0) ------\n   01 | t4 = GET:I64(rax)\n   02 | t3 = 64to32(t4)\n   03 | t6 = GET:I64(rdi)\n   04 | t5 = 64to32(t6)\n   05 | t0 = Sub32(t3,t5)\n   06 | PUT(cc_op) = 0x0000000000000007\n   07 | t7 = 32Uto64(t3)\n   08 | PUT(cc_dep1) = t7\n   09 | t8 = 32Uto64(t5)\n   10 | PUT(cc_dep2) = t8\n   11 | t9 = 32Uto64(t0)\n   12 | PUT(rax) = t9\n   NEXT: PUT(rip) = 0x0000000000400002; Ijk_Boring\n}",
+  "block": {
+    "stmts": [
+      {
+        "tag": "wrtmp",
+        "tmp": 4,
+        "expr": {
+          "tag": "get",
+          "reg": "rax"
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 3,
+        "expr": {
+          "tag": "narrow32",
+          "expr": {
+            "tag": "tmp",
+            "tmp": 4
+          }
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 6,
+        "expr": {
+          "tag": "get",
+          "reg": "rdi"
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 5,
+        "expr": {
+          "tag": "narrow32",
+          "expr": {
+            "tag": "tmp",
+            "tmp": 6
+          }
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 0,
+        "expr": {
+          "tag": "sub32",
+          "lhs": {
+            "tag": "tmp",
+            "tmp": 3
+          },
+          "rhs": {
+            "tag": "tmp",
+            "tmp": 5
+          }
+        }
+      },
+      {
+        "tag": "put",
+        "reg": "cc_op",
+        "expr": {
+          "tag": "const",
+          "value": 7
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 7,
+        "expr": {
+          "tag": "zext64",
+          "expr": {
+            "tag": "tmp",
+            "tmp": 3
+          }
+        }
+      },
+      {
+        "tag": "put",
+        "reg": "cc_dep1",
+        "expr": {
+          "tag": "tmp",
+          "tmp": 7
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 8,
+        "expr": {
+          "tag": "zext64",
+          "expr": {
+            "tag": "tmp",
+            "tmp": 5
+          }
+        }
+      },
+      {
+        "tag": "put",
+        "reg": "cc_dep2",
+        "expr": {
+          "tag": "tmp",
+          "tmp": 8
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 9,
+        "expr": {
+          "tag": "zext64",
+          "expr": {
+            "tag": "tmp",
+            "tmp": 0
+          }
+        }
+      },
+      {
+        "tag": "put",
+        "reg": "rax",
+        "expr": {
+          "tag": "tmp",
+          "tmp": 9
+        }
+      }
+    ],
+    "next": 4194306
+  },
+  "input": {
+    "rax": 4294967298,
+    "rcx": 0,
+    "rdi": 3,
+    "rip": 4194304,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
+    "mem64le": []
+  },
+  "expected": {
+    "rax": 4294967295,
+    "rcx": 0,
+    "rdi": 3,
+    "rip": 4194306,
+    "cc_op": 7,
+    "cc_dep1": 2,
+    "cc_dep2": 3,
+    "cc_ndep": 0,
+    "mem64le": []
+  }
+}

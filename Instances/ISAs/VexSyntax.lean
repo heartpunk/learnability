@@ -166,6 +166,11 @@ inductive Expr (Reg : Type) where
   zero-extended `UInt64`.
   -/
   | add32 : Expr Reg → Expr Reg → Expr Reg
+  /--
+  Subtract the low 32 bits of the right operand from the low 32 bits of the left operand modulo
+  `2^32`, then return the wrapped result as a zero-extended `UInt64`.
+  -/
+  | sub32 : Expr Reg → Expr Reg → Expr Reg
   /-- Add two 64-bit words with `UInt64` wraparound semantics. -/
   | add64 : Expr Reg → Expr Reg → Expr Reg
   /-- Subtract two 64-bit words with `UInt64` wraparound semantics. -/

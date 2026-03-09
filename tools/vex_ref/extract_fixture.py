@@ -105,6 +105,14 @@ def expr_to_data(arch, expr):
                 "lhs": expr_to_data(arch, expr.args[0]),
                 "rhs": expr_to_data(arch, expr.args[1]),
             }
+        if expr.op == "Iop_Sub32":
+            if len(expr.args) != 2:
+                raise ValueError(f"unexpected arg count for {expr.op}: {len(expr.args)}")
+            return {
+                "tag": "sub32",
+                "lhs": expr_to_data(arch, expr.args[0]),
+                "rhs": expr_to_data(arch, expr.args[1]),
+            }
         binop_tags = {
             "Iop_Add64": "add64",
             "Iop_Sub64": "sub64",
@@ -255,6 +263,8 @@ def lean_expr(expr: dict) -> str:
         return f".sext32to64 ({lean_expr(expr['expr'])})"
     if tag == "add32":
         return f".add32 ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
+    if tag == "sub32":
+        return f".sub32 ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
     if tag == "load":
         return f".load .{expr['width']} ({lean_expr(expr['addr'])})"
     if tag in ("add64", "sub64", "xor64", "and64", "or64", "shl64", "shr64"):
