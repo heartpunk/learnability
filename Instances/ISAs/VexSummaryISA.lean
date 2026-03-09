@@ -13,6 +13,8 @@ private theorem substSymPC_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   induction pc with
   | true => rfl
   | eq lhs rhs => simp [substSymPC, substSymExpr_compose]
+  | lt lhs rhs => simp [substSymPC, substSymExpr_compose]
+  | le lhs rhs => simp [substSymPC, substSymExpr_compose]
   | and φ ψ ihφ ihψ => simp [substSymPC, ihφ, ihψ]
   | not φ ih => simp [substSymPC, ih]
 

@@ -68,6 +68,8 @@ end Expr
 
 inductive Cond (Reg : Type) where
   | eq64 : Expr Reg → Expr Reg → Cond Reg
+  | lt64 : Expr Reg → Expr Reg → Cond Reg
+  | le64 : Expr Reg → Expr Reg → Cond Reg
   | amd64CalculateCondition : UInt64 → Expr Reg → Expr Reg → Expr Reg → Expr Reg → Cond Reg
   deriving DecidableEq, Repr
 

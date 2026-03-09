@@ -53,6 +53,8 @@ def lowerExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 def lowerCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub : SymSub Reg) (temps : SymTempEnv Reg) : Cond Reg → SymPC Reg
   | .eq64 lhs rhs => .eq (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .lt64 lhs rhs => .lt (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .le64 lhs rhs => .le (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .amd64CalculateCondition code ccOp ccDep1 ccDep2 _ccNdep =>
       if code = 0x4 then
         lowerAmd64CalculateConditionZero

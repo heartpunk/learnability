@@ -25,6 +25,8 @@ end
 inductive SymPC (Reg : Type) where
   | true
   | eq : SymExpr Reg → SymExpr Reg → SymPC Reg
+  | lt : SymExpr Reg → SymExpr Reg → SymPC Reg
+  | le : SymExpr Reg → SymExpr Reg → SymPC Reg
   | and : SymPC Reg → SymPC Reg → SymPC Reg
   | not : SymPC Reg → SymPC Reg
   deriving DecidableEq, Repr
@@ -135,6 +137,8 @@ end
     (state : ConcreteState Reg) : SymPC Reg → Bool
   | .true => true
   | .eq lhs rhs => evalSymExpr state lhs == evalSymExpr state rhs
+  | .lt lhs rhs => decide (evalSymExpr state lhs < evalSymExpr state rhs)
+  | .le lhs rhs => decide (evalSymExpr state lhs ≤ evalSymExpr state rhs)
   | .and φ ψ => evalSymPC state φ && evalSymPC state ψ
   | .not φ => !(evalSymPC state φ)
 
@@ -164,6 +168,8 @@ def substSymPC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub : SymSub Reg) : SymPC Reg → SymPC Reg
   | .true => .true
   | .eq lhs rhs => .eq (substSymExpr sub lhs) (substSymExpr sub rhs)
+  | .lt lhs rhs => .lt (substSymExpr sub lhs) (substSymExpr sub rhs)
+  | .le lhs rhs => .le (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .and φ ψ => .and (substSymPC sub φ) (substSymPC sub ψ)
   | .not φ => .not (substSymPC sub φ)
 
@@ -290,6 +296,8 @@ theorem evalSymPC_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   induction pc with
   | true => rfl
   | eq lhs rhs => simp [substSymPC, evalSymExpr_subst]
+  | lt lhs rhs => simp [substSymPC, evalSymExpr_subst]
+  | le lhs rhs => simp [substSymPC, evalSymExpr_subst]
   | and φ ψ ihφ ihψ => simp [substSymPC, ihφ, ihψ]
   | not φ ih => simp [substSymPC, ih]
 

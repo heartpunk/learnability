@@ -129,6 +129,14 @@ private theorem lowerCond_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       simp [lowerCond,
         lowerExpr_sound input state temps sub symTemps hState hTemps lhs,
         lowerExpr_sound input state temps sub symTemps hState hTemps rhs]
+  | lt64 lhs rhs =>
+      simp [lowerCond,
+        lowerExpr_sound input state temps sub symTemps hState hTemps lhs,
+        lowerExpr_sound input state temps sub symTemps hState hTemps rhs]
+  | le64 lhs rhs =>
+      simp [lowerCond,
+        lowerExpr_sound input state temps sub symTemps hState hTemps lhs,
+        lowerExpr_sound input state temps sub symTemps hState hTemps rhs]
   | amd64CalculateCondition code ccOp ccDep1 ccDep2 ccNdep =>
       subst state
       have hCcOp :=
