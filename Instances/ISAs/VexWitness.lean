@@ -696,6 +696,62 @@ theorem whileBranchingLoopWitnessComplete_of_branchClassesStable
   · exact whileLoopBranchingUnrollBound_of_branchClassesStable
       program ip_reg loop Relevant observe bodyPaths closure K hstep hstable hobs
 
+/-! ### Pigeonhole Stabilization
+
+Orbit cycling (every iterate beyond K equals some earlier iterate) implies
+branch-class stability. When the concrete state space is finite, orbit cycling
+is guaranteed by `finite_effect_convergence`. This bridges the pigeonhole
+principle to the loop witness completeness machinery.
+
+Note: `ConcreteState Reg` with `ByteMem = List ByteCell` is not `Fintype`.
+The `[Fintype (ConcreteState Reg)]` hypothesis applies to ISA instantiations
+with finite state, or to register-only quotient constructions where memory
+is factored out as external observation (staging boundary). -/
+
+/-- Orbit cycling implies branch-class stability: if every orbit position beyond K
+    equals some earlier position, the same live branch class works at both.
+    This is the core pigeonhole step, independent of how orbit cycling is obtained. -/
+theorem branchClassesStable_of_orbit_cycling
+    (loop : VexLoopSummary Reg)
+    (bodyPaths : Finset (List (Block Reg)))
+    (closure : Finset (SymPC Reg)) (K : Nat)
+    (hstep : BodyPathStepRealizable loop bodyPaths closure)
+    (hcycle : ∀ s, ∀ n, K < n →
+      ∃ m, m ≤ K ∧ loop.bodyEffect^[n] s = loop.bodyEffect^[m] s) :
+    BranchClassesStable loop bodyPaths closure K := by
+  intro s n hn
+  obtain ⟨m, hm, heq⟩ := hcycle s n hn
+  obtain ⟨cls, hcls⟩ := hstep (loop.bodyEffect^[n] s)
+  refine ⟨cls, m, hm, hcls, ?_⟩
+  rwa [← heq]
+
+set_option linter.unusedSectionVars false in
+/-- Finite-state orbit cycling: if `ConcreteState Reg` is finite, bodyEffect's orbit
+    eventually revisits earlier states. Bridges `finite_effect_convergence` to the
+    orbit cycling hypothesis. -/
+theorem orbit_cycling_of_fintype
+    [Fintype (ConcreteState Reg)]
+    (loop : VexLoopSummary Reg) :
+    ∃ K, ∀ s, ∀ n, K < n →
+      ∃ m, m ≤ K ∧ loop.bodyEffect^[n] s = loop.bodyEffect^[m] s := by
+  obtain ⟨maxIter, hmax⟩ := finite_effect_convergence loop.bodyEffect
+  refine ⟨maxIter, fun s n hn => ?_⟩
+  obtain ⟨k, hk, heq⟩ := Finset.mem_image.mp (hmax n (by omega) s)
+  exact ⟨k, by { have := Finset.mem_range.mp hk; omega }, heq.symm⟩
+
+/-- Pigeonhole stabilization: if the concrete state space is finite and every body step
+    has a branch-path representative, then branch-class stability holds automatically.
+    Composes `orbit_cycling_of_fintype` with `branchClassesStable_of_orbit_cycling`. -/
+theorem branchClassesStable_of_fintype
+    [Fintype (ConcreteState Reg)]
+    (loop : VexLoopSummary Reg)
+    (bodyPaths : Finset (List (Block Reg)))
+    (closure : Finset (SymPC Reg))
+    (hstep : BodyPathStepRealizable loop bodyPaths closure) :
+    ∃ K, BranchClassesStable loop bodyPaths closure K := by
+  obtain ⟨K, hcycle⟩ := orbit_cycling_of_fintype loop
+  exact ⟨K, branchClassesStable_of_orbit_cycling loop bodyPaths closure K hstep hcycle⟩
+
 end BranchClassCompression
 
 
