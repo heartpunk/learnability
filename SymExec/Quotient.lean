@@ -467,6 +467,159 @@ theorem abstractState_card_bound (model : Finset (Branch Sub PC)) :
 end Finiteness
 
 
+/-! ## Step 4d': Finiteness for Explicit Closures
+
+The same finiteness bound applies to quotients over explicit closures,
+without requiring `[Fintype PC]`. This generalizes Step 4d to the
+explicit-closure setting needed for STS1 when `PC` is infinite. -/
+
+section FinitenessWith
+
+variable {Sub PC State : Type*} [DecidableEq PC]
+  (isa : SymbolicISA Sub PC State)
+  [h_dec : ∀ (s : State) (φ : PC), Decidable (isa.satisfies s φ)]
+
+/-- Lift signature to the quotient over an explicit closure. -/
+noncomputable def quotientSignatureWith (closure : Finset PC) :
+    Quotient (pcSetoidWith isa closure) → Finset PC :=
+  Quotient.lift (pcSignatureWith isa closure)
+    (fun _ _ h => pcSignature_eq_of_equivWith isa h)
+
+/-- The quotient signature over an explicit closure is injective. -/
+theorem quotientSignatureWith_injective (closure : Finset PC) :
+    Function.Injective (quotientSignatureWith isa closure) := by
+  intro q₁ q₂ h
+  obtain ⟨s₁, rfl⟩ := Quotient.exists_rep q₁
+  obtain ⟨s₂, rfl⟩ := Quotient.exists_rep q₂
+  apply Quotient.sound
+  exact equiv_of_pcSignature_eqWith isa h
+
+/-- Injection into the powerset of the explicit closure. -/
+noncomputable def quotientSignaturePowWith (closure : Finset PC) :
+    Quotient (pcSetoidWith isa closure) → ↥closure.powerset :=
+  fun q => ⟨quotientSignatureWith isa closure q, Finset.mem_powerset.mpr (by
+    obtain ⟨s, rfl⟩ := Quotient.exists_rep q
+    exact Finset.filter_subset _ _)⟩
+
+theorem quotientSignaturePowWith_injective (closure : Finset PC) :
+    Function.Injective (quotientSignaturePowWith isa closure) := by
+  intro q₁ q₂ h
+  exact quotientSignatureWith_injective isa closure (congr_arg Subtype.val h)
+
+/-- The quotient over an explicit closure has finitely many states. -/
+noncomputable instance abstractStateWithFintype (closure : Finset PC) :
+    Fintype (Quotient (pcSetoidWith isa closure)) :=
+  Fintype.ofInjective (quotientSignaturePowWith isa closure)
+    (quotientSignaturePowWith_injective isa closure)
+
+/-- The number of abstract states over an explicit closure is at most 2^|closure|. -/
+theorem abstractStateWith_card_bound (closure : Finset PC) :
+    Fintype.card (Quotient (pcSetoidWith isa closure)) ≤ 2 ^ closure.card := by
+  calc Fintype.card (Quotient (pcSetoidWith isa closure))
+      ≤ Fintype.card ↥closure.powerset :=
+        Fintype.card_le_of_injective (quotientSignaturePowWith isa closure)
+          (quotientSignaturePowWith_injective isa closure)
+    _ = closure.powerset.card := Fintype.card_coe _
+    _ = 2 ^ closure.card := Finset.card_powerset _
+
+end FinitenessWith
+
+
+/-! ## Step 4c': Abstract System with Explicit Closures
+
+The abstract transition system and cross-system bisimulation generalized
+to work with an explicit finite closure, without requiring `[Fintype PC]`.
+
+This is the STS1 result (HMR05 Theorem 1A): a sound and complete branch
+model induces a finite abstract transition system that is cross-bisimilar
+to the concrete system. The abstract state space has at most 2^|closure|
+states (by `abstractStateWith_card_bound`).
+
+The closure hypotheses (`h_contains`, `h_closed`) replace the global
+`[Fintype PC]` requirement. They say: model PCs lie in the closure, and
+the closure is closed under lifting through model substitutions. -/
+
+section AbstractSystemWith
+
+variable {Sub PC State : Type*} [DecidableEq PC]
+  (isa : SymbolicISA Sub PC State)
+
+/-- Abstract transition over an explicit closure. -/
+def abstractBehaviorWith (model : Finset (Branch Sub PC)) (closure : Finset PC)
+    (q₁ q₂ : Quotient (pcSetoidWith isa closure)) : Prop :=
+  ∃ s₁ s₂ : State,
+    Quotient.mk (pcSetoidWith isa closure) s₁ = q₁ ∧
+    Quotient.mk (pcSetoidWith isa closure) s₂ = q₂ ∧
+    branchBehavior isa (↑model : Set (Branch Sub PC)) s₁ s₂
+
+/-- Forward direction over explicit closure: concrete → abstract. -/
+theorem quotient_forwardWith (model : Finset (Branch Sub PC)) (closure : Finset PC)
+    (behavior : State → State → Prop)
+    (h_complete : BranchModel.Complete isa (↑model : Set (Branch Sub PC)) behavior)
+    (s s' : State) (h : behavior s s') :
+    abstractBehaviorWith isa model closure
+      (Quotient.mk (pcSetoidWith isa closure) s)
+      (Quotient.mk (pcSetoidWith isa closure) s') := by
+  obtain ⟨b, hb, hsat, heval⟩ := h_complete s s' h
+  exact ⟨s, s', rfl, rfl, ⟨b, hb, hsat, heval⟩⟩
+
+/-- Backward direction over explicit closure: abstract from [s] → concrete from s.
+
+    Given `abstractBehaviorWith [s] a'`, we get witnesses `s₁, s₂` with
+    `[s₁] = [s]` (so `s ≈ s₁`), `[s₂] = a'`, and a branch `b` connecting them.
+    By `pcEquiv_branch_firesWith`, `b` fires from `s` too.
+    By soundness, `behavior s (eval_sub b.sub s)`.
+    By `pcEquiv_eval_subWith`, `eval_sub b.sub s ≈ eval_sub b.sub s₁ = s₂`,
+    so `[eval s] = a'`. -/
+theorem quotient_backwardWith (model : Finset (Branch Sub PC)) (closure : Finset PC)
+    (h_contains : ∀ b ∈ model, b.pc ∈ closure)
+    (h_closed : ∀ b ∈ model, ∀ φ ∈ closure, isa.pc_lift b.sub φ ∈ closure)
+    (behavior : State → State → Prop)
+    (h_sound : BranchModel.Sound isa (↑model : Set (Branch Sub PC)) behavior)
+    (s : State) (a' : Quotient (pcSetoidWith isa closure))
+    (h : abstractBehaviorWith isa model closure
+      (Quotient.mk (pcSetoidWith isa closure) s) a') :
+    ∃ s', behavior s s' ∧ Quotient.mk (pcSetoidWith isa closure) s' = a' := by
+  obtain ⟨s₁, s₂, h_eq1, h_eq2, b, hb, hsat1, heval⟩ := h
+  have h_equiv : (pcSetoidWith isa closure).r s s₁ :=
+    Quotient.exact h_eq1.symm
+  have h_fires_s : isa.satisfies s b.pc :=
+    pcEquiv_branch_firesWith isa (h_contains b (Finset.mem_coe.mp hb))
+      (pcEquiv_symm isa h_equiv) hsat1
+  have h_beh : behavior s (isa.eval_sub b.sub s) :=
+    h_sound b hb s h_fires_s
+  have h_succ_equiv : (pcSetoidWith isa closure).r
+      (isa.eval_sub b.sub s) (isa.eval_sub b.sub s₁) :=
+    pcEquiv_eval_subWith isa
+      (fun φ hφ => h_closed b (Finset.mem_coe.mp hb) φ hφ) h_equiv
+  refine ⟨isa.eval_sub b.sub s, h_beh, ?_⟩
+  rw [← h_eq2]
+  apply Quotient.sound
+  show (pcSetoidWith isa closure).r (isa.eval_sub b.sub s) s₂
+  rw [← heval]
+  exact h_succ_equiv
+
+/-- The quotient map is a cross-system bisimulation over an explicit closure.
+
+    Combined with `abstractStateWith_card_bound`, this is the STS1 result
+    (HMR05 Theorem 1A): the concrete transition system has a finite
+    bisimilarity quotient with at most 2^|closure| states. -/
+theorem quotient_bisimulationWith (model : Finset (Branch Sub PC)) (closure : Finset PC)
+    (h_contains : ∀ b ∈ model, b.pc ∈ closure)
+    (h_closed : ∀ b ∈ model, ∀ φ ∈ closure, isa.pc_lift b.sub φ ∈ closure)
+    (behavior : State → State → Prop)
+    (h_sound : BranchModel.Sound isa (↑model : Set (Branch Sub PC)) behavior)
+    (h_complete : BranchModel.Complete isa (↑model : Set (Branch Sub PC)) behavior) :
+    CrossBisimulation
+      (Quotient.mk (pcSetoidWith isa closure))
+      behavior
+      (abstractBehaviorWith isa model closure) where
+  forward := quotient_forwardWith isa model closure behavior h_complete
+  backward := quotient_backwardWith isa model closure h_contains h_closed behavior h_sound
+
+end AbstractSystemWith
+
+
 /-! ## Step 4e: End-to-End Theorem
 
 Combining Phase 2 convergence with Phase 4 quotient bisimulation:
