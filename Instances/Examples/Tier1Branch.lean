@@ -1,0 +1,132 @@
+import SymExec.Refinement
+import Instances.Examples.Tier0Increment
+import Instances.ISAs.VexWitness
+
+set_option autoImplicit false
+set_option relaxedAutoImplicit false
+
+open VexISA
+
+namespace Instances.Examples.Tier1Branch
+
+abbrev Reg := Instances.Examples.ToyReg
+
+/-- Minimal two-path block: branch on `r1` so the closure stays tiny under `SemClosed`. -/
+def block : Block Reg :=
+  { stmts := [Stmt.put .r0 (.add64 (.get .r0) (.const 1)),
+              Stmt.exit (.eq64 (.get .r1) (.const 0)) 0x1000]
+    ip_reg := .r1
+    next := 0 }
+
+def expectedTaken : Summary Reg :=
+  { sub := SymSub.write (SymSub.write SymSub.id .r0 (.add64 (.reg .r0) (.const 1))) .r1 (.const 0x1000)
+    pc := .and .true (.eq (.reg .r1) (.const 0)) }
+
+def expectedContinue : Summary Reg :=
+  { sub := SymSub.write (SymSub.write SymSub.id .r0 (.add64 (.reg .r0) (.const 1))) .r1 (.const 0)
+    pc := .and .true (.not (.eq (.reg .r1) (.const 0))) }
+
+def expectedPathTaken : Summary Reg :=
+  Summary.compose expectedTaken Summary.id
+
+def expectedPathContinue : Summary Reg :=
+  Summary.compose expectedContinue Summary.id
+
+def bodyPaths : Finset (List (Block Reg)) := {[block]}
+
+def closure : Finset (SymPC Reg) := {expectedPathTaken.pc, expectedPathContinue.pc}
+
+def behavior (s s' : ConcreteState Reg) : Prop :=
+  s' ∈ execBlockPath [block] s
+
+private theorem lowerBlockSummaries_eq_expected :
+    lowerBlockSummaries block = {expectedTaken, expectedContinue} := by
+  native_decide
+
+private theorem bodyBranchModel_eq_expected :
+    bodyBranchModel bodyPaths = {summaryAsBranch expectedPathTaken, summaryAsBranch expectedPathContinue} := by
+  native_decide
+
+example : lowerBlockSummaries block = {expectedTaken, expectedContinue} :=
+  lowerBlockSummaries_eq_expected
+
+example : bodyBranchModel bodyPaths = {summaryAsBranch expectedPathTaken, summaryAsBranch expectedPathContinue} :=
+  bodyBranchModel_eq_expected
+
+private theorem h_contains : ∀ b ∈ bodyBranchModel bodyPaths, b.pc ∈ closure := by
+  intro b hb
+  have hb' : b = summaryAsBranch expectedPathTaken ∨ b = summaryAsBranch expectedPathContinue := by
+    simpa [bodyBranchModel_eq_expected, Finset.mem_insert, Finset.mem_singleton] using hb
+  rcases hb' with rfl | rfl <;> simp [closure]
+
+private theorem taken_taken_lift_pc :
+    (vexSummaryISA Reg).pc_lift expectedPathTaken.sub expectedPathTaken.pc =
+      .and (.and .true (.eq (.const 0x1000) (.const 0))) .true := by
+  native_decide
+
+private theorem taken_continue_lift_pc :
+    (vexSummaryISA Reg).pc_lift expectedPathTaken.sub expectedPathContinue.pc =
+      .and (.and .true (.not (.eq (.const 0x1000) (.const 0)))) .true := by
+  native_decide
+
+private theorem continue_taken_lift_pc :
+    (vexSummaryISA Reg).pc_lift expectedPathContinue.sub expectedPathTaken.pc =
+      .and (.and .true (.eq (.const 0) (.const 0))) .true := by
+  native_decide
+
+private theorem continue_continue_lift_pc :
+    (vexSummaryISA Reg).pc_lift expectedPathContinue.sub expectedPathContinue.pc =
+      .and (.and .true (.not (.eq (.const 0) (.const 0)))) .true := by
+  native_decide
+
+private theorem h_semClosed :
+    SemClosed (vexSummaryISA Reg) (bodyBranchModel bodyPaths) closure := by
+  intro b hb φ hφ s₁ s₂ _hEquiv
+  have hb' : b = summaryAsBranch expectedPathTaken ∨ b = summaryAsBranch expectedPathContinue := by
+    simpa [bodyBranchModel_eq_expected, Finset.mem_insert, Finset.mem_singleton] using hb
+  have hφ' : φ = expectedPathTaken.pc ∨ φ = expectedPathContinue.pc := by
+    simpa [closure, Finset.mem_insert, Finset.mem_singleton] using hφ
+  rcases hb' with rfl | rfl
+  · rcases hφ' with rfl | rfl
+    · simpa [vexSummaryISA, satisfiesSymPC] using congrArg (fun pc => evalSymPC s₁ pc = evalSymPC s₂ pc) taken_taken_lift_pc
+    · simpa [vexSummaryISA, satisfiesSymPC] using congrArg (fun pc => evalSymPC s₁ pc = evalSymPC s₂ pc) taken_continue_lift_pc
+  · rcases hφ' with rfl | rfl
+    · simpa [vexSummaryISA, satisfiesSymPC] using congrArg (fun pc => evalSymPC s₁ pc = evalSymPC s₂ pc) continue_taken_lift_pc
+    · simpa [vexSummaryISA, satisfiesSymPC] using congrArg (fun pc => evalSymPC s₁ pc = evalSymPC s₂ pc) continue_continue_lift_pc
+
+private theorem h_sound :
+    BranchModel.Sound (vexSummaryISA Reg)
+      (↑(bodyBranchModel bodyPaths) : Set (Branch (SymSub Reg) (SymPC Reg)))
+      behavior := by
+  intro b hb s hsat
+  rcases Finset.mem_image.mp (by simpa [bodyPaths, bodyBranchModel, lowerPathFamilySummaries] using hb) with ⟨summary, hSummary, rfl⟩
+  have hEnabled : Summary.enabled summary s := by
+    simpa [summaryAsBranch, vexSummaryISA, satisfiesSymPC] using hsat
+  have hMemSucc : Summary.apply summary s ∈ summarySuccs (lowerBlockPathSummaries [block]) s := by
+    exact (mem_summarySuccs (lowerBlockPathSummaries [block]) s (Summary.apply summary s)).2 ⟨summary, hSummary, hEnabled, rfl⟩
+  simpa [behavior, summaryAsBranch, vexSummaryISA, summarySuccs_lowerBlockPathSummaries_eq_execBlockPath [block] s] using hMemSucc
+
+private theorem h_complete :
+    BranchModel.Complete (vexSummaryISA Reg)
+      (↑(bodyBranchModel bodyPaths) : Set (Branch (SymSub Reg) (SymPC Reg)))
+      behavior := by
+  intro s s' hs'
+  have hMemSucc : s' ∈ summarySuccs (lowerBlockPathSummaries [block]) s := by
+    simpa [behavior, summarySuccs_lowerBlockPathSummaries_eq_execBlockPath [block] s] using hs'
+  rcases (mem_summarySuccs (lowerBlockPathSummaries [block]) s s').1 hMemSucc with ⟨summary, hSummary, hEnabled, hApply⟩
+  refine ⟨summaryAsBranch summary, ?_, ?_, ?_⟩
+  · exact Finset.mem_coe.mpr <| by
+      simpa [bodyPaths, bodyBranchModel, lowerPathFamilySummaries] using
+        (Finset.mem_image.mpr ⟨summary, hSummary, rfl⟩ : summaryAsBranch summary ∈ (lowerBlockPathSummaries [block]).image summaryAsBranch)
+  · simpa [summaryAsBranch, vexSummaryISA, satisfiesSymPC] using hEnabled
+  · simpa [summaryAsBranch, vexSummaryISA] using hApply
+
+example :
+    CrossBisimulation
+      (Quotient.mk (pcSetoidWith (vexSummaryISA Reg) closure))
+      behavior
+      (abstractBehaviorWith (vexSummaryISA Reg) (bodyBranchModel bodyPaths) closure) := by
+  exact quotient_bisimulationSem (vexSummaryISA Reg)
+    (bodyBranchModel bodyPaths) closure h_contains h_semClosed behavior h_sound h_complete
+
+end Instances.Examples.Tier1Branch

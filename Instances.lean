@@ -28,6 +28,7 @@ import Instances.Examples.VexMovMemRdiRaxExample
 import Instances.Examples.VexMovMemRdiRaxFixture
 import Instances.Examples.VexStore64Example
 import Instances.Examples.Tier0Increment
+import Instances.Examples.Tier1Branch
 import Instances.ISAs.MachineISA
 import Instances.ISAs.VexAmd64
 import Instances.ISAs.VexSyntax
