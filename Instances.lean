@@ -32,6 +32,7 @@ import Instances.Examples.Tier1Branch
 import Instances.Examples.Tier2MemBranch
 import Instances.Examples.Tier3Dispatch
 import Instances.Examples.Tier3bStateMutation
+import Instances.Examples.Tier4PathFamily
 import Instances.ISAs.MachineISA
 import Instances.ISAs.VexAmd64
 import Instances.ISAs.VexSyntax
