@@ -36,6 +36,8 @@ import Instances.Examples.VexMovEcxEdiFixture
 import Instances.Examples.VexMovEaxEdiFixture
 import Instances.Examples.VexMovRaxMemRdiExample
 import Instances.Examples.VexMovRaxMemRdiFixture
+import Instances.Examples.VexMovsxEaxMemRdiExample
+import Instances.Examples.VexMovsxEaxMemRdiFixture
 import Instances.Examples.VexMovzxRaxMemRdiExample
 import Instances.Examples.VexMovzxRaxMemRdiFixture
 import Instances.Examples.VexMovMemRdiRaxExample

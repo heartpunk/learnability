@@ -146,6 +146,19 @@
       "watch_mem64le": ["0x20"]
     },
     {
+      "name": "amd64_movsx_eax_mem_rdi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "0fbe07",
+      "input_regs": {
+        "rdi": "0x20"
+      },
+      "input_mem64le": {
+        "0x20": "0x1122334455667780"
+      },
+      "watch_mem64le": ["0x20"]
+    },
+    {
       "name": "amd64_add_eax_edi",
       "arch": "amd64",
       "base": "0x400000",

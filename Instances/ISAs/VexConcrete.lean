@@ -24,6 +24,7 @@ def evalAmd64CalculateConditionZero
   | .tmp tmp => temps tmp
   | .narrow32 expr => mask32 (evalExpr state temps expr)
   | .zext64 expr => mask32 (evalExpr state temps expr)
+  | .sext8to32 expr => signExtend8to32 (evalExpr state temps expr)
   | .add32 lhs rhs => mask32 (evalExpr state temps lhs + evalExpr state temps rhs)
   | .add64 lhs rhs => evalExpr state temps lhs + evalExpr state temps rhs
   | .sub64 lhs rhs => evalExpr state temps lhs - evalExpr state temps rhs

@@ -42,6 +42,17 @@ example :
       evalSymExpr edgeState (lowerExpr SymSub.id SymTempEnv.empty zext64Edge) := by
   native_decide
 
+private def sext8to32NegativeEdge : Amd64Expr :=
+  .sext8to32 (.const 0x80)
+
+example : evalExpr edgeState emptyTemps sext8to32NegativeEdge = 0xFFFF_FF80 := by
+  native_decide
+
+example :
+    evalExpr edgeState emptyTemps sext8to32NegativeEdge =
+      evalSymExpr edgeState (lowerExpr SymSub.id SymTempEnv.empty sext8to32NegativeEdge) := by
+  native_decide
+
 private def add32OverflowEdge : Amd64Expr :=
   .add32 (.const 0xFFFF_FFFF) (.const 0x2)
 

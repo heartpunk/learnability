@@ -109,6 +109,7 @@ private theorem lowerExpr_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | tmp tmp => simp [lowerExpr, hTemps]
   | narrow32 expr ih => simp [evalExpr, lowerExpr, ih, mask32]
   | zext64 expr ih => simp [evalExpr, lowerExpr, ih, mask32]
+  | sext8to32 expr ih => simp [evalExpr, lowerExpr, ih, signExtend8to32]
   | add32 lhs rhs ihL ihR =>
       simp [evalExpr, lowerExpr, ihL, ihR, mask32]
   | add64 lhs rhs ihL ihR =>

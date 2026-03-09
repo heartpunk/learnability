@@ -46,6 +46,7 @@ def lowerExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .tmp tmp => temps tmp
   | .narrow32 expr => .low32 (lowerExpr sub temps expr)
   | .zext64 expr => .uext32 (lowerExpr sub temps expr)
+  | .sext8to32 expr => .sext8to32 (lowerExpr sub temps expr)
   | .add32 lhs rhs => .uext32 (.add64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs))
   | .add64 lhs rhs => .add64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .sub64 lhs rhs => .sub64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)

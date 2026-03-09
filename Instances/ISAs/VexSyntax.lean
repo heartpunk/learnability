@@ -39,6 +39,17 @@ end Width
 def mask32 (value : UInt64) : UInt64 :=
   value &&& 0xFFFF_FFFF
 
+/--
+Interpret the low 8 bits of `value` as a signed byte, sign-extend that byte to 32 bits, then
+store the resulting 32-bit bit-pattern in `UInt64` by clearing bits 63:32.
+-/
+@[simp] def signExtend8to32 (value : UInt64) : UInt64 :=
+  let low := truncate .w8 value
+  if low &&& 0x80 = 0 then
+    low
+  else
+    mask32 (low ||| 0xFFFF_FF00)
+
 /-- Make 64-bit shift-count reduction explicit instead of relying on `UInt64.shift*`. -/
 @[simp] def maskShift64 (amount : UInt64) : UInt64 :=
   amount &&& 0x3F
@@ -129,6 +140,11 @@ inductive Expr (Reg : Type) where
   any high bits above bit 31.
   -/
   | zext64 : Expr Reg → Expr Reg
+  /--
+  Interpret the low 8 bits of the input as a signed byte, sign-extend that byte to 32 bits, then
+  return the resulting 32-bit bit-pattern as a zero-extended `UInt64`.
+  -/
+  | sext8to32 : Expr Reg → Expr Reg
   /--
   Add the low 32 bits of both operands modulo `2^32`, then return the wrapped result as a
   zero-extended `UInt64`.
