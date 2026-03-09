@@ -1,0 +1,109 @@
+{
+  "name": "amd64_shr_rax_4",
+  "arch": "amd64",
+  "base": 4194304,
+  "bytes": [
+    72,
+    193,
+    232,
+    4
+  ],
+  "vex_pretty": "IRSB {\n   t0:Ity_I64 t1:Ity_I64 t2:Ity_I64 t3:Ity_I64 t4:Ity_I64 t5:Ity_I8 t6:Ity_I1 t7:Ity_I64 t8:Ity_I8 t9:Ity_I8 t10:Ity_I64 t11:Ity_I64 t12:Ity_I64 t13:Ity_I64 t14:Ity_I64 t15:Ity_I64 t16:Ity_I64\n\n   00 | ------ IMark(0x400000, 4, 0) ------\n   01 | t0 = GET:I64(rax)\n   02 | t3 = Shr64(t0,0x04)\n   03 | t7 = Shr64(t0,0x03)\n   04 | PUT(cc_op) = 0x0000000000000024\n   05 | PUT(cc_dep1) = t3\n   06 | PUT(cc_dep2) = t7\n   07 | PUT(rax) = t3\n   NEXT: PUT(rip) = 0x0000000000400004; Ijk_Boring\n}",
+  "block": {
+    "stmts": [
+      {
+        "tag": "wrtmp",
+        "tmp": 0,
+        "expr": {
+          "tag": "get",
+          "reg": "rax"
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 3,
+        "expr": {
+          "tag": "shr64",
+          "lhs": {
+            "tag": "tmp",
+            "tmp": 0
+          },
+          "rhs": {
+            "tag": "const",
+            "value": 4
+          }
+        }
+      },
+      {
+        "tag": "wrtmp",
+        "tmp": 7,
+        "expr": {
+          "tag": "shr64",
+          "lhs": {
+            "tag": "tmp",
+            "tmp": 0
+          },
+          "rhs": {
+            "tag": "const",
+            "value": 3
+          }
+        }
+      },
+      {
+        "tag": "put",
+        "reg": "cc_op",
+        "expr": {
+          "tag": "const",
+          "value": 36
+        }
+      },
+      {
+        "tag": "put",
+        "reg": "cc_dep1",
+        "expr": {
+          "tag": "tmp",
+          "tmp": 3
+        }
+      },
+      {
+        "tag": "put",
+        "reg": "cc_dep2",
+        "expr": {
+          "tag": "tmp",
+          "tmp": 7
+        }
+      },
+      {
+        "tag": "put",
+        "reg": "rax",
+        "expr": {
+          "tag": "tmp",
+          "tmp": 3
+        }
+      }
+    ],
+    "next": 4194308
+  },
+  "input": {
+    "rax": 18364758544493064720,
+    "rcx": 0,
+    "rdi": 0,
+    "rip": 4194304,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
+    "mem64le": []
+  },
+  "expected": {
+    "rax": 1147797409030816545,
+    "rcx": 0,
+    "rdi": 0,
+    "rip": 4194308,
+    "cc_op": 36,
+    "cc_dep1": 1147797409030816545,
+    "cc_dep2": 2295594818061633090,
+    "cc_ndep": 0,
+    "mem64le": []
+  }
+}

@@ -134,8 +134,8 @@ mutual
   | .xor64 lhs rhs => evalSymExpr state lhs ^^^ evalSymExpr state rhs
   | .and64 lhs rhs => evalSymExpr state lhs &&& evalSymExpr state rhs
   | .or64 lhs rhs => evalSymExpr state lhs ||| evalSymExpr state rhs
-  | .shl64 lhs rhs => UInt64.shiftLeft (evalSymExpr state lhs) (evalSymExpr state rhs)
-  | .shr64 lhs rhs => UInt64.shiftRight (evalSymExpr state lhs) (evalSymExpr state rhs)
+  | .shl64 lhs rhs => shiftLeft64 (evalSymExpr state lhs) (evalSymExpr state rhs)
+  | .shr64 lhs rhs => shiftRight64 (evalSymExpr state lhs) (evalSymExpr state rhs)
   | .load64 mem addr => ByteMem.read64le (evalSymMem state mem) (evalSymExpr state addr)
 
 @[simp] def evalSymMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]

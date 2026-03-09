@@ -9,6 +9,16 @@ namespace VexISA
 def mask32 (value : UInt64) : UInt64 :=
   value &&& 0xFFFF_FFFF
 
+/-- Make 64-bit shift-count reduction explicit instead of relying on `UInt64.shift*`. -/
+@[simp] def maskShift64 (amount : UInt64) : UInt64 :=
+  amount &&& 0x3F
+
+@[simp] def shiftLeft64 (value amount : UInt64) : UInt64 :=
+  UInt64.shiftLeft value (maskShift64 amount)
+
+@[simp] def shiftRight64 (value amount : UInt64) : UInt64 :=
+  UInt64.shiftRight value (maskShift64 amount)
+
 abbrev ByteCell := UInt64 × UInt8
 abbrev ByteMem := List ByteCell
 

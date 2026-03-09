@@ -96,6 +96,64 @@
       }
     },
     {
+      "name": "amd64_sub_rax_rdi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "4829f8",
+      "input_regs": {
+        "rax": "0x10",
+        "rdi": "0x3"
+      }
+    },
+    {
+      "name": "amd64_xor_rax_rdi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "4831f8",
+      "input_regs": {
+        "rax": "0xff00ff00aa55aa55",
+        "rdi": "0x0f0f0f0f12345678"
+      }
+    },
+    {
+      "name": "amd64_and_rax_rdi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "4821f8",
+      "input_regs": {
+        "rax": "0xff00ff00aa55aa55",
+        "rdi": "0x0f0f0f0f12345678"
+      }
+    },
+    {
+      "name": "amd64_or_rax_rdi",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "4809f8",
+      "input_regs": {
+        "rax": "0xff00ff00aa55aa55",
+        "rdi": "0x0f0f0f0f12345678"
+      }
+    },
+    {
+      "name": "amd64_shl_rax_3",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "48c1e003",
+      "input_regs": {
+        "rax": "0x1122334455667788"
+      }
+    },
+    {
+      "name": "amd64_shr_rax_4",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "48c1e804",
+      "input_regs": {
+        "rax": "0xfedcba9876543210"
+      }
+    },
+    {
       "name": "amd64_add_eax_edi_jz_taken",
       "arch": "amd64",
       "base": "0x400000",
@@ -166,6 +224,46 @@
         "cc_dep1": "0x2",
         "cc_dep2": "0x3",
         "cc_ndep": "0x0"
+      }
+    },
+    {
+      "name": "amd64_cmp_rax_rdi_jb_taken",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "4839f87202",
+      "input_regs": {
+        "rax": "0x2",
+        "rdi": "0x3"
+      }
+    },
+    {
+      "name": "amd64_cmp_rax_rdi_jb_fallthrough",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "4839f87202",
+      "input_regs": {
+        "rax": "0x3",
+        "rdi": "0x3"
+      }
+    },
+    {
+      "name": "amd64_cmp_rax_rdi_jbe_taken",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "4839f87602",
+      "input_regs": {
+        "rax": "0x3",
+        "rdi": "0x3"
+      }
+    },
+    {
+      "name": "amd64_cmp_rax_rdi_jbe_fallthrough",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "4839f87602",
+      "input_regs": {
+        "rax": "0x4",
+        "rdi": "0x3"
       }
     },
     {

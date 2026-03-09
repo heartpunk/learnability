@@ -73,12 +73,21 @@ def expr_to_data(arch, expr):
                 "lhs": expr_to_data(arch, expr.args[0]),
                 "rhs": expr_to_data(arch, expr.args[1]),
             }
-        if expr.op != "Iop_Add64":
+        binop_tags = {
+            "Iop_Add64": "add64",
+            "Iop_Sub64": "sub64",
+            "Iop_Xor64": "xor64",
+            "Iop_And64": "and64",
+            "Iop_Or64": "or64",
+            "Iop_Shl64": "shl64",
+            "Iop_Shr64": "shr64",
+        }
+        if expr.op not in binop_tags:
             raise ValueError(f"unsupported binop: {expr.op}")
         if len(expr.args) != 2:
             raise ValueError(f"unexpected arg count for {expr.op}: {len(expr.args)}")
         return {
-            "tag": "add64",
+            "tag": binop_tags[expr.op],
             "lhs": expr_to_data(arch, expr.args[0]),
             "rhs": expr_to_data(arch, expr.args[1]),
         }
@@ -101,12 +110,17 @@ def cond_binop_to_data(arch, expr):
                     "expr": {"tag": "narrow32", "expr": expr_to_data(arch, expr.args[1])},
                 },
             }
-        if expr.op != "Iop_CmpEQ64":
+        cond_tags = {
+            "Iop_CmpEQ64": "eq64",
+            "Iop_CmpLT64U": "lt64",
+            "Iop_CmpLE64U": "le64",
+        }
+        if expr.op not in cond_tags:
             raise ValueError(f"unsupported cond binop: {expr.op}")
         if len(expr.args) != 2:
             raise ValueError(f"unexpected arg count for {expr.op}: {len(expr.args)}")
         return {
-            "tag": "eq64",
+            "tag": cond_tags[expr.op],
             "lhs": expr_to_data(arch, expr.args[0]),
             "rhs": expr_to_data(arch, expr.args[1]),
         }
@@ -149,10 +163,12 @@ def stmt_to_data(arch, stmt, tmp_conds):
     if isinstance(stmt, pyvex.stmt.IMark):
         return None
     if isinstance(stmt, pyvex.stmt.WrTmp):
-        if isinstance(stmt.data, pyvex.expr.Binop) and stmt.data.op == "Iop_CmpEQ64":
-            tmp_conds[stmt.tmp] = cond_binop_to_data(arch, stmt.data)
-            return None
-        if isinstance(stmt.data, pyvex.expr.Binop) and stmt.data.op == "Iop_CmpEQ32":
+        if isinstance(stmt.data, pyvex.expr.Binop) and stmt.data.op in (
+            "Iop_CmpEQ64",
+            "Iop_CmpEQ32",
+            "Iop_CmpLT64U",
+            "Iop_CmpLE64U",
+        ):
             tmp_conds[stmt.tmp] = cond_binop_to_data(arch, stmt.data)
             return None
         if isinstance(stmt.data, pyvex.expr.RdTmp) and stmt.data.tmp in tmp_conds:
@@ -204,8 +220,8 @@ def lean_expr(expr: dict) -> str:
         return f".add32 ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
     if tag == "load64":
         return f".load64 ({lean_expr(expr['addr'])})"
-    if tag == "add64":
-        return f".add64 ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
+    if tag in ("add64", "sub64", "xor64", "and64", "or64", "shl64", "shr64"):
+        return f".{tag} ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
     raise ValueError(f"unsupported lean expr tag: {tag}")
 
 
@@ -224,8 +240,8 @@ def lean_stmt(stmt: dict) -> str:
 
 def lean_cond(cond: dict) -> str:
     tag = cond["tag"]
-    if tag == "eq64":
-        return f".eq64 ({lean_expr(cond['lhs'])}) ({lean_expr(cond['rhs'])})"
+    if tag in ("eq64", "lt64", "le64"):
+        return f".{tag} ({lean_expr(cond['lhs'])}) ({lean_expr(cond['rhs'])})"
     if tag == "amd64CalculateCondition":
         return (
             f".amd64CalculateCondition 0x{cond['code']:x} "
