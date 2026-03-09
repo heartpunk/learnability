@@ -45,6 +45,30 @@ def reg_name(arch, offset: int) -> str:
     return arch.translate_register_name(offset)
 
 
+def width_from_irty(ty: str) -> str:
+    mapping = {
+        "Ity_I8": "w8",
+        "Ity_I16": "w16",
+        "Ity_I32": "w32",
+        "Ity_I64": "w64",
+    }
+    if ty not in mapping:
+        raise ValueError(f"unsupported width type: {ty}")
+    return mapping[ty]
+
+
+def width_from_bits(bits: int) -> str:
+    mapping = {
+        8: "w8",
+        16: "w16",
+        32: "w32",
+        64: "w64",
+    }
+    if bits not in mapping:
+        raise ValueError(f"unsupported width bits: {bits}")
+    return mapping[bits]
+
+
 def expr_to_data(arch, expr):
     if isinstance(expr, pyvex.expr.Get):
         return {"tag": "get", "reg": reg_name(arch, expr.offset)}
@@ -57,13 +81,17 @@ def expr_to_data(arch, expr):
             return {"tag": "narrow32", "expr": expr_to_data(arch, expr.args[0])}
         if expr.op == "Iop_32Uto64":
             return {"tag": "zext64", "expr": expr_to_data(arch, expr.args[0])}
+        if expr.op in ("Iop_8Uto32", "Iop_8Uto64", "Iop_16Uto32", "Iop_16Uto64"):
+            return expr_to_data(arch, expr.args[0])
         raise ValueError(f"unsupported unop: {expr.op}")
     if isinstance(expr, pyvex.expr.Load):
         if expr.end != "Iend_LE":
             raise ValueError(f"unsupported load endness: {expr.end}")
-        if expr.ty != "Ity_I64":
-            raise ValueError(f"unsupported load type: {expr.ty}")
-        return {"tag": "load64", "addr": expr_to_data(arch, expr.addr)}
+        return {
+            "tag": "load",
+            "width": width_from_irty(expr.ty),
+            "addr": expr_to_data(arch, expr.addr),
+        }
     if isinstance(expr, pyvex.expr.Binop):
         if expr.op == "Iop_Add32":
             if len(expr.args) != 2:
@@ -159,7 +187,7 @@ def cond_to_data(arch, expr, tmp_conds):
     raise ValueError(f"unsupported condition expr: {type(expr).__name__}")
 
 
-def stmt_to_data(arch, stmt, tmp_conds):
+def stmt_to_data(arch, tyenv, stmt, tmp_conds):
     if isinstance(stmt, pyvex.stmt.IMark):
         return None
     if isinstance(stmt, pyvex.stmt.WrTmp):
@@ -191,7 +219,8 @@ def stmt_to_data(arch, stmt, tmp_conds):
         if stmt.end != "Iend_LE":
             raise ValueError(f"unsupported store endness: {stmt.end}")
         return {
-            "tag": "store64",
+            "tag": "store",
+            "width": width_from_bits(stmt.data.result_size(tyenv)),
             "addr": expr_to_data(arch, stmt.addr),
             "value": expr_to_data(arch, stmt.data),
         }
@@ -218,8 +247,8 @@ def lean_expr(expr: dict) -> str:
         return f".zext64 ({lean_expr(expr['expr'])})"
     if tag == "add32":
         return f".add32 ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
-    if tag == "load64":
-        return f".load64 ({lean_expr(expr['addr'])})"
+    if tag == "load":
+        return f".load .{expr['width']} ({lean_expr(expr['addr'])})"
     if tag in ("add64", "sub64", "xor64", "and64", "or64", "shl64", "shr64"):
         return f".{tag} ({lean_expr(expr['lhs'])}) ({lean_expr(expr['rhs'])})"
     raise ValueError(f"unsupported lean expr tag: {tag}")
@@ -231,8 +260,8 @@ def lean_stmt(stmt: dict) -> str:
         return f".wrTmp {stmt['tmp']} ({lean_expr(stmt['expr'])})"
     if tag == "put":
         return f".put .{stmt['reg']} ({lean_expr(stmt['expr'])})"
-    if tag == "store64":
-        return f".store64 ({lean_expr(stmt['addr'])}) ({lean_expr(stmt['value'])})"
+    if tag == "store":
+        return f".store .{stmt['width']} ({lean_expr(stmt['addr'])}) ({lean_expr(stmt['value'])})"
     if tag == "exit":
         return f".exit ({lean_cond(stmt['cond'])}) 0x{stmt['target']:x}"
     raise ValueError(f"unsupported lean stmt tag: {tag}")
@@ -281,7 +310,7 @@ def build_fixture(
     statements = []
     tmp_conds = {}
     for stmt in irsb.statements:
-        data = stmt_to_data(arch, stmt, tmp_conds)
+        data = stmt_to_data(arch, irsb.tyenv, stmt, tmp_conds)
         if data is not None:
             statements.append(data)
     if not isinstance(irsb.next, pyvex.expr.Const):

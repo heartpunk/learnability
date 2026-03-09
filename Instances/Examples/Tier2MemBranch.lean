@@ -13,18 +13,18 @@ abbrev Reg := Instances.Examples.ToyReg
 
 /-- Minimal memory-sensitive two-path block: read from memory and branch on a magic byte. -/
 def block : Block Reg :=
-  { stmts := [Stmt.wrTmp 0 (.load64 (.get .r0)),
+  { stmts := [Stmt.wrTmp 0 (.load .w64 (.get .r0)),
               Stmt.exit (.eq64 (.tmp 0) (.const 0x50)) 0x2000]
     ip_reg := .r1
     next := 0 }
 
 def expectedTaken : Summary Reg :=
   { sub := SymSub.write SymSub.id .r1 (.const 0x2000)
-    pc := .and .true (.eq (.load64 .base (.reg .r0)) (.const 0x50)) }
+    pc := .and .true (.eq (.load .w64 .base (.reg .r0)) (.const 0x50)) }
 
 def expectedContinue : Summary Reg :=
   { sub := SymSub.write SymSub.id .r1 (.const 0)
-    pc := .and .true (.not (.eq (.load64 .base (.reg .r0)) (.const 0x50))) }
+    pc := .and .true (.not (.eq (.load .w64 .base (.reg .r0)) (.const 0x50))) }
 
 def expectedPathTaken : Summary Reg :=
   Summary.compose expectedTaken Summary.id

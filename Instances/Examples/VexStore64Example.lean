@@ -8,7 +8,7 @@ open VexISA
 
 def storeBlock : Amd64Block :=
   mkAmd64Block [
-      .store64 (.get .rdi) (.get .rax)
+      .store .w64 (.get .rdi) (.get .rax)
     ] 0x400003
 
 def storeInput : Amd64ConcreteState :=

@@ -6,6 +6,36 @@ set_option relaxedAutoImplicit false
 
 namespace VexISA
 
+inductive Width where
+  /-- 8-bit memory/register width. -/
+  | w8
+  /-- 16-bit memory/register width. -/
+  | w16
+  /-- 32-bit memory/register width. -/
+  | w32
+  /-- 64-bit memory/register width. -/
+  | w64
+  deriving DecidableEq, Repr
+
+namespace Width
+
+@[simp] def byteCount : Width → Nat
+  | .w8 => 1
+  | .w16 => 2
+  | .w32 => 4
+  | .w64 => 8
+
+@[simp] def mask : Width → UInt64
+  | .w8 => 0xFF
+  | .w16 => 0xFFFF
+  | .w32 => 0xFFFF_FFFF
+  | .w64 => 0xFFFF_FFFF_FFFF_FFFF
+
+end Width
+
+@[simp] def truncate (width : Width) (value : UInt64) : UInt64 :=
+  value &&& width.mask
+
 def mask32 (value : UInt64) : UInt64 :=
   value &&& 0xFFFF_FFFF
 
@@ -35,25 +65,55 @@ def ByteMem.eraseAddr (mem : ByteMem) (addr : UInt64) : ByteMem :=
 def ByteMem.writeByte (mem : ByteMem) (addr : UInt64) (value : UInt8) : ByteMem :=
   (addr, value) :: ByteMem.eraseAddr mem addr
 
-private def ByteMem.read64leAux (mem : ByteMem) (addr : UInt64) : Nat → UInt64
+private def ByteMem.readLEAux (mem : ByteMem) (addr : UInt64) : Nat → UInt64
   | 0 => 0
   | n + 1 =>
-      let rest := ByteMem.read64leAux mem addr n
+      let rest := ByteMem.readLEAux mem addr n
       let byte := UInt64.ofNat ((ByteMem.readByte mem (addr + UInt64.ofNat n)).toNat)
       rest ||| UInt64.shiftLeft byte (UInt64.ofNat (8 * n))
 
-def ByteMem.read64le (mem : ByteMem) (addr : UInt64) : UInt64 :=
-  ByteMem.read64leAux mem addr 8
+@[simp] def ByteMem.read8 (mem : ByteMem) (addr : UInt64) : UInt64 :=
+  UInt64.ofNat ((ByteMem.readByte mem addr).toNat)
 
-private def ByteMem.write64leAux (mem : ByteMem) (addr value : UInt64) : Nat → ByteMem
+def ByteMem.read16le (mem : ByteMem) (addr : UInt64) : UInt64 :=
+  ByteMem.readLEAux mem addr 2
+
+def ByteMem.read32le (mem : ByteMem) (addr : UInt64) : UInt64 :=
+  ByteMem.readLEAux mem addr 4
+
+def ByteMem.read64le (mem : ByteMem) (addr : UInt64) : UInt64 :=
+  ByteMem.readLEAux mem addr 8
+
+@[simp] def ByteMem.read : Width → ByteMem → UInt64 → UInt64
+  | .w8, mem, addr => ByteMem.read8 mem addr
+  | .w16, mem, addr => ByteMem.read16le mem addr
+  | .w32, mem, addr => ByteMem.read32le mem addr
+  | .w64, mem, addr => ByteMem.read64le mem addr
+
+private def ByteMem.writeLEAux (mem : ByteMem) (addr value : UInt64) : Nat → ByteMem
   | 0 => mem
   | n + 1 =>
       let shifted := UInt64.shiftRight value (UInt64.ofNat (8 * n))
       let byte := UInt8.ofNat (UInt64.toNat shifted)
-      ByteMem.write64leAux (ByteMem.writeByte mem (addr + UInt64.ofNat n) byte) addr value n
+      ByteMem.writeLEAux (ByteMem.writeByte mem (addr + UInt64.ofNat n) byte) addr value n
+
+def ByteMem.write8 (mem : ByteMem) (addr value : UInt64) : ByteMem :=
+  ByteMem.writeByte mem addr (UInt8.ofNat (UInt64.toNat value))
+
+def ByteMem.write16le (mem : ByteMem) (addr value : UInt64) : ByteMem :=
+  ByteMem.writeLEAux mem addr value 2
+
+def ByteMem.write32le (mem : ByteMem) (addr value : UInt64) : ByteMem :=
+  ByteMem.writeLEAux mem addr value 4
 
 def ByteMem.write64le (mem : ByteMem) (addr value : UInt64) : ByteMem :=
-  ByteMem.write64leAux mem addr value 8
+  ByteMem.writeLEAux mem addr value 8
+
+@[simp] def ByteMem.write : Width → ByteMem → UInt64 → UInt64 → ByteMem
+  | .w8, mem, addr, value => ByteMem.write8 mem addr value
+  | .w16, mem, addr, value => ByteMem.write16le mem addr value
+  | .w32, mem, addr, value => ByteMem.write32le mem addr value
+  | .w64, mem, addr, value => ByteMem.write64le mem addr value
 
 inductive Expr (Reg : Type) where
   /-- Literal 64-bit constant. -/
@@ -95,10 +155,11 @@ inductive Expr (Reg : Type) where
   -/
   | shr64 : Expr Reg → Expr Reg → Expr Reg
   /--
-  Read 8 bytes from memory in little-endian order at the computed address. Missing bytes default
-  to `0` because `ByteMem.readByte` zero-fills absent cells.
+  Read `width` bits from memory in little-endian order at the computed address, then zero-extend
+  the result to `UInt64`. Missing bytes default to `0` because `ByteMem.readByte` zero-fills
+  absent cells.
   -/
-  | load64 : Expr Reg → Expr Reg
+  | load : Width → Expr Reg → Expr Reg
   deriving DecidableEq, Repr
 
 namespace Expr
@@ -128,7 +189,11 @@ inductive Cond (Reg : Type) where
 inductive LinearStmt (Reg : Type) where
   | wrTmp : Nat → Expr Reg → LinearStmt Reg
   | put : Reg → Expr Reg → LinearStmt Reg
-  | store64 : Expr Reg → Expr Reg → LinearStmt Reg
+  /--
+  Store the low `width` bits of the value at the computed address in little-endian byte order.
+  Higher bytes in memory are left unchanged.
+  -/
+  | store : Width → Expr Reg → Expr Reg → LinearStmt Reg
   deriving DecidableEq, Repr
 
 inductive BranchStmt (Reg : Type) where
@@ -148,8 +213,8 @@ namespace Stmt
 @[match_pattern] abbrev put {Reg : Type} (reg : Reg) (expr : Expr Reg) : Stmt Reg :=
   .linear (.put reg expr)
 
-@[match_pattern] abbrev store64 {Reg : Type} (addr value : Expr Reg) : Stmt Reg :=
-  .linear (.store64 addr value)
+@[match_pattern] abbrev store {Reg : Type} (width : Width) (addr value : Expr Reg) : Stmt Reg :=
+  .linear (.store width addr value)
 
 @[match_pattern] abbrev exit {Reg : Type} (cond : Cond Reg) (target : UInt64) : Stmt Reg :=
   .branch (.exit cond target)

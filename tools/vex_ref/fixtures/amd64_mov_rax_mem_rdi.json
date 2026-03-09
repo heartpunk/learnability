@@ -22,7 +22,8 @@
         "tag": "wrtmp",
         "tmp": 1,
         "expr": {
-          "tag": "load64",
+          "tag": "load",
+          "width": "w64",
           "addr": {
             "tag": "tmp",
             "tmp": 0
@@ -45,6 +46,10 @@
     "rcx": 0,
     "rdi": 32,
     "rip": 4194304,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
     "mem64le": [
       {
         "addr": 32,
@@ -57,6 +62,10 @@
     "rcx": 0,
     "rdi": 32,
     "rip": 4194307,
+    "cc_op": 0,
+    "cc_dep1": 0,
+    "cc_dep2": 0,
+    "cc_ndep": 0,
     "mem64le": [
       {
         "addr": 32,

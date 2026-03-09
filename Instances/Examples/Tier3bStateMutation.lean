@@ -13,14 +13,14 @@ abbrev Reg := Instances.Examples.ToyReg
 
 /-- Fixed-address memory read, branch on a magic value, and advance a counter on fallthrough. -/
 def block : Block Reg :=
-  { stmts := [Stmt.wrTmp 0 (.load64 (.const 0x1000)),
+  { stmts := [Stmt.wrTmp 0 (.load .w64 (.const 0x1000)),
               Stmt.exit (.eq64 (.tmp 0) (.const 0x50)) 0x2000,
               Stmt.put .r0 (.add64 (.get .r0) (.const 1))]
     ip_reg := .r1
     next := 0 }
 
 def condP : SymPC Reg :=
-  .eq (.load64 .base (.const 0x1000)) (.const 0x50)
+  .eq (.load .w64 .base (.const 0x1000)) (.const 0x50)
 
 def expectedTaken : Summary Reg :=
   { sub := SymSub.write SymSub.id .r1 (.const 0x2000)

@@ -14,6 +14,12 @@ private def edgeState : Amd64ConcreteState :=
 
 private def emptyTemps : TempEnv := TempEnv.empty
 
+private def widthMem : ByteMem :=
+  ByteMem.write64le ByteMem.empty 0x10 0x1122_3344_5566_7788
+
+private def widthState : Amd64ConcreteState :=
+  mkAmd64State 0 0 0 0 widthMem
+
 private def narrow32Edge : Amd64Expr :=
   .narrow32 (.const 0x1234_5678_90AB_CDEF)
 
@@ -45,6 +51,34 @@ example : evalExpr edgeState emptyTemps add32OverflowEdge = 0x1 := by
 example :
     evalExpr edgeState emptyTemps add32OverflowEdge =
       evalSymExpr edgeState (lowerExpr SymSub.id SymTempEnv.empty add32OverflowEdge) := by
+  native_decide
+
+private def load16Edge : Amd64Expr :=
+  .load .w16 (.const 0x10)
+
+example : evalExpr widthState emptyTemps load16Edge = 0x7788 := by
+  native_decide
+
+example :
+    evalExpr widthState emptyTemps load16Edge =
+      evalSymExpr widthState (lowerExpr SymSub.id SymTempEnv.empty load16Edge) := by
+  native_decide
+
+private def load32Edge : Amd64Expr :=
+  .load .w32 (.const 0x10)
+
+example : evalExpr widthState emptyTemps load32Edge = 0x5566_7788 := by
+  native_decide
+
+example :
+    evalExpr widthState emptyTemps load32Edge =
+      evalSymExpr widthState (lowerExpr SymSub.id SymTempEnv.empty load32Edge) := by
+  native_decide
+
+example : ByteMem.write .w16 widthMem 0x10 0xABCD = ByteMem.write64le ByteMem.empty 0x10 0x1122_3344_5566_ABCD := by
+  native_decide
+
+example : ByteMem.write .w32 widthMem 0x10 0xDEAD_BEEF = ByteMem.write64le ByteMem.empty 0x10 0x1122_3344_DEAD_BEEF := by
   native_decide
 
 private def shl64ModuloEdge : Amd64Expr :=

@@ -125,10 +125,10 @@ private theorem lowerExpr_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       simp [lowerExpr, ihL, ihR]
   | shr64 lhs rhs ihL ihR =>
       simp [lowerExpr, ihL, ihR]
-  | load64 addr ih =>
+  | load width addr ih =>
       subst state
       simpa [evalExpr, lowerExpr] using
-        congrArg (fun value => ByteMem.read64le (applySymSub sub input).mem value) ih
+        congrArg (fun value => ByteMem.read width (applySymSub sub input).mem value) ih
 
 private theorem lowerCond_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (input state : ConcreteState Reg) (temps : TempEnv) (sub : SymSub Reg) (symTemps : SymTempEnv Reg)
@@ -220,15 +220,15 @@ private theorem applySymSub_writeMem {Reg : Type} [DecidableEq Reg] [Fintype Reg
                       simpa using applySymSub_write sub input reg (lowerExpr sub symTemps expr)
           · intro tmp
             simpa using hTemps tmp }
-  | .store64 addr value =>
+  | .store width addr value =>
       { exec := fun cfg =>
           match cfg with
           | (state, temps) =>
-              ({ state with mem := ByteMem.write64le state.mem (evalExpr state temps addr) (evalExpr state temps value) }, temps)
+              ({ state with mem := ByteMem.write width state.mem (evalExpr state temps addr) (evalExpr state temps value) }, temps)
         lower := fun symbolic =>
           match symbolic with
           | (sub, temps) =>
-              let mem := SymMem.store64 sub.mem (lowerExpr sub temps addr) (lowerExpr sub temps value)
+              let mem := SymMem.store width sub.mem (lowerExpr sub temps addr) (lowerExpr sub temps value)
               (SymSub.writeMem sub mem, temps)
         sound := by
           intro input concrete symbolic hMatch
@@ -241,17 +241,17 @@ private theorem applySymSub_writeMem {Reg : Type} [DecidableEq Reg] [Fintype Reg
             have hValue := lowerExpr_sound input (applySymSub sub input) temps sub symTemps rfl hTemps value
             calc
               { applySymSub sub input with
-                  mem := ByteMem.write64le (applySymSub sub input).mem
+                  mem := ByteMem.write width (applySymSub sub input).mem
                     (evalExpr (applySymSub sub input) temps addr)
                     (evalExpr (applySymSub sub input) temps value) }
                   = { applySymSub sub input with
-                        mem := evalSymMem input (SymMem.store64 sub.mem (lowerExpr sub symTemps addr) (lowerExpr sub symTemps value)) } := by
+                        mem := evalSymMem input (SymMem.store width sub.mem (lowerExpr sub symTemps addr) (lowerExpr sub symTemps value)) } := by
                       rw [hAddr, hValue]
                       rfl
-              _ = applySymSub (SymSub.writeMem sub (SymMem.store64 sub.mem (lowerExpr sub symTemps addr) (lowerExpr sub symTemps value))) input := by
+              _ = applySymSub (SymSub.writeMem sub (SymMem.store width sub.mem (lowerExpr sub symTemps addr) (lowerExpr sub symTemps value))) input := by
                       symm
                       simpa using applySymSub_writeMem sub input
-                        (SymMem.store64 sub.mem (lowerExpr sub symTemps addr) (lowerExpr sub symTemps value))
+                        (SymMem.store width sub.mem (lowerExpr sub symTemps addr) (lowerExpr sub symTemps value))
           · intro tmp
             simpa using hTemps tmp }
 

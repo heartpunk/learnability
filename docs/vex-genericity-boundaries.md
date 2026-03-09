@@ -44,18 +44,20 @@ Two important semantic boundaries remain deferred.
 
 ### 1. Endianness
 
-The current memory model and lowering are little-endian for the implemented memory operations.
+The current memory model and lowering are width-parameterized, but still little-endian only.
 
 Current assumptions include:
 
-- `load64` is little-endian
-- `store64` is little-endian
+- `load width` reads little-endian bytes for `width ∈ {w8, w16, w32, w64}`
+- `store width` writes little-endian bytes for `width ∈ {w8, w16, w32, w64}`
+- missing bytes read back as `0`
 
 This is adequate for the current AMD64 slice, but not a generic VEX memory semantics.
 
-### 2. Sub-Register / Width Semantics
+### 2. Sub-Register / Architectural Width Semantics
 
-The current register semantics are full-width only for the implemented slice.
+Memory widths are now explicit in the core. Register semantics are still full-width only for the
+implemented architectural slice.
 
 Not yet modeled generically:
 
@@ -72,7 +74,7 @@ Coverage work may safely expand only within the current semantic slice:
 
 - finite register-file generic core
 - explicit `ip_reg`
-- little-endian `load64` / `store64`
+- little-endian `load/store` over `Width = {w8, w16, w32, w64}`
 - full-width register behavior only
 - current branch model and `(σ, φ)` summary discipline
 
@@ -101,6 +103,7 @@ The current model should be understood as:
 
 - a register-generic VEX core
 - with AMD64 as the first frontend instance
-- and with endianness + width semantics still to be generalized
+- with width-parameterized little-endian memory ops
+- and with endianness + architectural sub-register semantics still to be generalized
 
 That is the boundary other lanes should code against.

@@ -13,17 +13,17 @@ abbrev Reg := Instances.Examples.ToyReg
 
 /-- Minimal three-path dispatch block: inspect a loaded value and route to two magic targets. -/
 def block : Block Reg :=
-  { stmts := [Stmt.wrTmp 0 (.load64 (.get .r0)),
+  { stmts := [Stmt.wrTmp 0 (.load .w64 (.get .r0)),
               Stmt.exit (.eq64 (.tmp 0) (.const 0x50)) 0x3000,
               Stmt.exit (.eq64 (.tmp 0) (.const 0x47)) 0x4000]
     ip_reg := .r1
     next := 0 }
 
 def condP : SymPC Reg :=
-  .eq (.load64 .base (.reg .r0)) (.const 0x50)
+  .eq (.load .w64 .base (.reg .r0)) (.const 0x50)
 
 def condG : SymPC Reg :=
-  .eq (.load64 .base (.reg .r0)) (.const 0x47)
+  .eq (.load .w64 .base (.reg .r0)) (.const 0x47)
 
 def expectedP : Summary Reg :=
   { sub := SymSub.write SymSub.id .r1 (.const 0x3000)

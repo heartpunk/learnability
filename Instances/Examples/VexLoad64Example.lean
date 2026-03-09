@@ -8,7 +8,7 @@ open VexISA
 
 def loadBlock : Amd64Block :=
   mkAmd64Block [
-      .wrTmp 0 (.load64 (.get .rdi)),
+      .wrTmp 0 (.load .w64 (.get .rdi)),
       .put .rax (.tmp 0)
     ] 0x400004
 

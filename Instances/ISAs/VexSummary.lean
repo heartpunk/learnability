@@ -19,12 +19,12 @@ inductive SymExpr (Reg : Type) where
   | or64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | shl64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | shr64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
-  | load64 : SymMem Reg → SymExpr Reg → SymExpr Reg
+  | load : Width → SymMem Reg → SymExpr Reg → SymExpr Reg
   deriving DecidableEq, Repr
 
 inductive SymMem (Reg : Type) where
   | base
-  | store64 : SymMem Reg → SymExpr Reg → SymExpr Reg → SymMem Reg
+  | store : Width → SymMem Reg → SymExpr Reg → SymExpr Reg → SymMem Reg
   deriving DecidableEq, Repr
 end
 
@@ -136,13 +136,13 @@ mutual
   | .or64 lhs rhs => evalSymExpr state lhs ||| evalSymExpr state rhs
   | .shl64 lhs rhs => shiftLeft64 (evalSymExpr state lhs) (evalSymExpr state rhs)
   | .shr64 lhs rhs => shiftRight64 (evalSymExpr state lhs) (evalSymExpr state rhs)
-  | .load64 mem addr => ByteMem.read64le (evalSymMem state mem) (evalSymExpr state addr)
+  | .load width mem addr => ByteMem.read width (evalSymMem state mem) (evalSymExpr state addr)
 
 @[simp] def evalSymMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) : SymMem Reg → ByteMem
   | .base => state.mem
-  | .store64 mem addr value =>
-      ByteMem.write64le (evalSymMem state mem) (evalSymExpr state addr) (evalSymExpr state value)
+  | .store width mem addr value =>
+      ByteMem.write width (evalSymMem state mem) (evalSymExpr state addr) (evalSymExpr state value)
 end
 
 @[simp] def evalSymPC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
@@ -173,12 +173,13 @@ def substSymExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .or64 lhs rhs => .or64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .shl64 lhs rhs => .shl64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .shr64 lhs rhs => .shr64 (substSymExpr sub lhs) (substSymExpr sub rhs)
-  | .load64 mem addr => .load64 (substSymMem sub mem) (substSymExpr sub addr)
+  | .load width mem addr => .load width (substSymMem sub mem) (substSymExpr sub addr)
 
 def substSymMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub : SymSub Reg) : SymMem Reg → SymMem Reg
   | .base => sub.mem
-  | .store64 mem addr value => .store64 (substSymMem sub mem) (substSymExpr sub addr) (substSymExpr sub value)
+  | .store width mem addr value =>
+      .store width (substSymMem sub mem) (substSymExpr sub addr) (substSymExpr sub value)
 end
 
 
@@ -263,14 +264,14 @@ theorem substSymExpr_id {Reg : Type} [DecidableEq Reg] [Fintype Reg] (expr : Sym
       simp [substSymExpr, substSymExpr_id]
   | shr64 lhs rhs =>
       simp [substSymExpr, substSymExpr_id]
-  | load64 mem addr =>
+  | load width mem addr =>
       simp [substSymExpr, substSymMem_id, substSymExpr_id]
 
 theorem substSymMem_id {Reg : Type} [DecidableEq Reg] [Fintype Reg] (mem : SymMem Reg) :
     substSymMem SymSub.id mem = mem := by
   cases mem with
   | base => rfl
-  | store64 mem addr value =>
+  | store width mem addr value =>
       simp [substSymMem, substSymMem_id, substSymExpr_id]
 end
 
@@ -297,7 +298,7 @@ theorem substSymExpr_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       simp [substSymExpr, substSymExpr_compose]
   | shr64 lhs rhs =>
       simp [substSymExpr, substSymExpr_compose]
-  | load64 mem addr =>
+  | load width mem addr =>
       simp [substSymExpr, substSymMem_compose, substSymExpr_compose]
 
 theorem substSymMem_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
@@ -305,7 +306,7 @@ theorem substSymMem_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     substSymMem (composeSymSub sub₁ sub₂) mem = substSymMem sub₁ (substSymMem sub₂ mem) := by
   cases mem with
   | base => rfl
-  | store64 mem addr value =>
+  | store width mem addr value =>
       simp [substSymMem, substSymMem_compose, substSymExpr_compose]
 end
 
@@ -332,7 +333,7 @@ theorem evalSymExpr_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       simp [substSymExpr, evalSymExpr_subst]
   | shr64 lhs rhs =>
       simp [substSymExpr, evalSymExpr_subst]
-  | load64 mem addr =>
+  | load width mem addr =>
       simp [substSymExpr, evalSymMem_subst, evalSymExpr_subst]
 
 theorem evalSymMem_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
@@ -340,7 +341,7 @@ theorem evalSymMem_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     evalSymMem state (substSymMem sub mem) = evalSymMem (applySymSub sub state) mem := by
   cases mem with
   | base => rfl
-  | store64 mem addr value =>
+  | store width mem addr value =>
       simp [substSymMem, evalSymMem_subst, evalSymExpr_subst]
 end
 
