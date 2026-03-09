@@ -2,24 +2,15 @@
 
 Current ladder reaches Tier 6 with a real while-based loop witness example.
 
-## Tier 7: Branching Loop Witness
+## Revised order
 
-Goal: first end-to-end example of the branching loop-witness route.
+The original next step was a branching loop-witness tier. That attempt turned out to
+pull in too much incidental proof complexity for too little new confidence. The value
+was collapsing toward a smoke test instead of a meaningful new theorem layer.
 
-Target theorem:
-- `whileBranchingLoopWitnessComplete_of_branchClassesStable`
+So the next real tier is now the refinement/STS1 path.
 
-Shape:
-- use an already-supported branching body (no new opcodes)
-- provide a tiny `bodyPaths` family with internal branching
-- prove the required branch-class stability/soundness hypotheses for a toy case
-- conclude `BranchingLoopWitnessComplete` and the extracted-model payoff
-
-Constraint:
-- no new VEX semantic surface
-- theorem-focused only
-
-## Tier 8: Body Refinement STS1
+## Tier 7: Body Refinement STS1
 
 Goal: first toy example through the `Refinement.lean` STS1 pipeline.
 
@@ -36,7 +27,7 @@ Constraint:
 - no new VEX semantic surface
 - exercise the semantic-closure replacement for `h_closed`
 
-## Tier 9: Witnessed Subsystem
+## Tier 8: Witnessed Subsystem
 
 Goal: first subsystem-level example using a finite path-family witness.
 
@@ -51,13 +42,26 @@ Shape:
 - show extracted-model adequacy and witness-equivalence consequences
 
 Constraint:
-- do not collapse this into Tier 8
+- do not collapse this into Tier 7
 - keep it about witness packaging, not new opcodes
+
+## Tier 9: Branching Loop Witness (revisit later)
+
+Goal: first real example of the branching loop-witness route.
+
+Target theorem:
+- `whileBranchingLoopWitnessComplete_of_branchClassesStable`
+
+Status:
+- deferred for now
+- the first attempt showed that a meaningful example here wants a better-shaped
+  branching loop than the minimal toy currently available
+- revisit after the refinement tier and witnessed-subsystem tier are in place
 
 ## Commit discipline
 
-- one plan commit first
+- one plan-update commit first
 - then Tier 7 commits only
 - then Tier 8 commits only
-- then Tier 9 commits only
+- Tier 9 is deferred
 - no commit may mix multiple tiers
