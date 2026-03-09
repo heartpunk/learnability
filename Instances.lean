@@ -46,6 +46,8 @@ import Instances.Examples.VexMovzxRaxMemRdiExample
 import Instances.Examples.VexMovzxRaxMemRdiFixture
 import Instances.Examples.VexMovMemRdiRaxExample
 import Instances.Examples.VexMovMemRdiRaxFixture
+import Instances.Examples.VexStoreAlMemRdiExample
+import Instances.Examples.VexStoreAlMemRdiFixture
 import Instances.Examples.VexStore64Example
 import Instances.Examples.VexCmpRaxRdiJbExample
 import Instances.Examples.VexCmpRaxRdiJbTakenFixture

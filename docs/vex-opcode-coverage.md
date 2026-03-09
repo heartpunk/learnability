@@ -39,7 +39,7 @@ lowered stmt tags    put, wrtmp, store:w8/w16/w32/w64, exit
 ## Corpus Inventory
 
 ```text
-Fixture count  44
+Fixture count  45
 ```
 
 ### Statement tag counts
@@ -47,10 +47,11 @@ Fixture count  44
 ```text
 Stmt tag   Count
 ---------  -----
-wrtmp        160
+wrtmp        162
 put           88
 exit          18
 store:w64      1
+store:w8       1
 ```
 
 ### Expression / condition tag counts
@@ -58,8 +59,8 @@ store:w64      1
 ```text
 Expr / cond tag              Count
 ---------------------------  -----
-tmp                            193
-get                             75
+tmp                            195
+get                             77
 const                           53
 add32                            5
 sub32                            1
@@ -142,7 +143,7 @@ Data movement      GET, PUT, tmp flow                   straight-line register t
 Arithmetic         Add32/Sub32/Add64/Sub64 + shifts     direct byte-backed fixtures now present
 Casts / width      narrow32/zext64/sext8to32/sext32to64 direct byte-backed fixtures now present for signed widening
 Memory reads       load .w8/.w16/.w32/.w64 semantics    core semantics are generic; corpus now uses w8 and w64
-Memory writes      store .w8/.w16/.w32/.w64 semantics   core semantics are generic; corpus currently uses w64
+Memory writes      store .w8/.w16/.w32/.w64 semantics   core semantics are generic; corpus uses w8 and w64
 Branch conditions  Eq64, LT64U, LE64U, amd64 helper     direct exits plus the current jz helper slice
 CFG shape          fallthrough + single guarded exit    not multi-block, not general CFG
 ```

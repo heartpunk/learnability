@@ -187,6 +187,17 @@
       }
     },
     {
+      "name": "amd64_mov_mem_rdi_al",
+      "arch": "amd64",
+      "base": "0x400000",
+      "bytes": "8807",
+      "input_regs": {
+        "rax": "0x88",
+        "rdi": "0x20"
+      },
+      "watch_mem64le": ["0x20"]
+    },
+    {
       "name": "amd64_add_eax_edi",
       "arch": "amd64",
       "base": "0x400000",
