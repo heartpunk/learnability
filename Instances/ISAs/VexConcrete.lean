@@ -31,6 +31,7 @@ def evalAmd64CalculateConditionZero
   | .and64 lhs rhs => evalExpr state temps lhs &&& evalExpr state temps rhs
   | .or64 lhs rhs => evalExpr state temps lhs ||| evalExpr state temps rhs
   | .shl64 lhs rhs => UInt64.shiftLeft (evalExpr state temps lhs) (evalExpr state temps rhs)
+  | .shr64 lhs rhs => UInt64.shiftRight (evalExpr state temps lhs) (evalExpr state temps rhs)
   | .load64 addr => ByteMem.read64le state.mem (evalExpr state temps addr)
 
 @[simp] def evalCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]

@@ -18,6 +18,7 @@ inductive SymExpr (Reg : Type) where
   | and64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | or64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | shl64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
+  | shr64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | load64 : SymMem Reg → SymExpr Reg → SymExpr Reg
   deriving DecidableEq, Repr
 
@@ -134,6 +135,7 @@ mutual
   | .and64 lhs rhs => evalSymExpr state lhs &&& evalSymExpr state rhs
   | .or64 lhs rhs => evalSymExpr state lhs ||| evalSymExpr state rhs
   | .shl64 lhs rhs => UInt64.shiftLeft (evalSymExpr state lhs) (evalSymExpr state rhs)
+  | .shr64 lhs rhs => UInt64.shiftRight (evalSymExpr state lhs) (evalSymExpr state rhs)
   | .load64 mem addr => ByteMem.read64le (evalSymMem state mem) (evalSymExpr state addr)
 
 @[simp] def evalSymMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
@@ -170,6 +172,7 @@ def substSymExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .and64 lhs rhs => .and64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .or64 lhs rhs => .or64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .shl64 lhs rhs => .shl64 (substSymExpr sub lhs) (substSymExpr sub rhs)
+  | .shr64 lhs rhs => .shr64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .load64 mem addr => .load64 (substSymMem sub mem) (substSymExpr sub addr)
 
 def substSymMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
@@ -258,6 +261,8 @@ theorem substSymExpr_id {Reg : Type} [DecidableEq Reg] [Fintype Reg] (expr : Sym
       simp [substSymExpr, substSymExpr_id]
   | shl64 lhs rhs =>
       simp [substSymExpr, substSymExpr_id]
+  | shr64 lhs rhs =>
+      simp [substSymExpr, substSymExpr_id]
   | load64 mem addr =>
       simp [substSymExpr, substSymMem_id, substSymExpr_id]
 
@@ -289,6 +294,8 @@ theorem substSymExpr_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | or64 lhs rhs =>
       simp [substSymExpr, substSymExpr_compose]
   | shl64 lhs rhs =>
+      simp [substSymExpr, substSymExpr_compose]
+  | shr64 lhs rhs =>
       simp [substSymExpr, substSymExpr_compose]
   | load64 mem addr =>
       simp [substSymExpr, substSymMem_compose, substSymExpr_compose]
@@ -322,6 +329,8 @@ theorem evalSymExpr_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | or64 lhs rhs =>
       simp [substSymExpr, evalSymExpr_subst]
   | shl64 lhs rhs =>
+      simp [substSymExpr, evalSymExpr_subst]
+  | shr64 lhs rhs =>
       simp [substSymExpr, evalSymExpr_subst]
   | load64 mem addr =>
       simp [substSymExpr, evalSymMem_subst, evalSymExpr_subst]
