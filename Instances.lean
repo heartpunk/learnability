@@ -60,7 +60,6 @@ import Instances.Examples.Tier5ProgramTrace
 import Instances.Examples.Tier6LoopWitness
 import Instances.Examples.Tier7BodyRefinement
 import Instances.Examples.Tier8WitnessedSubsystem
-import Instances.Examples.FetchedCFGRefinement
 import Instances.Examples.Phase2Composition
 import Instances.Examples.Phase3Combinatorial
 import Instances.ISAs.MachineISA

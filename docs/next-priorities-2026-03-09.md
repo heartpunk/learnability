@@ -26,8 +26,15 @@ The opcode grind is progressing in parallel. That is not the current bottleneck.
 2. **Refinement-backed subsystem theorem**
    - Why: `Refinement.lean` exists, but the non-toy subsystem-level STS1 story is still not packaged cleanly.
    - Deliverable: one real subsystem theorem/example that uses the refinement pipeline on a fetched multi-block program region.
-   - Status: unblocked by the fetched-subsystem witness layer. This is now the
-     next theorem/example target.
+   - Status: the generic theorem layer is now in place in `Instances/ISAs/VexSubsystem.lean`
+     (`FetchedSubsystemBehavior`, `fetchedSubsystemBranchModel`,
+     `fetchedSubsystemRefinementBisimulation`, card bound).
+     The first concrete fetched-subsystem refinement example is still blocked:
+     `FetchedSubsystemWitness` path families do not encode state-dependent path
+     validity, so flattened summaries with `pc = true` can over-approximate
+     fetched execution from invalid entry states. The next step is either:
+     (a) strengthen the witness notion with entry-validity/path-validity PCs, or
+     (b) pick an example where path validity is already encoded in branch PCs.
 
 3. **Byte-width path (`load8`, byte extensions)**
    - Why: this is the main realism gap for parser-like binaries.
