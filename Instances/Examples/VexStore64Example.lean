@@ -15,6 +15,10 @@ def storeInput : Amd64ConcreteState :=
   mkAmd64State
     0x1122334455667788
     0x0
+    0x0
+    0x0
+    0x0
+    0x0
     0x20
     0x400000
     (ByteMem.write64le ByteMem.empty 0x20 0x0)
@@ -22,6 +26,10 @@ def storeInput : Amd64ConcreteState :=
 def storeExpected : Amd64ConcreteState :=
   mkAmd64State
     0x1122334455667788
+    0x0
+    0x0
+    0x0
+    0x0
     0x0
     0x20
     0x400003

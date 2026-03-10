@@ -9,6 +9,10 @@ namespace VexISA
 inductive Amd64Reg where
   | rax
   | rcx
+  | rdx
+  | rsi
+  | rbp
+  | rsp
   | rdi
   | rip
   | cc_op
@@ -18,7 +22,7 @@ inductive Amd64Reg where
   deriving DecidableEq, Repr
 
 instance : Fintype Amd64Reg :=
-  ⟨{.rax, .rcx, .rdi, .rip, .cc_op, .cc_dep1, .cc_dep2, .cc_ndep}, by
+  ⟨{.rax, .rcx, .rdx, .rsi, .rbp, .rsp, .rdi, .rip, .cc_op, .cc_dep1, .cc_dep2, .cc_ndep}, by
     intro reg
     cases reg <;> simp⟩
 
@@ -34,10 +38,14 @@ def mkAmd64Block (stmts : List Amd64Stmt) (next : UInt64) : Amd64Block :=
   { stmts := stmts, ip_reg := .rip, next := next }
 
 def mkAmd64StateCC
-    (rax rcx rdi rip cc_op cc_dep1 cc_dep2 cc_ndep : UInt64) (mem : ByteMem) : Amd64ConcreteState :=
+    (rax rcx rdx rsi rbp rsp rdi rip cc_op cc_dep1 cc_dep2 cc_ndep : UInt64) (mem : ByteMem) : Amd64ConcreteState :=
   { regs := fun
       | .rax => rax
       | .rcx => rcx
+      | .rdx => rdx
+      | .rsi => rsi
+      | .rbp => rbp
+      | .rsp => rsp
       | .rdi => rdi
       | .rip => rip
       | .cc_op => cc_op
@@ -46,14 +54,18 @@ def mkAmd64StateCC
       | .cc_ndep => cc_ndep
   , mem := mem }
 
-def mkAmd64State (rax rcx rdi rip : UInt64) (mem : ByteMem) : Amd64ConcreteState :=
-  mkAmd64StateCC rax rcx rdi rip 0 0 0 0 mem
+def mkAmd64State (rax rcx rdx rsi rbp rsp rdi rip : UInt64) (mem : ByteMem) : Amd64ConcreteState :=
+  mkAmd64StateCC rax rcx rdx rsi rbp rsp rdi rip 0 0 0 0 mem
 
 instance : Repr Amd64ConcreteState where
   reprPrec state _ :=
     repr
       ( state.read .rax
       , state.read .rcx
+      , state.read .rdx
+      , state.read .rsi
+      , state.read .rbp
+      , state.read .rsp
       , state.read .rdi
       , state.read .rip
       , state.read .cc_op

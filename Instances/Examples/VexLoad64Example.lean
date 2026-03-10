@@ -16,6 +16,10 @@ def loadInput : Amd64ConcreteState :=
   mkAmd64State
     0x0
     0x0
+    0x0
+    0x0
+    0x0
+    0x0
     0x20
     0x400000
     (ByteMem.write64le ByteMem.empty 0x20 0x1122334455667788)
@@ -23,6 +27,10 @@ def loadInput : Amd64ConcreteState :=
 def loadExpected : Amd64ConcreteState :=
   mkAmd64State
     0x1122334455667788
+    0x0
+    0x0
+    0x0
+    0x0
     0x0
     0x20
     0x400004

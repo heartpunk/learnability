@@ -36,7 +36,10 @@ private def getBinopArgs (j : Json) : Except String (Json × Json) := do
 def offsetToReg : Nat → Except String Amd64Reg
   | 16  => .ok .rax
   | 24  => .ok .rcx
+  | 32  => .ok .rdx
+  | 48  => .ok .rsp
   | 56  => .ok .rdi
+  | 64  => .ok .rsi
   | 184 => .ok .rip
   | 144 => .ok .cc_op
   | 152 => .ok .cc_dep1

@@ -10,7 +10,7 @@ open VexISA
 namespace Instances.Examples
 
 private def edgeState : Amd64ConcreteState :=
-  mkAmd64State 0 0 0 0 ByteMem.empty
+  mkAmd64State 0 0 0x0 0x0 0x0 0x0 0 0 ByteMem.empty
 
 private def emptyTemps : TempEnv := TempEnv.empty
 
@@ -18,7 +18,7 @@ private def widthMem : ByteMem :=
   ByteMem.write64le ByteMem.empty 0x10 0x1122_3344_5566_7788
 
 private def widthState : Amd64ConcreteState :=
-  mkAmd64State 0 0 0 0 widthMem
+  mkAmd64State 0 0 0x0 0x0 0x0 0x0 0 0 widthMem
 
 private def narrow32Edge : Amd64Expr :=
   .narrow32 (.const 0x1234_5678_90AB_CDEF)

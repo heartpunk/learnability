@@ -25,6 +25,10 @@ def input : Amd64ConcreteState :=
     0xfedcba9876543210
     0x0
     0x0
+    0x0
+    0x0
+    0x0
+    0x0
     0x400000
     0x0
     0x0
@@ -35,6 +39,10 @@ def input : Amd64ConcreteState :=
 def expected : Amd64ConcreteState :=
   mkAmd64StateCC
     0xfedcba987654321
+    0x0
+    0x0
+    0x0
+    0x0
     0x0
     0x0
     0x400004
