@@ -36,8 +36,13 @@ def Relevant (s : ConcreteState Reg) : Prop :=
 def observe (s : ConcreteState Reg) : UInt64 × UInt64 :=
   (s.read .r0, s.read .r1)
 
-def witnessPaths : Finset (List (Block Reg)) :=
-  {[], [block0], path01}
+def entryPc0 : SymPC Reg :=
+  .eq (.reg .r1) (.const 0)
+
+def witnessPaths : Finset (PathWitness Reg) :=
+  { { entryPc := entryPc0, blocks := [] }
+  , { entryPc := entryPc0, blocks := [block0] }
+  , { entryPc := entryPc0, blocks := path01 } }
 
 private theorem fetchBlock_from_relevant
     {s : ConcreteState Reg}
@@ -99,33 +104,46 @@ private theorem trace_from_relevant_cases
             rw [fetchBlock_after_block0 s] at hFetch
             exact Option.some.inj hFetch.symm
           subst hb
-          simpa [SyntaxDenotes, block1, execBlockSuccs, execBlock]
-            using hSyntax
+          simpa [SyntaxDenotes, block1, execBlockSuccs, execBlock] using hSyntax
       · exfalso
         subst hTwo
         exact no_programStep_after_block1 s ⟨c, hStep⟩
 
 private theorem witnessComplete :
-    WitnessComplete
-      { Relevant := Relevant, observe := observe,
-        DenotesObs := ExecProgramTraceDenotesObs Relevant observe program .r1 }
-      witnessPaths := by
+    ∀ s o,
+      ExecProgramTraceDenotesObs Relevant observe program .r1 s o ↔
+        ExecPathWitnessFamilyDenotesObs Relevant observe witnessPaths s o := by
   intro s o
   constructor
   · intro h
-    rcases h with ⟨blocks, hMem, hExec⟩
+    rcases h with ⟨hRel, s', hTrace, hObs⟩
+    rcases trace_from_relevant_cases hRel hTrace with hs' | hOne | hTwo
+    · refine ⟨{ entryPc := entryPc0, blocks := [] }, by simp [witnessPaths], ?_⟩
+      refine ⟨?_, hRel, s', ?_, hObs⟩
+      · simpa [entryPc0, Relevant, satisfiesSymPC, evalSymPC] using hRel
+      simpa [hs'] using self_mem_execBlockPath_nil s
+    · refine ⟨{ entryPc := entryPc0, blocks := [block0] }, by simp [witnessPaths], ?_⟩
+      refine ⟨?_, hRel, s', ?_, hObs⟩
+      · simpa [entryPc0, Relevant, satisfiesSymPC, evalSymPC] using hRel
+      · simpa [hOne] using execBlock0_mem_execBlockPath_singleton s
+    · refine ⟨{ entryPc := entryPc0, blocks := path01 }, by simp [witnessPaths], ?_⟩
+      refine ⟨?_, hRel, s', ?_, hObs⟩
+      · simpa [entryPc0, Relevant, satisfiesSymPC, evalSymPC] using hRel
+      · simpa [hTwo] using execBlock01_mem_execBlockPath_pair s
+  · intro h
+    rcases h with ⟨pw, hMem, hExec⟩
     simp [witnessPaths] at hMem
     rcases hMem with rfl | rfl | rfl
-    · rcases hExec with ⟨hRel, s', hPath, hObs⟩
+    · rcases hExec with ⟨hEntry, hRel, s', hPath, hObs⟩
       have hs' : s' = s := by simpa [execBlockPath] using hPath
       subst hs'
       exact ⟨hRel, _, Relation.ReflTransGen.refl, hObs⟩
-    · rcases hExec with ⟨hRel, s', hPath, hObs⟩
+    · rcases hExec with ⟨hEntry, hRel, s', hPath, hObs⟩
       have hStep : ProgramStep program .r1 s s' := by
         refine ⟨block0, fetchBlock_from_relevant hRel, ?_⟩
         simpa [SyntaxDenotes, execBlockPath] using hPath
       exact ⟨hRel, s', Relation.ReflTransGen.tail Relation.ReflTransGen.refl hStep, hObs⟩
-    · rcases hExec with ⟨hRel, s', hPath, hObs⟩
+    · rcases hExec with ⟨hEntry, hRel, s', hPath, hObs⟩
       have hMid : ProgramStep program .r1 s (execBlock block0 s) := by
         refine ⟨block0, fetchBlock_from_relevant hRel, ?_⟩
         simp [SyntaxDenotes, block0, execBlockSuccs, execBlock]
@@ -133,15 +151,6 @@ private theorem witnessComplete :
         refine ⟨block1, fetchBlock_after_block0 s, ?_⟩
         simpa [path01, SyntaxDenotes, execBlockPath, execBlockSuccs, block0, block1, execBlock] using hPath
       exact ⟨hRel, s', Relation.ReflTransGen.tail (Relation.ReflTransGen.tail Relation.ReflTransGen.refl hMid) hTail, hObs⟩
-  · intro h
-    rcases h with ⟨hRel, s', hTrace, hObs⟩
-    rcases trace_from_relevant_cases hRel hTrace with hs' | hOne | hTwo
-    · refine ⟨[], by simp [witnessPaths], ⟨hRel, s', ?_, hObs⟩⟩
-      simpa [hs'] using self_mem_execBlockPath_nil s
-    · refine ⟨[block0], by simp [witnessPaths], ⟨hRel, s', ?_, hObs⟩⟩
-      simpa [hOne] using execBlock0_mem_execBlockPath_singleton s
-    · refine ⟨path01, by simp [witnessPaths], ⟨hRel, s', ?_, hObs⟩⟩
-      simpa [hTwo] using execBlock01_mem_execBlockPath_pair s
 
 def witness : FetchedSubsystemWitness Reg (UInt64 × UInt64) where
   program := program
@@ -149,16 +158,23 @@ def witness : FetchedSubsystemWitness Reg (UInt64 × UInt64) where
   Relevant := Relevant
   observe := observe
   paths := witnessPaths
+  entryRelevant := by
+    intro s pw hMem hEntry
+    simp [witnessPaths] at hMem
+    rcases hMem with rfl | rfl | rfl
+    · simpa [entryPc0, Relevant, satisfiesSymPC, evalSymPC] using hEntry
+    · simpa [entryPc0, Relevant, satisfiesSymPC, evalSymPC] using hEntry
+    · simpa [entryPc0, Relevant, satisfiesSymPC, evalSymPC] using hEntry
   complete := by
     intro s o
-    exact (witnessComplete s o).symm
+    exact witnessComplete s o
 
 example : FetchedSubsystemExtractible witness :=
   extractedModel_of_fetchedSubsystemWitness witness
 
 example :
     ∀ s o,
-      VexModelDenotesObs Relevant observe (lowerPathFamilySummaries witnessPaths) s o ↔
+      VexModelDenotesObs Relevant observe (lowerPathWitnessFamilySummaries witnessPaths) s o ↔
         ExecProgramTraceDenotesObs Relevant observe program .r1 s o := by
   exact extractedModel_of_fetchedSubsystemWitness witness
 
