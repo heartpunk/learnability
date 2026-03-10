@@ -122,6 +122,61 @@ Instances.Examples.VexCmpRaxRdiJbTakenFixture.block
   0x400000
   Instances.Examples.VexMovMemRdiRaxFixture.block
 
+/-! ## Test 8 (D.5a): AbiHint lines and Ijk_Ret are parsed without error -/
+-- AbiHint lines (====== AbiHint(...) ======) must be silently skipped.
+-- Ijk_Ret blocks have a dynamic return target; next IP is 0 (terminal sentinel).
+#guard
+  match parseIRSB
+    "IRSB {
+   t0:Ity_I64 t1:Ity_I64 t2:Ity_I64
+   00 | ------ IMark(0x4003fa, 1, 0) ------
+   01 | t1 = GET:I64(rsp)
+   02 | t0 = LDle:I64(t1)
+   03 | t2 = Add64(t1,0x0000000000000008)
+   04 | PUT(rsp) = t2
+   05 | ====== AbiHint(0xt2, 128, t0) ======
+   NEXT: PUT(rip) = t0; Ijk_Ret
+}" with
+  | .ok block => block.next == 0
+  | .error _ => false
+
+/-! ## Test 9 (D.5a): Ijk_Call with constant target is parsed; next IP is the callee address -/
+#guard
+  match parseIRSB
+    "IRSB {
+   t0:Ity_I64 t1:Ity_I64 t2:Ity_I64 t3:Ity_I64 t4:Ity_I64 t5:Ity_I64
+   00 | ------ IMark(0x40012c, 5, 0) ------
+   01 | t4 = GET:I64(rsp)
+   02 | t3 = Sub64(t4,0x0000000000000008)
+   03 | PUT(rsp) = t3
+   04 | STle(t3) = 0x0000000000400131
+   05 | t5 = Sub64(t3,0x0000000000000080)
+   06 | ====== AbiHint(0xt5, 128, 0x0000000000400034) ======
+   NEXT: PUT(rip) = 0x0000000000400034; Ijk_Call
+}" with
+  | .ok block => block.next == 0x400034
+  | .error _ => false
+
+/-! ## Test 10 (D.5b): CmpLT32S and CmpLE32S are parsed as biased 64-bit comparisons -/
+-- CmpLT32S(t0,t1) where t0=-1 (0xFFFFFFFF), t1=0 should evaluate as true (signed: -1 < 0).
+-- After desugaring: lt64(sext32to64(narrow32(-1)) + 2^63, sext32to64(narrow32(0)) + 2^63)
+--   = lt64(0xFFFFFFFF + 0x8000000000000000, 0 + 0x8000000000000000)
+--   = lt64(0x7FFFFFFE_FFFFFFFF, 0x8000000000000000) = true ✓
+#guard
+  match parseIRSB
+    "IRSB {
+   t0:Ity_I32 t1:Ity_I32 t2:Ity_I1 t3:Ity_I1
+   00 | ------ IMark(0x400000, 2, 0) ------
+   01 | t0 = GET:I32(rax)
+   02 | t1 = GET:I32(rcx)
+   03 | t2 = CmpLT32S(t0,t1)
+   04 | t3 = CmpLE32S(t0,t1)
+   05 | if (t2) { PUT(rip) = 0x400010; Ijk_Boring }
+   NEXT: PUT(rip) = 0x400002; Ijk_Boring
+}" with
+  | .ok _ => true
+  | .error _ => false
+
 /-! ## Test 7: parseProgram two blocks — both IPs resolve correctly -/
 -- Block A at 0x400000 (store), Block B at 0x400003 (identity: rax ← rax)
 private def blockB : Block Amd64Reg :=

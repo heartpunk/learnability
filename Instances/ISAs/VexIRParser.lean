@@ -231,6 +231,15 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
   | "CmpLE32U", [a, b] => do
     let l ← parseExpr a st; let r ← parseExpr b st
     .ok (.le64 (.zext64 (.narrow32 l)) (.zext64 (.narrow32 r)))
+  | "CmpLT32S", [a, b] => do
+    -- Signed 32-bit less-than: sign-extend both to 64 bits then bias by 2^63 for unsigned compare.
+    let l ← parseExpr a st; let r ← parseExpr b st
+    let bias : Expr Amd64Reg := .const 0x8000_0000_0000_0000
+    .ok (.lt64 (.add64 (.sext32to64 (.narrow32 l)) bias) (.add64 (.sext32to64 (.narrow32 r)) bias))
+  | "CmpLE32S", [a, b] => do
+    let l ← parseExpr a st; let r ← parseExpr b st
+    let bias : Expr Amd64Reg := .const 0x8000_0000_0000_0000
+    .ok (.le64 (.add64 (.sext32to64 (.narrow32 l)) bias) (.add64 (.sext32to64 (.narrow32 r)) bias))
   | "amd64g_calculate_condition",
       [codeStr, opStr, dep1Str, dep2Str, ndepStr] => do
     let code ← match parseNumLit codeStr with
@@ -245,7 +254,8 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
 
 private def isCondOp (op : String) : Bool :=
   op ∈ (["CmpEQ64", "CmpLT64U", "CmpLE64U",
-          "CmpEQ32", "CmpLT32U", "CmpLE32U"] : List String)
+          "CmpEQ32", "CmpLT32U", "CmpLE32U",
+          "CmpLT32S", "CmpLE32S"] : List String)
 
 private def isCondPropOp (op : String) : Bool :=
   op ∈ (["1Uto64", "64to1", "1Uto32", "32to1"] : List String)
@@ -294,7 +304,8 @@ def extractExitTarget (body : String) : Except String UInt64 :=
 /-- Process one statement content string (after stripping "NN | " prefix). -/
 def parseStmtContent (content : String) (st : ParseState) : Except String ParseState := do
   let content := myTrim content
-  if content.isEmpty || content.startsWith "------" || content.startsWith "IMark" then
+  if content.isEmpty || content.startsWith "------" || content.startsWith "IMark"
+      || content.startsWith "======" then
     return st
   if content.startsWith "if (" || content.startsWith "if(" then
     let afterIf := if content.startsWith "if (" then myDrop content 4 else myDrop content 3
@@ -367,6 +378,8 @@ def parseTempDecls (line : String) : List (Nat × String) :=
 
 def parseNextLine (line : String) : Except String UInt64 := do
   let rest := myTrim (if line.startsWith "NEXT:" then myDrop line 5 else line)
+  -- Ijk_Ret: return address is dynamic (loaded from stack); use 0 as terminal sentinel.
+  if rest.contains "Ijk_Ret" then return 0
   match rest.splitOn "=" with
   | _ :: rhs :: _ =>
     let addrStr := myTrim ((myTrim rhs).splitOn ";").headI
