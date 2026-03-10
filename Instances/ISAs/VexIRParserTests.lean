@@ -15,6 +15,21 @@ private def parseOk (text : String) (expected : Block Amd64Reg) : Bool :=
   | .ok block => block == expected
   | .error _  => false
 
+-- Helper: check extractIMarkIP returns the expected IP
+private def extractIMarkOk (text : String) (expected : UInt64) : Bool :=
+  match extractIMarkIP text with
+  | .ok ip   => ip == expected
+  | .error _ => false
+
+-- Helper: check that parseProgram maps a given IP to the expected Block
+private def parseProgramOk (texts : List String) (ip : UInt64) (expected : Block Amd64Reg) : Bool :=
+  match parseProgram texts with
+  | .error _  => false
+  | .ok prog  =>
+    match prog.blocks ip with
+    | none       => false
+    | some block => block == expected
+
 /-! ## Test 1: add32 block (ADD EAX, EDI) -/
 #guard parseOk
 "IRSB {
@@ -81,3 +96,52 @@ Instances.Examples.VexJrcxzSkipLeaTakenFixture.block
    NEXT: PUT(rip) = 0x400005; Ijk_Boring
 }"
 Instances.Examples.VexCmpRaxRdiJbTakenFixture.block
+
+/-! ## Test 5: extractIMarkIP extracts the entry address -/
+#guard extractIMarkOk
+"IRSB {
+   t0:Ity_I64 t1:Ity_I64
+   00 | ------ IMark(0x400000, 3, 0) ------
+   01 | t0 = GET:I64(rdi)
+   02 | t1 = GET:I64(rax)
+   03 | STle(t0) = t1
+   NEXT: PUT(rip) = 0x400003; Ijk_Boring
+}"
+0x400000
+
+/-! ## Test 6: parseProgram single block — lookup by IP -/
+#guard parseProgramOk
+  ["IRSB {
+   t0:Ity_I64 t1:Ity_I64
+   00 | ------ IMark(0x400000, 3, 0) ------
+   01 | t0 = GET:I64(rdi)
+   02 | t1 = GET:I64(rax)
+   03 | STle(t0) = t1
+   NEXT: PUT(rip) = 0x400003; Ijk_Boring
+}"]
+  0x400000
+  Instances.Examples.VexMovMemRdiRaxFixture.block
+
+/-! ## Test 7: parseProgram two blocks — both IPs resolve correctly -/
+-- Block A at 0x400000 (store), Block B at 0x400003 (identity: rax ← rax)
+private def blockB : Block Amd64Reg :=
+  mkAmd64Block [.wrTmp 0 (.get .rax), .put .rax (.tmp 0)] 0x400006
+
+#guard parseProgramOk
+  ["IRSB {
+   t0:Ity_I64 t1:Ity_I64
+   00 | ------ IMark(0x400000, 3, 0) ------
+   01 | t0 = GET:I64(rdi)
+   02 | t1 = GET:I64(rax)
+   03 | STle(t0) = t1
+   NEXT: PUT(rip) = 0x400003; Ijk_Boring
+}",
+   "IRSB {
+   t0:Ity_I64
+   00 | ------ IMark(0x400003, 3, 0) ------
+   01 | t0 = GET:I64(rax)
+   02 | PUT(rax) = t0
+   NEXT: PUT(rip) = 0x400006; Ijk_Boring
+}"]
+  0x400003
+  blockB
