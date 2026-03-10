@@ -24,6 +24,11 @@ import angr
 def extract_cfg(binary: str, func_addr: int) -> dict:
     project = angr.Project(binary, auto_load_libs=False)
     cfg = project.analyses.CFGFast(function_starts=[func_addr])
+    if func_addr not in cfg.functions:
+        raise ValueError(
+            f"function at 0x{func_addr:x} not found in CFG "
+            f"(known functions: {[hex(a) for a in sorted(cfg.functions)]})"
+        )
     func = cfg.functions[func_addr]
     blocks = []
     for block in func.blocks:
