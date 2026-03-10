@@ -40,6 +40,7 @@ def offsetToReg : Nat → Except String Amd64Reg
   | 48  => .ok .rsp
   | 56  => .ok .rdi
   | 64  => .ok .rsi
+  | 72  => .ok .rbp
   | 184 => .ok .rip
   | 144 => .ok .cc_op
   | 152 => .ok .cc_dep1
