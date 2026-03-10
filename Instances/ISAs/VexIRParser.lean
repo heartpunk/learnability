@@ -1,4 +1,5 @@
 import Instances.ISAs.VexAmd64
+import Instances.ISAs.VexProgram
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -414,6 +415,34 @@ def parseIRSB (text : String) : Except String (Block Amd64Reg) := do
   match maybeNext with
   | none    => throw "no NEXT line found in IRSB"
   | some ip => .ok { stmts := finalSt.stmts, ip_reg := .rip, next := ip }
+
+/-! ## Multi-block program parser -/
+
+/-- Extract the entry IP from the first IMark line in a raw VEX IR text block.
+    The IMark format is: `NN | ------ IMark(0xADDR, len, delta) ------` -/
+def extractIMarkIP (text : String) : Except String UInt64 :=
+  let lines := text.splitOn "\n" |>.map myTrim
+  let hasIMark : String → Bool := fun l =>
+    match l.splitOn "IMark(" with | [_] => false | _ => true
+  match lines.find? hasIMark with
+  | none => .error "no IMark found in IRSB"
+  | some line =>
+    match line.splitOn "IMark(" with
+    | _ :: addrPart :: _ =>
+      let addrStr := myTrim (addrPart.splitOn ",").headI
+      match parseNumLit addrStr with
+      | some n => .ok (UInt64.ofNat n)
+      | none   => .error s!"bad IMark address: {addrStr}"
+    | _ => .error s!"malformed IMark line: {line}"
+
+/-- Parse a list of VEX IR text strings (one per IRSB) into a `Program Amd64Reg`.
+    Each block's entry IP is extracted from its first IMark statement. -/
+def parseProgram (irsbTexts : List String) : Except String (Program Amd64Reg) := do
+  let pairs ← irsbTexts.mapM fun text => do
+    let ip    ← extractIMarkIP text
+    let block ← parseIRSB text
+    return (ip, block)
+  return { blocks := fun ip => (pairs.find? fun p => p.1 == ip).map (·.2) }
 
 end VexIRParser
 end VexISA
