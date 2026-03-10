@@ -1,0 +1,83 @@
+import Instances.ISAs.VexIRParser
+import Instances.Examples.VexAddEaxEdiFixture
+import Instances.Examples.VexMovMemRdiRaxFixture
+import Instances.Examples.VexJrcxzSkipLeaTakenFixture
+import Instances.Examples.VexCmpRaxRdiJbTakenFixture
+
+set_option autoImplicit false
+set_option relaxedAutoImplicit false
+
+open VexISA VexIRParser
+
+-- Helper: compare parse result to an expected Block, returning Bool
+private def parseOk (text : String) (expected : Block Amd64Reg) : Bool :=
+  match parseIRSB text with
+  | .ok block => block == expected
+  | .error _  => false
+
+/-! ## Test 1: add32 block (ADD EAX, EDI) -/
+#guard parseOk
+"IRSB {
+   t4:Ity_I64 t3:Ity_I32 t6:Ity_I64 t5:Ity_I32 t0:Ity_I32 t7:Ity_I64 t8:Ity_I64 t9:Ity_I64
+   00 | ------ IMark(0x400000, 2, 0) ------
+   01 | t4 = GET:I64(rax)
+   02 | t3 = 64to32(t4)
+   03 | t6 = GET:I64(rdi)
+   04 | t5 = 64to32(t6)
+   05 | t0 = Add32(t3,t5)
+   06 | PUT(cc_op) = 0x3
+   07 | t7 = 32Uto64(t3)
+   08 | PUT(cc_dep1) = t7
+   09 | t8 = 32Uto64(t5)
+   10 | PUT(cc_dep2) = t8
+   11 | t9 = 32Uto64(t0)
+   12 | PUT(rax) = t9
+   NEXT: PUT(rip) = 0x400002; Ijk_Boring
+}"
+Instances.Examples.VexAddEaxEdiFixture.block
+
+/-! ## Test 2: store block (MOV [RDI], RAX) -/
+#guard parseOk
+"IRSB {
+   t0:Ity_I64 t1:Ity_I64
+   00 | ------ IMark(0x400000, 3, 0) ------
+   01 | t0 = GET:I64(rdi)
+   02 | t1 = GET:I64(rax)
+   03 | STle(t0) = t1
+   NEXT: PUT(rip) = 0x400003; Ijk_Boring
+}"
+Instances.Examples.VexMovMemRdiRaxFixture.block
+
+/-! ## Test 3: conditional exit block (JRCXZ + LEA) -/
+-- Fixture uses tmps: t2=rcx, t3=cmpEQ64 cond (→ condMap, not stmt), t4=rdi, t3=add64 result
+-- The CmpEQ64 assignment goes into condMap (not stmts), freeing t3 to be reused for add64.
+#guard parseOk
+"IRSB {
+   t2:Ity_I64 t3:Ity_I1 t4:Ity_I64 t3:Ity_I64
+   00 | ------ IMark(0x400000, 2, 0) ------
+   01 | t2 = GET:I64(rcx)
+   02 | t3 = CmpEQ64(t2,0x0)
+   03 | if (t3) { PUT(rip) = 0x400006; Ijk_Boring }
+   04 | t4 = GET:I64(rdi)
+   05 | t3 = Add64(t4,0x5)
+   06 | PUT(rax) = t3
+   NEXT: PUT(rip) = 0x400006; Ijk_Boring
+}"
+Instances.Examples.VexJrcxzSkipLeaTakenFixture.block
+
+/-! ## Test 4: CMP+JB conditional exit block -/
+#guard parseOk
+"IRSB {
+   t2:Ity_I64 t1:Ity_I64 t5:Ity_I1
+   00 | ------ IMark(0x400000, 5, 0) ------
+   01 | t2 = GET:I64(rax)
+   02 | t1 = GET:I64(rdi)
+   03 | PUT(cc_op) = 0x8
+   04 | PUT(cc_dep1) = t2
+   05 | PUT(cc_dep2) = t1
+   06 | PUT(rip) = 0x400003
+   07 | t5 = CmpLT64U(t2,t1)
+   08 | if (t5) { PUT(rip) = 0x400007; Ijk_Boring }
+   NEXT: PUT(rip) = 0x400005; Ijk_Boring
+}"
+Instances.Examples.VexCmpRaxRdiJbTakenFixture.block
