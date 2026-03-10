@@ -385,7 +385,10 @@ def parseNextLine (line : String) : Except String UInt64 := do
     let addrStr := myTrim ((myTrim rhs).splitOn ";").headI
     match parseNumLit addrStr with
     | some n => .ok (UInt64.ofNat n)
-    | none   => .error s!"bad NEXT address: {addrStr}"
+    | none   =>
+      -- Dynamic target (indirect branch or call via register/tmp): use 0 as sentinel.
+      if parseTmpRef addrStr |>.isSome then return 0
+      else .error s!"bad NEXT address: {addrStr}"
   | _ => .error s!"bad NEXT line: {line}"
 
 /-! ## Top-level IRSB parser -/
