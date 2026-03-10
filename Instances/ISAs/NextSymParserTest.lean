@@ -8,7 +8,7 @@ open VexISA VexIRParser
 /-! ## Roundtrip test: all 60 next_sym blocks parse without error -/
 -- Embedded from reference/tinyc/next_sym_cfg.json
 
-private def nextSymBlocks : List String := [
+def nextSymBlocks : List String := [
   "IRSB {
    t0:Ity_I64 t1:Ity_I64 t2:Ity_I64 t3:Ity_I64 t4:Ity_I64 t5:Ity_I64 t6:Ity_I64 t7:Ity_I32 t8:Ity_I32 t9:Ity_I32 t10:Ity_I64 t11:Ity_I64 t12:Ity_I64 t13:Ity_I64 t14:Ity_I64 t15:Ity_I32 t16:Ity_I32 t17:Ity_I64 t18:Ity_I64 t19:Ity_I64 t20:Ity_I1 t21:Ity_I64 t22:Ity_I64 t23:Ity_I64 t24:Ity_I64 t25:Ity_I64 t26:Ity_I64 t27:Ity_I64 t28:Ity_I32 t29:Ity_I64 t30:Ity_I64 t31:Ity_I1 t32:Ity_I32 t33:Ity_I32 t34:Ity_I1
 
