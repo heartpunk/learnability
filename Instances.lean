@@ -97,3 +97,4 @@ import Instances.Examples.Phase4LoopStabilization
 
 import Instances.Examples.Phase5Capstone
 import Instances.Examples.FetchedCFGSubsystem
+import Instances.Examples.FetchedCFGRefinement
