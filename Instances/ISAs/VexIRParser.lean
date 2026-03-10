@@ -425,8 +425,24 @@ def parseIRSB (text : String) : Except String (Block Amd64Reg) := do
       let line := myTrim line
       if line.isEmpty then return (st, nextIp)
       else if line.startsWith "NEXT:" then do
-        let ip ← parseNextLine line
-        return (st, some ip)
+        let rest := myTrim (myDrop line 5)
+        if rest.contains "Ijk_Ret" then do
+          -- Ijk_Ret: rip is loaded from the stack (a tmp variable).
+          -- Parse "PUT(rip) = tN; Ijk_Ret" and emit `put rip (tmp N)` so the
+          -- symbolic execution propagates the return-address load correctly.
+          -- blockToCompTree_from sees next=0 and uses .skip (rip already set).
+          match rest.splitOn "=" with
+          | _ :: rhs :: _ =>
+            let addrStr := myTrim ((myTrim rhs).splitOn ";").headI
+            match parseTmpRef addrStr with
+            | some n =>
+              let st' := st.addStmt (.put .rip (.tmp n))
+              return (st', some 0)
+            | none => return (st, some 0)  -- no tmp ref; fall back to sentinel
+          | _ => return (st, some 0)
+        else do
+          let ip ← parseNextLine line
+          return (st, some ip)
       else do
         let st' ← parseStmtContent (stmtContent line) st
         return (st', nextIp))

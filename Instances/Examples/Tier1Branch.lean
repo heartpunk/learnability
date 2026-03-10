@@ -14,7 +14,8 @@ abbrev Reg := Instances.Examples.ToyReg
 /-- Minimal two-path block: branch on `r1` so the closure stays tiny under `SemClosed`. -/
 def block : Block Reg :=
   { stmts := [Stmt.put .r0 (.add64 (.get .r0) (.const 1)),
-              Stmt.exit (.eq64 (.get .r1) (.const 0)) 0x1000]
+              Stmt.exit (.eq64 (.get .r1) (.const 0)) 0x1000,
+              Stmt.put .r1 (.const 0)]
     ip_reg := .r1
     next := 0 }
 

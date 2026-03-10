@@ -86,19 +86,29 @@ private theorem lowerSummariesFrom_sound_from {Reg : Type} [DecidableEq Reg] [Fi
       intro concrete ps hMatch hPc output hOut
       rcases concrete with ⟨state, temps⟩
       rcases hMatch with ⟨hState, hTemps⟩
-      have hOutput : output = state.write ip_reg fallthrough := by
-        simpa [execStmtsSuccs] using hOut
-      refine ⟨ps.finish ip_reg fallthrough, ?_, ?_, ?_⟩
-      · simp [lowerSummariesFrom]
-      · simpa [PartialSummary.finish, Summary.enabled] using hPc
-      · rw [hOutput]
-        calc
-          Summary.apply (ps.finish ip_reg fallthrough) input
-              = (applySymSub ps.sub input).write ip_reg fallthrough := by
-                  simpa [PartialSummary.finish, Summary.apply] using
-                    (applySymSub_write ps.sub input ip_reg (.const fallthrough))
-          _ = state.write ip_reg fallthrough := by
-                exact congrArg (fun st => st.write ip_reg fallthrough) hState.symm
+      by_cases hFT : fallthrough = (0 : UInt64)
+      · -- fallthrough=0 (Ijk_Ret): execStmtsSuccs = { state }; ps.finish sub = ps.sub
+        have hOutput : output = state := by
+          simp [execStmtsSuccs, hFT] at hOut; exact hOut
+        refine ⟨ps.finish ip_reg fallthrough, ?_, ?_, ?_⟩
+        · simp [lowerSummariesFrom]
+        · simpa [PartialSummary.finish, Summary.enabled] using hPc
+        · rw [hOutput]
+          simp [Summary.apply, PartialSummary.finish, hFT, hState.symm]
+      · -- fallthrough≠0: execStmtsSuccs = { state.write ip_reg fallthrough }
+        have hOutput : output = state.write ip_reg fallthrough := by
+          simp [execStmtsSuccs, hFT] at hOut; exact hOut
+        refine ⟨ps.finish ip_reg fallthrough, ?_, ?_, ?_⟩
+        · simp [lowerSummariesFrom]
+        · simpa [PartialSummary.finish, Summary.enabled] using hPc
+        · rw [hOutput]
+          calc
+            Summary.apply (ps.finish ip_reg fallthrough) input
+                = (applySymSub ps.sub input).write ip_reg fallthrough := by
+                    simpa [PartialSummary.finish, hFT, Summary.apply] using
+                      (applySymSub_write ps.sub input ip_reg (.const fallthrough))
+            _ = state.write ip_reg fallthrough := by
+                  exact congrArg (fun st => st.write ip_reg fallthrough) hState.symm
   | cons stmt stmts ih =>
       intro concrete ps hMatch hPc output hOut
       cases stmt with
@@ -198,16 +208,23 @@ private theorem lowerSummariesFrom_complete_from {Reg : Type} [DecidableEq Reg] 
       rcases hMatch with ⟨hState, hTemps⟩
       simp [lowerSummariesFrom] at hMem
       rcases hMem with rfl
-      have hApply :
-          Summary.apply (ps.finish ip_reg fallthrough) input = state.write ip_reg fallthrough := by
-        calc
-          Summary.apply (ps.finish ip_reg fallthrough) input
-              = (applySymSub ps.sub input).write ip_reg fallthrough := by
-                  simpa [PartialSummary.finish, Summary.apply] using
-                    (applySymSub_write ps.sub input ip_reg (.const fallthrough))
-          _ = state.write ip_reg fallthrough := by
-                exact congrArg (fun st => st.write ip_reg fallthrough) hState.symm
-      simp [execStmtsSuccs, hApply]
+      by_cases hFT : fallthrough = (0 : UInt64)
+      · -- fallthrough=0 (Ijk_Ret): execStmtsSuccs = { state }; ps.finish sub = ps.sub
+        have hApply : Summary.apply (ps.finish ip_reg fallthrough) input = state := by
+          simp [Summary.apply, PartialSummary.finish, hFT, hState.symm]
+        rw [hApply]
+        simp [execStmtsSuccs, hFT]
+      · -- fallthrough≠0: execStmtsSuccs = { state.write ip_reg fallthrough }
+        have hApply :
+            Summary.apply (ps.finish ip_reg fallthrough) input = state.write ip_reg fallthrough := by
+          calc
+            Summary.apply (ps.finish ip_reg fallthrough) input
+                = (applySymSub ps.sub input).write ip_reg fallthrough := by
+                    simpa [PartialSummary.finish, hFT, Summary.apply] using
+                      (applySymSub_write ps.sub input ip_reg (.const fallthrough))
+            _ = state.write ip_reg fallthrough := by
+                  exact congrArg (fun st => st.write ip_reg fallthrough) hState.symm
+        simp [execStmtsSuccs, hApply, hFT]
   | cons stmt stmts ih =>
       intro concrete ps summary hMatch hMem hEnabled
       cases stmt with

@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Extract a function's CFG as a list of VEX IR text blocks.
+"""Extract a function's VEX IR blocks via linear sweep.
 
-Thin wrapper around angr/pyvex: lifts every basic block in the function
-to VEX IR, serialises each IRSB as a plain text string, and emits JSON.
+Lifts the function's bytes one block at a time using pyvex, advancing by
+irsb.size after each block. No control flow analysis, no successor tracking —
+equivalent to what objdump does for assembly.
 
-The Lean side (VexIRParser.parseProgram) consumes this output directly.
+Trust boundary: pyvex for VEX IR lifting. angr is used ONLY as an ELF loader
+(virtual-address → file-bytes mapping) — no CFGFast, no analysis, no successor
+tracking. All block-boundary decisions come from pyvex.size.
 
 Usage:
-    python extract_cfg.py BINARY --func ADDR
-    python extract_cfg.py BINARY --func 0x401234
+    python extract_cfg.py BINARY --func ADDR --size BYTES
+    python extract_cfg.py BINARY --func 0x40006f --size 908
 
 Output (stdout):
     {"arch": "amd64", "blocks": ["IRSB {\n   ...\n}", ...]}
@@ -21,25 +24,30 @@ import json
 import angr
 
 
-def extract_cfg(binary: str, func_addr: int) -> dict:
+def extract_linear(binary: str, func_addr: int, func_size: int) -> dict:
+    # angr.Project used ONLY for ELF loading — maps virtual addresses to file bytes.
+    # No CFGFast, no analysis, no successor tracking.
     project = angr.Project(binary, auto_load_libs=False)
-    cfg = project.analyses.CFGFast(function_starts=[func_addr])
-    if func_addr not in cfg.functions:
-        raise ValueError(
-            f"function at 0x{func_addr:x} not found in CFG "
-            f"(known functions: {[hex(a) for a in sorted(cfg.functions)]})"
-        )
-    func = cfg.functions[func_addr]
+
+    addr = func_addr
     blocks = []
-    for block in func.blocks:
-        irsb = project.factory.block(block.addr).vex
+    while addr < func_addr + func_size:
+        # factory.block calls pyvex at `addr`; pyvex stops at first branch.
+        block = project.factory.block(addr)
+        irsb = block.vex
         blocks.append(str(irsb))
+        if block.size == 0:
+            raise ValueError(
+                f"pyvex returned zero-size block at 0x{addr:x} — cannot advance"
+            )
+        addr += block.size
+
     return {"arch": "amd64", "blocks": blocks}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Extract a function CFG as VEX IR text blocks (one IRSB string per block)."
+        description="Extract a function's VEX IR blocks via pyvex linear sweep."
     )
     parser.add_argument("binary", help="Path to the binary to analyse")
     parser.add_argument(
@@ -48,8 +56,14 @@ def main() -> None:
         required=True,
         help="Function start address (hex or decimal)",
     )
+    parser.add_argument(
+        "--size",
+        type=lambda s: int(s, 0),
+        required=True,
+        help="Function size in bytes (from ELF symbol table or objdump)",
+    )
     args = parser.parse_args()
-    result = extract_cfg(args.binary, args.func)
+    result = extract_linear(args.binary, args.func, args.size)
     print(json.dumps(result, indent=2))
 
 

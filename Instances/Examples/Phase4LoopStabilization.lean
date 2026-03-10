@@ -35,13 +35,13 @@ def blockA : Block Reg :=
 
 /-- Left branch reset: write r0 then r2. -/
 def blockB : Block Reg :=
-  { stmts := [Stmt.put .r0 (.const 0), Stmt.put .r2 (.const 0)]
+  { stmts := [Stmt.put .r0 (.const 0), Stmt.put .r2 (.const 0), Stmt.put .r1 (.const 0)]
     ip_reg := .r1
     next := 0 }
 
 /-- Right branch reset: write r2 then r0. Same semantics, different syntax. -/
 def blockC : Block Reg :=
-  { stmts := [Stmt.put .r2 (.const 0), Stmt.put .r0 (.const 0)]
+  { stmts := [Stmt.put .r2 (.const 0), Stmt.put .r0 (.const 0), Stmt.put .r1 (.const 0)]
     ip_reg := .r1
     next := 0 }
 

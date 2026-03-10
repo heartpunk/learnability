@@ -34,7 +34,10 @@ def PartialSummary.init {Reg : Type} : PartialSummary Reg :=
 
 def PartialSummary.finish {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (ps : PartialSummary Reg) (ip_reg : Reg) (next : UInt64) : Summary Reg :=
-  { sub := SymSub.write ps.sub ip_reg (.const next)
+  -- next=0 is the sentinel for Ijk_Ret/indirect branches: ip_reg is already
+  -- encoded in ps.sub via a `put ip_reg (tmp n)` stmt added by the parser.
+  -- Avoid overwriting that entry with a spurious write of 0.
+  { sub := if next = 0 then ps.sub else SymSub.write ps.sub ip_reg (.const next)
   , pc := ps.pc }
 
 abbrev LowerState (Reg : Type) := SymSub Reg × SymTempEnv Reg

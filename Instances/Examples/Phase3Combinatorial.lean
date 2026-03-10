@@ -35,13 +35,13 @@ def blockA : Block Reg :=
 
 
 def blockB : Block Reg :=
-  { stmts := [Stmt.put .r2 (.const 0)]
+  { stmts := [Stmt.put .r2 (.const 0), Stmt.put .r1 (.const 0)]
     ip_reg := .r1
     next := 0 }
 
 
 def blockC : Block Reg :=
-  { stmts := [Stmt.put .r2 (.const 1)]
+  { stmts := [Stmt.put .r2 (.const 1), Stmt.put .r1 (.const 0)]
     ip_reg := .r1
     next := 0 }
 

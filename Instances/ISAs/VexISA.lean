@@ -27,7 +27,10 @@ general nondeterministic CFG branching. -/
     (ip_reg : Reg) (fallthrough : UInt64) :
     List (Stmt Reg) → ConcreteState Reg × TempEnv → Finset (ConcreteState Reg)
   | [], (state, _) =>
-      { state.write ip_reg fallthrough }
+      -- fallthrough=0 is the sentinel for Ijk_Ret and indirect branches: ip_reg
+      -- is already set by the preceding stmts (e.g. `put rip (tmp n)` for Ijk_Ret).
+      -- Return the state as-is; an extra write of 0 would clobber the result.
+      if fallthrough == 0 then { state } else { state.write ip_reg fallthrough }
   | stmt :: stmts, cfg =>
       match stmt with
       | .linear stmt =>

@@ -15,7 +15,8 @@ abbrev Reg := Instances.Examples.ToyReg
 def block : Block Reg :=
   { stmts := [Stmt.wrTmp 0 (.load .w64 (.get .r0)),
               Stmt.exit (.eq64 (.tmp 0) (.const 0x50)) 0x3000,
-              Stmt.exit (.eq64 (.tmp 0) (.const 0x47)) 0x4000]
+              Stmt.exit (.eq64 (.tmp 0) (.const 0x47)) 0x4000,
+              Stmt.put .r1 (.const 0)]
     ip_reg := .r1
     next := 0 }
 

@@ -29,6 +29,7 @@ def lowerBlock {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 def lowerSummariesFrom {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (ip_reg : Reg) (ps : PartialSummary Reg) : List (Stmt Reg) → UInt64 → List (Summary Reg)
   | [], next =>
+      -- ps.finish handles next=0 correctly (no extra ip_reg write).
       [ps.finish ip_reg next]
   | .linear stmt :: stmts, next =>
       let lowered := lowerLinearStmt (ps.sub, ps.temps) stmt

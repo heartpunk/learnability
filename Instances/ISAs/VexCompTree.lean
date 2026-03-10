@@ -27,7 +27,12 @@ Core theorem: `treeBehavior (vexSummaryISA Reg) (blockToCompTree block) s s'`
 def blockToCompTree_from {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (ip_reg : Reg) (ps : PartialSummary Reg) :
     List (Stmt Reg) → UInt64 → CompTree (SymSub Reg) (SymPC Reg)
-  | [], next => .assign (SymSub.write ps.sub ip_reg (.const next))
+  | [], next =>
+      -- next=0 is the sentinel for Ijk_Ret and indirect branches: rip is already
+      -- encoded in ps.sub via the `put rip (tmp n)` stmt added by the parser, so
+      -- we apply ps.sub as-is without an additional ip_reg write.
+      if next = 0 then .assign ps.sub
+      else .assign (SymSub.write ps.sub ip_reg (.const next))
   | .linear stmt :: stmts, next =>
       let lowered := lowerLinearStmt (ps.sub, ps.temps) stmt
       blockToCompTree_from ip_reg { ps with sub := lowered.1, temps := lowered.2 } stmts next
@@ -63,13 +68,22 @@ private theorem treeBehavior_blockToCompTree_from {Reg : Type} [DecidableEq Reg]
       s' ∈ execStmtsSuccs ip_reg next stmts concrete := by
   induction stmts generalizing ps concrete with
   | nil =>
-    simp only [blockToCompTree_from, CompTree.treeBehavior, assignBehavior, execStmtsSuccs,
-      Finset.mem_singleton, vexSummaryISA]
     rcases concrete with ⟨state, _⟩
     have hState : state = applySymSub ps.sub input := hMatch.1
-    constructor
-    · intro h; simp [h, applySymSub_write, ← hState]
-    · intro h; simp [h, applySymSub_write, ← hState]
+    -- Two sub-cases based on next=0 (Ijk_Ret/indirect) vs next≠0 (Ijk_Boring/Call).
+    by_cases hNext : next = (0 : UInt64)
+    · -- next=0: blockToCompTree_from = .assign ps.sub; execStmtsSuccs = { state }
+      subst hNext
+      simp only [blockToCompTree_from, if_pos rfl, CompTree.treeBehavior, assignBehavior,
+        execStmtsSuccs, vexSummaryISA, show ((0 : UInt64) == 0) = true from rfl, if_true,
+        Finset.mem_singleton]
+      -- LHS: s' = applySymSub ps.sub input = state (by hState)
+      -- RHS: s' ∈ { state }, i.e. s' = state
+      exact ⟨fun h => h.trans hState.symm, fun h => h.trans hState⟩
+    · -- next≠0: blockToCompTree_from = .assign (write ...); execStmtsSuccs = { state.write ... }
+      simp only [blockToCompTree_from, if_neg hNext, CompTree.treeBehavior, assignBehavior,
+        execStmtsSuccs, vexSummaryISA]
+      simp [hNext, ← hState, applySymSub_write]
   | cons stmt stmts ih =>
     cases stmt with
     | linear stmt =>
