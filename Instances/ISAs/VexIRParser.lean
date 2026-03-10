@@ -44,14 +44,18 @@ def ParseState.addCond (st : ParseState) (n : Nat) (c : Cond Amd64Reg) : ParseSt
 
 def resolveReg (s : String) : Except String Amd64Reg :=
   match myTrim s with
-  | "rax" | "eax" | "ax" | "al" | "ah" => .ok .rax
-  | "rcx" | "ecx" | "cx" | "cl" | "ch" => .ok .rcx
-  | "rdi" | "edi" | "di" | "dil"       => .ok .rdi
-  | "rip" | "eip"                       => .ok .rip
-  | "cc_op"                             => .ok .cc_op
-  | "cc_dep1"                           => .ok .cc_dep1
-  | "cc_dep2"                           => .ok .cc_dep2
-  | "cc_ndep"                           => .ok .cc_ndep
+  | "rax" | "eax" | "ax" | "al" | "ah"  => .ok .rax
+  | "rcx" | "ecx" | "cx" | "cl" | "ch"  => .ok .rcx
+  | "rdx" | "edx" | "dx" | "dl" | "dh"  => .ok .rdx
+  | "rsi" | "esi" | "si" | "sil"        => .ok .rsi
+  | "rbp" | "ebp" | "bp" | "bpl"        => .ok .rbp
+  | "rsp" | "esp" | "sp" | "spl"        => .ok .rsp
+  | "rdi" | "edi" | "di" | "dil"        => .ok .rdi
+  | "rip" | "eip"                        => .ok .rip
+  | "cc_op"                              => .ok .cc_op
+  | "cc_dep1"                            => .ok .cc_dep1
+  | "cc_dep2"                            => .ok .cc_dep2
+  | "cc_ndep"                            => .ok .cc_ndep
   | r => .error s!"unknown register: {r}"
 
 def typeToWidth (ty : String) : Except String Width :=
