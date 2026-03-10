@@ -1,4 +1,5 @@
 import Mathlib.Logic.Relation
+import Cslib.Foundations.Semantics.LTS.Basic
 
 /-!
 # Labeled Transition Systems
@@ -11,7 +12,7 @@ downstream.
 ## Why relational encoding
 
 An LTS is a triple `(S, L, →)` where `→ ⊆ S × L × S`. We encode the
-transition relation as `step : S → L → S → Prop` rather than a function
+transition relation as `Tr : S → L → S → Prop` rather than a function
 `S → L → S` or `S → L → Option S`. The relational encoding handles
 nondeterminism naturally: a state can have multiple successors for the same
 label (branching), or none (the transition is unavailable). This is
@@ -19,7 +20,7 @@ essential — real implementations branch, and the whole point of extraction
 is to recover that branching structure.
 
 The same data, viewed differently, is a Kleisli arrow for the powerset
-monad: `step : S → L → Set S`. No conversion is needed — `Set S` is
+monad: `Tr : S → L → Set S`. No conversion is needed — `Set S` is
 definitionally `S → Prop` in Lean. The Kleisli perspective is how symbolic
 execution actually operates: given a state and a label, enumerate the set of
 reachable successors.
@@ -64,24 +65,24 @@ be transition systems.
 /-! ## Labeled Transition Systems
 
 An LTS over states `S` and labels `L`: an initial state and a transition
-relation. Well-formedness (types match, step is of the right sort) is
-enforced by Lean's type system—the analog of `→ ⊆ S × L × S` and `s₀ ∈ S`
-in the set-theoretic definition.
+relation `Tr` (inherited from `Cslib.LTS`). Well-formedness (types match,
+Tr is of the right sort) is enforced by Lean's type system—the analog of
+`→ ⊆ S × L × S` and `s₀ ∈ S` in the set-theoretic definition.
 -/
 
-/-- A labeled transition system (relational encoding). -/
-structure LTS (S : Type*) (L : Type*) where
+/-- A labeled transition system (relational encoding).
+    Extends `Cslib.LTS` with an initial state. -/
+structure LTS (S : Type*) (L : Type*) extends Cslib.LTS S L where
   init : S
-  step : S → L → S → Prop
 
 namespace LTS
 
 variable {S L : Type*}
 
-/-- The step relation `S → L → S → Prop` is definitionally `S → L → Set S`
+/-- The transition relation `S → L → S → Prop` is definitionally `S → L → Set S`
     (the powerset monad / Kleisli arrow). No conversion needed—just
     a change of perspective. -/
-example (lts : LTS S L) : S → L → Set S := lts.step
+example (lts : LTS S L) : S → L → Set S := lts.Tr
 
 
 /-! ### Reachability
@@ -93,7 +94,7 @@ us transitivity, single-step lifting, and induction principles for free.
 
 /-- The label-erased step relation: `s` can step to `s'` via some label. -/
 def canStep (lts : LTS S L) (s s' : S) : Prop :=
-  ∃ l, lts.step s l s'
+  ∃ l, lts.Tr s l s'
 
 /-- A state is reachable if it is in the reflexive-transitive closure
     of `canStep` from `init`. Corresponds to `Reach(H_I)` in the paper. -/
@@ -103,8 +104,8 @@ def Reachable (lts : LTS S L) (s : S) : Prop :=
 theorem Reachable.init (lts : LTS S L) : lts.Reachable lts.init :=
   Relation.ReflTransGen.refl
 
-theorem Reachable.step {lts : LTS S L} {s s' : S} {l : L}
-    (hr : lts.Reachable s) (hs : lts.step s l s') : lts.Reachable s' :=
+theorem Reachable.tr {lts : LTS S L} {s s' : S} {l : L}
+    (hr : lts.Reachable s) (hs : lts.Tr s l s') : lts.Reachable s' :=
   hr.tail ⟨l, hs⟩
 
 
@@ -119,7 +120,7 @@ forgets labels, `IsTrace` retains them. Corresponds to the paper's τ ∈ T.
 inductive IsTrace (lts : LTS S L) : S → List L → S → Prop where
   | nil (s : S) : IsTrace lts s [] s
   | cons (l : L) {s₁ s₂ s₃ : S} (ls : List L) :
-      lts.step s₁ l s₂ → IsTrace lts s₂ ls s₃ → IsTrace lts s₁ (l :: ls) s₃
+      lts.Tr s₁ l s₂ → IsTrace lts s₂ ls s₃ → IsTrace lts s₁ (l :: ls) s₃
 
 theorem IsTrace.append {lts : LTS S L} {s₁ s₂ s₃ : S} {ls₁ ls₂ : List L}
     (h₁ : IsTrace lts s₁ ls₁ s₂) (h₂ : IsTrace lts s₂ ls₂ s₃) :
@@ -144,7 +145,7 @@ theorem IsTrace.toReachable {lts : LTS S L} {ls : List L} {s : S}
     one target from each state, then two traces with the same start state
     and same label sequence must end at the same state. -/
 theorem IsTrace.deterministic {lts : LTS S L} {s s₁ s₂ : S} {ls : List L}
-    (h_det : ∀ (σ σ₁ σ₂ : S) (ℓ : L), lts.step σ ℓ σ₁ → lts.step σ ℓ σ₂ → σ₁ = σ₂)
+    (h_det : ∀ (σ σ₁ σ₂ : S) (ℓ : L), lts.Tr σ ℓ σ₁ → lts.Tr σ ℓ σ₂ → σ₁ = σ₂)
     (ht₁ : lts.IsTrace s ls s₁) (ht₂ : lts.IsTrace s ls s₂) : s₁ = s₂ := by
   induction ht₁ with
   | nil => cases ht₂; rfl
@@ -178,11 +179,11 @@ or dead ends — capturing the notion of "faithful execution record."
     transitions (differing in label, target, or both). -/
 abbrev IsBranchPoint (lts : LTS S L) (s : S) : Prop :=
   ∃ (ℓ₁ : L) (s₁ : S) (ℓ₂ : L) (s₂ : S),
-    (ℓ₁ ≠ ℓ₂ ∨ s₁ ≠ s₂) ∧ lts.step s ℓ₁ s₁ ∧ lts.step s ℓ₂ s₂
+    (ℓ₁ ≠ ℓ₂ ∨ s₁ ≠ s₂) ∧ lts.Tr s ℓ₁ s₁ ∧ lts.Tr s ℓ₂ s₂
 
 /-- A state is a dead end: no outgoing transitions. -/
 abbrev IsDeadEnd (lts : LTS S L) (s : S) : Prop :=
-  ¬∃ (ℓ : L) (s' : S), lts.step s ℓ s'
+  ¬∃ (ℓ : L) (s' : S), lts.Tr s ℓ s'
 
 /-- A maximal trace: extends through all deterministic steps, terminating
     only at a branch point or dead end. This is a "faithful execution
@@ -213,8 +214,8 @@ structure Simulates {S₁ S₂ : Type*}
     (R : S₁ → S₂ → Prop) : Prop where
   init : R simulating.init simulated.init
   step_match : ∀ (s₁ : S₁) (s₂ : S₂) (l : L) (s₂' : S₂),
-      R s₁ s₂ → simulated.step s₂ l s₂' →
-      ∃ s₁' : S₁, simulating.step s₁ l s₁' ∧ R s₁' s₂'
+      R s₁ s₂ → simulated.Tr s₂ l s₂' →
+      ∃ s₁' : S₁, simulating.Tr s₁ l s₁' ∧ R s₁' s₂'
 
 /-- Simulation is reflexive: any LTS simulates itself via `Eq`. -/
 theorem Simulates.refl (lts : LTS S L) : lts.Simulates lts Eq where

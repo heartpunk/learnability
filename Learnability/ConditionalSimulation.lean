@@ -35,15 +35,15 @@ These form a Galois connection: `α(S) ⊆ R ↔ S ⊆ γ(R)`.
 
 The oracle conditions are the two halves:
 
-- **`OracleSoundFor`** = `α(H_I.step) ⊆ R`: every concrete step from a
+- **`OracleSoundFor`** = `α(H_I.Tr) ⊆ R`: every concrete step from a
   *reachable* state, when projected via π, appears in R. The oracle contains
   the full abstraction of the implementation's reachable behavior.
 
-- **`OracleRealizableFor`** = `R ⊆ α(H_I.step)`: every oracle claim is
+- **`OracleRealizableFor`** = `R ⊆ α(H_I.Tr)`: every oracle claim is
   witnessed by *some* concrete step (no reachability guard). The oracle claims
   nothing the implementation doesn't do.
 
-- **Together**: `R = α(H_I.step)` over reachable states. **R is exactly the
+- **Together**: `R = α(H_I.Tr)` over reachable states. **R is exactly the
   guest-level semantics** — the precise image of the host's reachable
   transitions under π.
 
@@ -149,21 +149,21 @@ by the branching oracle.
 abbrev IsXControllable {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config)
     (s : HostState) (ℓ : L) : Prop :=
-  ∀ (σ : HostState), π σ = π s → ∃ (s' : HostState), H_I.step σ ℓ s'
+  ∀ (σ : HostState), π σ = π s → ∃ (s' : HostState), H_I.Tr σ ℓ s'
 
 /-- A transition s →ℓ s' is implementation-internal: it fires but doesn't
     change the projected state. Invisible to the extracted LTS. -/
 abbrev IsImplementationInternal {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config)
     (s s' : HostState) (ℓ : L) : Prop :=
-  H_I.step s ℓ s' ∧ π s = π s'
+  H_I.Tr s ℓ s' ∧ π s = π s'
 
 /-! ## Oracles: Value Transformation and Branching
 
 The oracle `R : L → Config → Config → Prop` summarizes the implementation's
 transition behavior at the guest level. `R ℓ x x'` means: from guest state
 `x`, the implementation can take label `ℓ` to arrive at guest state `x'`.
-When `R = α(H_I.step)` — i.e., when both soundness and realizability hold —
+When `R = α(H_I.Tr)` — i.e., when both soundness and realizability hold —
 R is exactly the guest language's operational semantics.
 
 A separate **branching oracle** `B : Config → L → Prop` records which labels
@@ -193,17 +193,17 @@ abbrev OracleSoundFor {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config)
     (R : L → Config → Config → Prop) : Prop :=
   ∀ (σ σ' : HostState) (ℓ : L),
-    H_I.Reachable σ → H_I.step σ ℓ σ' → R ℓ (π σ) (π σ')
+    H_I.Reachable σ → H_I.Tr σ ℓ σ' → R ℓ (π σ) (π σ')
 
 /-- The Galois dual of OracleSoundFor: R ⊆ α(steps). Every claimed
     oracle transition is witnessed by at least one concrete step pair.
-    Formally: OracleSoundFor says α(H_I.step) ⊆ R; this says R ⊆ α(H_I.step),
-    where α maps via π image. Together they give R = α(H_I.step). -/
+    Formally: OracleSoundFor says α(H_I.Tr) ⊆ R; this says R ⊆ α(H_I.Tr),
+    where α maps via π image. Together they give R = α(H_I.Tr). -/
 abbrev OracleRealizableFor {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config)
     (R : L → Config → Config → Prop) : Prop :=
   ∀ (x x' : Config) (ℓ : L),
-    R ℓ x x' → ∃ (σ σ' : HostState), π σ = x ∧ H_I.step σ ℓ σ' ∧ π σ' = x'
+    R ℓ x x' → ∃ (σ σ' : HostState), π σ = x ∧ H_I.Tr σ ℓ σ' ∧ π σ' = x'
 
 /-- Transition availability and projected target are determined by projected
     state alone: any two concrete states with the same projection agree on
@@ -214,8 +214,8 @@ abbrev ProjectionUniform {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config) : Prop :=
   ∀ (σ₁ σ₂ : HostState) (ℓ : L) (x' : Config),
     π σ₁ = π σ₂ →
-    (∃ σ₁', H_I.step σ₁ ℓ σ₁' ∧ π σ₁' = x') →
-    (∃ σ₂', H_I.step σ₂ ℓ σ₂' ∧ π σ₂' = x')
+    (∃ σ₁', H_I.Tr σ₁ ℓ σ₁' ∧ π σ₁' = x') →
+    (∃ σ₂', H_I.Tr σ₂ ℓ σ₂' ∧ π σ₂' = x')
 
 /-- Bridge: OracleRealizableFor + ProjectionUniform recover the fused
     completeness condition. Every oracle claim is realizable from any
@@ -228,7 +228,7 @@ theorem oracleComplete_of_realizable_uniform {HostState Config : Type*} {L : Typ
     (h_realizable : OracleRealizableFor H_I π R)
     (h_uniform : ProjectionUniform H_I π) :
     ∀ (σ : HostState) (x' : Config) (ℓ : L),
-      R ℓ (π σ) x' → ∃ (σ' : HostState), H_I.step σ ℓ σ' ∧ π σ' = x' := by
+      R ℓ (π σ) x' → ∃ (σ' : HostState), H_I.Tr σ ℓ σ' ∧ π σ' = x' := by
   intro σ x' ℓ hR
   obtain ⟨σ₀, σ₀', hπ₀, hstep₀, hπ₀'⟩ := h_realizable _ _ _ hR
   exact h_uniform σ₀ σ ℓ x' hπ₀ ⟨σ₀', hstep₀, hπ₀'⟩
@@ -249,14 +249,14 @@ abbrev BranchOracleSoundFor {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config)
     (B : BranchingOracle Config L) : Prop :=
   ∀ (σ : HostState) (ℓ : L),
-    B (π σ) ℓ → ∃ (σ' : HostState), H_I.step σ ℓ σ'
+    B (π σ) ℓ → ∃ (σ' : HostState), H_I.Tr σ ℓ σ'
 
 /-- A branching oracle is complete when every feasible label is claimed. -/
 abbrev BranchOracleCompleteFor {HostState Config : Type*} {L : Type*}
     (H_I : LTS HostState L) (π : Projection HostState Config)
     (B : BranchingOracle Config L) : Prop :=
   ∀ (σ σ' : HostState) (ℓ : L),
-    H_I.Reachable σ → H_I.step σ ℓ σ' → B (π σ) ℓ
+    H_I.Reachable σ → H_I.Tr σ ℓ σ' → B (π σ) ℓ
 
 /-- The canonical branching oracle induced by a value oracle:
     label ℓ is feasible from x iff R claims some transition. -/
@@ -312,7 +312,7 @@ the coinductive characterization via the general `Learnability.lean` framework.
 def LTS.ofOracle {Config : Type*} {L : Type*}
     (init : Config) (R : L → Config → Config → Prop) : LTS Config L where
   init := init
-  step := fun x ℓ x' => R ℓ x x'
+  Tr := fun x ℓ x' => R ℓ x x'
 
 /-- A sound oracle induces a forward simulation: the oracle LTS
     simulates H_I over reachable states via
@@ -327,7 +327,7 @@ theorem simulation_of_sound_oracle {HostState Config : Type*} {L : Type*}
   step_match := by
     intro x σ ℓ σ' ⟨hrel, hreach⟩ hstep
     subst hrel
-    exact ⟨π σ', h_sound σ σ' ℓ hreach hstep, rfl, hreach.step hstep⟩
+    exact ⟨π σ', h_sound σ σ' ℓ hreach hstep, rfl, hreach.tr hstep⟩
 
 /-- A realizable, uniform oracle induces a reverse simulation: H_I simulates
     the oracle LTS via `fun σ x => π σ = x`. OracleRealizableFor witnesses that

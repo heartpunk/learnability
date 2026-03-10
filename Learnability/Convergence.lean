@@ -49,7 +49,7 @@ need a better projection to notice that the current projection is wrong.
 - `non_controllable_preserves`: non-X-controllable transitions preserve π.
 
 A third, `branches_complete`, is a corollary of soundness alone: given
-`H_I.step σ ℓ σ'`, soundness gives `R ℓ (π σ) (π σ')`, witnessing `∃ x', R ℓ (π σ) x'`.
+`H_I.Tr σ ℓ σ'`, soundness gives `R ℓ (π σ) (π σ')`, witnessing `∃ x', R ℓ (π σ) x'`.
 The branch point and controllability hypotheses in `branches_complete` are
 underscore-prefixed — they are not used.
 
@@ -209,12 +209,12 @@ structure IsCoRefinementFixpoint {HostState Config : Type*} {L : Type*}
   sound : OracleSoundFor H_I π R
   /-- Non-X-controllable transitions preserve the projection -/
   non_controllable_preserves : ∀ (σ σ' : HostState) (ℓ : L),
-    H_I.Reachable σ → H_I.step σ ℓ σ' →
+    H_I.Reachable σ → H_I.Tr σ ℓ σ' →
     ¬IsXControllable H_I π σ ℓ →
     π σ = π σ'
 
 /-- X-controllable branch completeness follows from oracle soundness:
-    given `H_I.step σ ℓ σ'`, soundness gives `R ℓ (π σ) (π σ')`,
+    given `H_I.Tr σ ℓ σ'`, soundness gives `R ℓ (π σ) (π σ')`,
     witnessing `∃ x', R ℓ (π σ) x'`. The branch point and controllability
     hypotheses are unused — soundness and reachability alone suffice. -/
 theorem IsCoRefinementFixpoint.branches_complete
@@ -224,7 +224,7 @@ theorem IsCoRefinementFixpoint.branches_complete
     (h_fix : IsCoRefinementFixpoint H_I π R)
     (σ σ' : HostState) (ℓ : L)
     (h_reach : H_I.Reachable σ) (_h_bp : H_I.IsBranchPoint σ)
-    (h_step : H_I.step σ ℓ σ') (_h_ctrl : IsXControllable H_I π σ ℓ) :
+    (h_step : H_I.Tr σ ℓ σ') (_h_ctrl : IsXControllable H_I π σ ℓ) :
     ∃ (x' : Config), R ℓ (π σ) x' :=
   ⟨π σ', h_fix.sound σ σ' ℓ h_reach h_step⟩
 
@@ -237,7 +237,7 @@ theorem IsCoRefinementFixpoint.non_controllable_internal
     {R : L → Config → Config → Prop}
     (h_fix : IsCoRefinementFixpoint H_I π R)
     {σ σ' : HostState} {ℓ : L}
-    (h_reach : H_I.Reachable σ) (h_step : H_I.step σ ℓ σ')
+    (h_reach : H_I.Reachable σ) (h_step : H_I.Tr σ ℓ σ')
     (h_not_ctrl : ¬IsXControllable H_I π σ ℓ) :
     IsImplementationInternal H_I π σ σ' ℓ :=
   ⟨h_step, h_fix.non_controllable_preserves σ σ' ℓ h_reach h_step h_not_ctrl⟩
@@ -290,7 +290,7 @@ structure CoRefinementProcess (HostState Config Dim : Type*) [DecidableEq Dim]
   /-- At a fixpoint, non-X-controllable transitions preserve projection -/
   non_ctrl_at_fixpoint : ∀ X, refineStep X = X →
     ∀ (σ σ' : HostState) (ℓ : L),
-      H_I.Reachable σ → H_I.step σ ℓ σ' →
+      H_I.Reachable σ → H_I.Tr σ ℓ σ' →
       ¬IsXControllable H_I (mkProjection X) σ ℓ →
       mkProjection X σ = mkProjection X σ'
 

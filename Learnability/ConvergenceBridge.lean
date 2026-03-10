@@ -114,9 +114,9 @@ noncomputable def LearnabilityPreconditions.toCoRefinementProcess
     (lp : LearnabilityPreconditions State Label Dim Value)
     (init : State)
     (h_reach_relevant : ∀ s,
-      (LTS.mk init lp.behavior).Reachable s → lp.relevant s) :
+      (LTS.mk ⟨lp.behavior⟩ init).Reachable s → lp.relevant s) :
     CoRefinementProcess State (Dim → Value) Dim Label where
-  H_I := { init := init, step := lp.behavior }
+  H_I := { Tr := lp.behavior, init := init }
   mkProjection := fun X => project lp.observe X
   mkOracle := fun X ℓ x x' => projectedOracle lp.oracle lp.observe X ℓ x x'
   refineStep := refineStep lp.toObservableSystem
@@ -152,9 +152,9 @@ theorem LearnabilityPreconditions.extractionDims_isCoRefinementFixpoint
     (lp : LearnabilityPreconditions State Label Dim Value)
     (init : State)
     (h_reach_relevant : ∀ s,
-      (LTS.mk init lp.behavior).Reachable s → lp.relevant s) :
+      (LTS.mk ⟨lp.behavior⟩ init).Reachable s → lp.relevant s) :
     IsCoRefinementFixpoint
-      (LTS.mk init lp.behavior)
+      (LTS.mk ⟨lp.behavior⟩ init)
       (project lp.observe lp.extractionDims)
       (fun ℓ x x' =>
         projectedOracle lp.oracle lp.observe lp.extractionDims ℓ x x') where
@@ -180,8 +180,8 @@ theorem LearnabilityPreconditions.extractionDims_yields_simulation
     (lp : LearnabilityPreconditions State Label Dim Value)
     (init : State)
     (h_reach_relevant : ∀ s,
-      (LTS.mk init lp.behavior).Reachable s → lp.relevant s) :
-    let H_I : LTS State Label := ⟨init, lp.behavior⟩
+      (LTS.mk ⟨lp.behavior⟩ init).Reachable s → lp.relevant s) :
+    let H_I : LTS State Label := ⟨⟨lp.behavior⟩, init⟩
     let π := project lp.observe lp.extractionDims
     let R := fun ℓ x x' =>
       projectedOracle lp.oracle lp.observe lp.extractionDims ℓ x x'
