@@ -367,6 +367,10 @@ def build_fixture(
     expected = {
         "rax": out.solver.eval(out.regs.rax),
         "rcx": out.solver.eval(out.regs.rcx),
+        "rdx": out.solver.eval(out.regs.rdx),
+        "rsi": out.solver.eval(out.regs.rsi),
+        "rbp": out.solver.eval(out.regs.rbp),
+        "rsp": out.solver.eval(out.regs.rsp),
         "rdi": out.solver.eval(out.regs.rdi),
         "rip": out.solver.eval(out.regs.rip),
         "cc_op": out.solver.eval(out.regs.cc_op),
@@ -384,6 +388,10 @@ def build_fixture(
     concrete_input = {
         "rax": inputs.get("rax", 0),
         "rcx": inputs.get("rcx", 0),
+        "rdx": inputs.get("rdx", 0),
+        "rsi": inputs.get("rsi", 0),
+        "rbp": inputs.get("rbp", 0),
+        "rsp": inputs.get("rsp", 0),
         "rdi": inputs.get("rdi", 0),
         "rip": base,
         "cc_op": inputs.get("cc_op", 0),
@@ -470,6 +478,10 @@ def input : Amd64ConcreteState :=
   mkAmd64StateCC
     0x{fixture['input']['rax']:x}
     0x{fixture['input']['rcx']:x}
+    0x{fixture['input']['rdx']:x}
+    0x{fixture['input']['rsi']:x}
+    0x{fixture['input']['rbp']:x}
+    0x{fixture['input']['rsp']:x}
     0x{fixture['input']['rdi']:x}
     0x{fixture['input']['rip']:x}
     0x{fixture['input']['cc_op']:x}
@@ -482,6 +494,10 @@ def expected : Amd64ConcreteState :=
   mkAmd64StateCC
     0x{fixture['expected']['rax']:x}
     0x{fixture['expected']['rcx']:x}
+    0x{fixture['expected']['rdx']:x}
+    0x{fixture['expected']['rsi']:x}
+    0x{fixture['expected']['rbp']:x}
+    0x{fixture['expected']['rsp']:x}
     0x{fixture['expected']['rdi']:x}
     0x{fixture['expected']['rip']:x}
     0x{fixture['expected']['cc_op']:x}
