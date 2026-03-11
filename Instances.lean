@@ -90,6 +90,7 @@ import Instances.ISAs.VexIRParser
 import Instances.ISAs.VexIRParserTests
 import Instances.ISAs.VexModelEq
 import Instances.ISAs.VexWitness
+import Instances.ISAs.VexDispatchLoop
 import Instances.ISAs.VexSubsystem
 import Instances.ISAs.VexSummaryISA
 
