@@ -93,6 +93,9 @@ import Instances.ISAs.VexWitness
 import Instances.ISAs.VexDispatchLoop
 import Instances.ISAs.VexSubsystem
 import Instances.ISAs.VexSummaryISA
+import Instances.ISAs.VexCompTree
+import Instances.ISAs.VexDispatchLoop
+import Instances.ISAs.VexProofCompression
 
 import Instances.Examples.Phase4LoopStabilization
 

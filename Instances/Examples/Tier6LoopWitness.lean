@@ -1,5 +1,6 @@
 import Instances.Examples.Tier0Increment
 import Instances.ISAs.VexWitness
+import Instances.ISAs.VexProofCompression
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -29,11 +30,7 @@ def loop : VexLoopSummary Reg where
   continues := .not .true
   exits := .true
   bodyEffect := execBlock block
-  bodyEffect_spec := by
-    intro s s'
-    simpa [CompTree.treeBehavior, assignBehavior] using
-      (show (s' = applySymSub (lowerBlockSub block) s) ↔ s' = execBlock block s by
-        rw [lowerBlockSub_sound block s])
+  bodyEffect_spec := bodyEffect_spec_assign_lowerBlockSub block
   guard_partition := by
     intro s
     simp [vexSummaryISA, satisfiesSymPC, evalSymPC]
