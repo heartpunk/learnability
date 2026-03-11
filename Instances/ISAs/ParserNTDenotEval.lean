@@ -1,5 +1,7 @@
 import Instances.ISAs.VexCompTree
 import Instances.ISAs.ParserNTParserTest
+import Instances.ISAs.NextSymParserTest
+import Instances.ISAs.VexProofCompression
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -65,3 +67,48 @@ def ntFunctions : List (String × List String) :=
           IO.println s!"  block {i}: {repr guard}"
         | _ => pure ()
       i := i + 1
+
+/-! ## P₀ analysis: count distinct data guard PCs across all NT functions -/
+
+#eval do
+  IO.println "\nP₀ analysis — data guard PCs across all parser NT blocks:"
+  let mut allGuards : List (SymPC Amd64Reg) := []
+  for (_, blocks) in ntFunctions do
+    for s in blocks do
+      match parseIRSB s with
+      | .error _ => pure ()
+      | .ok b =>
+        let tree := blockToCompTree b
+        allGuards := allGuards ++ collectGuardPCsList tree
+  let deduped := allGuards.eraseDups
+  let routing := deduped.filter (SymPC.isRoutingPC Amd64Reg.rip)
+  let dataPCs := dataGuardPCsList Amd64Reg.rip deduped
+  IO.println s!"Total distinct guard PCs: {deduped.length}"
+  IO.println s!"Routing PCs (rip == const): {routing.length}"
+  IO.println s!"Data PCs (P₀): {dataPCs.length}"
+  IO.println s!"2^P₀ = {2 ^ dataPCs.length}"
+  IO.println "Data PCs:"
+  for pc in dataPCs do
+    IO.println s!"  {repr pc}"
+
+/-! ## Per-function P₀ breakdown -/
+
+#eval do
+  IO.println "\nPer-function P₀ breakdown:"
+  -- next_sym
+  let mut nsGuards : List (SymPC Amd64Reg) := []
+  for s in nextSymBlocks do
+    match parseIRSB s with
+    | .error _ => pure ()
+    | .ok b => nsGuards := nsGuards ++ collectGuardPCsList (blockToCompTree b)
+  let nsData := dataGuardPCsList Amd64Reg.rip nsGuards.eraseDups
+  IO.println s!"  next_sym: P₀ = {nsData.length}, 2^P₀ = {2 ^ nsData.length}"
+  -- Each NT function
+  for (name, blocks) in ntFunctions do
+    let mut guards : List (SymPC Amd64Reg) := []
+    for s in blocks do
+      match parseIRSB s with
+      | .error _ => pure ()
+      | .ok b => guards := guards ++ collectGuardPCsList (blockToCompTree b)
+    let dataPCs := dataGuardPCsList Amd64Reg.rip guards.eraseDups
+    IO.println s!"  {name}: P₀ = {dataPCs.length}, 2^P₀ = {2 ^ dataPCs.length}"

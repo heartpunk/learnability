@@ -1,5 +1,6 @@
 import Instances.ISAs.VexCompTree
 import Instances.ISAs.NextSymParserTest
+import Instances.ISAs.VexProofCompression
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -59,3 +60,25 @@ that are slow to reduce via kernel definitional equality.
         IO.println s!"  Block {i}: {repr guard}"
       | _ => pure ()
     i := i + 1
+
+/-! ## P₀ analysis: count distinct data guard PCs -/
+
+#eval do
+  IO.println "\nP₀ analysis — data guard PCs across all next_sym blocks:"
+  let mut allGuards : List (SymPC Amd64Reg) := []
+  for s in nextSymBlocks do
+    match parseIRSB s with
+    | .error _ => pure ()
+    | .ok b =>
+      let tree := blockToCompTree b
+      allGuards := allGuards ++ collectGuardPCsList tree
+  let deduped := allGuards.eraseDups
+  let routing := deduped.filter (SymPC.isRoutingPC Amd64Reg.rip)
+  let dataPCs := dataGuardPCsList Amd64Reg.rip deduped
+  IO.println s!"Total distinct guard PCs: {deduped.length}"
+  IO.println s!"Routing PCs (rip == const): {routing.length}"
+  IO.println s!"Data PCs (P₀): {dataPCs.length}"
+  IO.println s!"2^P₀ = {2 ^ dataPCs.length}"
+  IO.println "Data PCs:"
+  for pc in dataPCs do
+    IO.println s!"  {repr pc}"

@@ -218,4 +218,36 @@ theorem pcSignatureWith_congr_of_regOnly
   simp only [vexSummaryISA, satisfiesSymPC]
   rw [evalSymPC_congr_of_regOnly (hClosure φ hφ) hRegs]
 
+/-! ## Guard PC extraction and routing/data classification (P₀ analysis)
+
+    `collectGuardPCsList` extracts guard PCs from `guardedChoice` nodes.
+    `SymPC.isRoutingPC` classifies rip-equality guards (routing) vs data guards.
+    P₀ = number of distinct data guard PCs → convergence bound K ≤ 2^P₀. -/
+
+/-- Recursively collect all guard PCs from `guardedChoice` nodes in a CompTree. -/
+def collectGuardPCsList {Sub PC : Type*} : CompTree Sub PC → List PC
+  | .skip | .assign _ | .assert _ => []
+  | .seq t₁ t₂ => collectGuardPCsList t₁ ++ collectGuardPCsList t₂
+  | .guardedChoice guard tThen tElse =>
+      guard :: (collectGuardPCsList tThen ++ collectGuardPCsList tElse)
+  | .boundedIter body _ => collectGuardPCsList body
+
+/-- Finset version of `collectGuardPCsList`. -/
+def collectGuardPCs {Sub PC : Type*} [DecidableEq PC]
+    (tree : CompTree Sub PC) : Finset PC :=
+  (collectGuardPCsList tree).toFinset
+
+/-- Check if a SymPC is a routing guard: `ip_reg == const` or `const == ip_reg`.
+    These guards select which block to execute in the dispatch loop and do not
+    contribute to the data-level specification variety (P₀). -/
+def SymPC.isRoutingPC {Reg : Type} [BEq Reg] (ip_reg : Reg) : SymPC Reg → Bool
+  | .eq (.reg r) (.const _) => r == ip_reg
+  | .eq (.const _) (.reg r) => r == ip_reg
+  | _ => false
+
+/-- Filter a list of guard PCs to only data-level guards (non-routing). -/
+def dataGuardPCsList {Reg : Type} [BEq Reg]
+    (ip_reg : Reg) : List (SymPC Reg) → List (SymPC Reg) :=
+  List.filter (fun pc => !pc.isRoutingPC ip_reg)
+
 end VexISA
