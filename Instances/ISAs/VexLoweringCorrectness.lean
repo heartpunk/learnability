@@ -115,10 +115,8 @@ private theorem lowerSummariesFrom_sound_from {Reg : Type} [DecidableEq Reg] [Fi
       | linear stmt =>
           let lowered := lowerLinearStmt (ps.sub, ps.temps) stmt
           let ps' : PartialSummary Reg := { ps with sub := lowered.1, temps := lowered.2 }
-          have hMatchLinear : LowerStateMatches input concrete (ps.sub, ps.temps) := hMatch
-          have hMatch' : PartialSummaryMatches input (execLinearStmt concrete stmt) ps' := by
-            have hStep := (linearStmtBridge stmt).sound input concrete (ps.sub, ps.temps) hMatchLinear
-            simpa [ps', lowered, LowerStateMatches, PartialSummaryMatches] using hStep
+          have hMatch' : PartialSummaryMatches input (execLinearStmt concrete stmt) ps' :=
+            partialSummaryMatches_linearStmt_step input stmt concrete ps hMatch
           simpa [lowerSummariesFrom, lowered, ps', execStmtsSuccs, execLinearStmt] using
             ih (execLinearStmt concrete stmt) ps' hMatch' hPc output hOut
       | branch stmt =>
@@ -231,10 +229,8 @@ private theorem lowerSummariesFrom_complete_from {Reg : Type} [DecidableEq Reg] 
       | linear stmt =>
           let lowered := lowerLinearStmt (ps.sub, ps.temps) stmt
           let ps' : PartialSummary Reg := { ps with sub := lowered.1, temps := lowered.2 }
-          have hMatchLinear : LowerStateMatches input concrete (ps.sub, ps.temps) := hMatch
-          have hMatch' : PartialSummaryMatches input (execLinearStmt concrete stmt) ps' := by
-            have hStep := (linearStmtBridge stmt).sound input concrete (ps.sub, ps.temps) hMatchLinear
-            simpa [ps', lowered, LowerStateMatches, PartialSummaryMatches] using hStep
+          have hMatch' : PartialSummaryMatches input (execLinearStmt concrete stmt) ps' :=
+            partialSummaryMatches_linearStmt_step input stmt concrete ps hMatch
           simpa [lowerSummariesFrom, lowered, ps', execStmtsSuccs, execLinearStmt] using
             ih (execLinearStmt concrete stmt) ps' summary hMatch' hMem hEnabled
       | branch stmt =>

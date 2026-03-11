@@ -349,4 +349,19 @@ private theorem applySymSub_writeMem {Reg : Type} [DecidableEq Reg] [Fintype Reg
     { sub := state.1, pc := .true, temps := state.2 }
   (ps.sub, ps.temps)
 
+/-- Stepping a concrete+symbolic state through a linear statement preserves
+    `PartialSummaryMatches`. Abstracts the repeated `(linearStmtBridge stmt).sound`
+    + `simpa` pattern from `VexLoweringCorrectness` and `VexCompTree`. -/
+theorem partialSummaryMatches_linearStmt_step
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (input : ConcreteState Reg) (stmt : LinearStmt Reg)
+    (concrete : ConcreteState Reg × TempEnv) (ps : PartialSummary Reg)
+    (hMatch : PartialSummaryMatches input concrete ps) :
+    PartialSummaryMatches input
+      (execLinearStmt concrete stmt)
+      { ps with sub := (lowerLinearStmt (ps.sub, ps.temps) stmt).1
+                temps := (lowerLinearStmt (ps.sub, ps.temps) stmt).2 } := by
+  have hStep := (linearStmtBridge stmt).sound input concrete (ps.sub, ps.temps) hMatch
+  simpa [execLinearStmt, lowerLinearStmt, LowerStateMatches, PartialSummaryMatches] using hStep
+
 end VexISA

@@ -90,9 +90,8 @@ private theorem treeBehavior_blockToCompTree_from {Reg : Type} [DecidableEq Reg]
       simp only [blockToCompTree_from, execStmtsSuccs]
       let lowered := lowerLinearStmt (ps.sub, ps.temps) stmt
       let ps' : PartialSummary Reg := { ps with sub := lowered.1, temps := lowered.2 }
-      have hMatch' : PartialSummaryMatches input (execLinearStmt concrete stmt) ps' := by
-        have hStep := (linearStmtBridge stmt).sound input concrete (ps.sub, ps.temps) hMatch
-        simpa [ps', lowered, LowerStateMatches, PartialSummaryMatches] using hStep
+      have hMatch' : PartialSummaryMatches input (execLinearStmt concrete stmt) ps' :=
+        partialSummaryMatches_linearStmt_step input stmt concrete ps hMatch
       exact ih ps' (execLinearStmt concrete stmt) hMatch'
     | branch stmt =>
       simp only [blockToCompTree_from, CompTree.treeBehavior, choiceBehavior, seqBehavior,
