@@ -211,16 +211,17 @@ def composeAndDedupParallel {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashab
     IO (Array (Branch (SymSub Reg) (SymPC Reg)) × Std.HashSet (Branch (SymSub Reg) (SymPC Reg))
       × Nat × Nat × Nat × Nat) := do
   -- Build frontier index (shared across workers, immutable)
-  let mut frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
-  let mut frontierNoRip : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-  for f in frontierArr do
-    match extractRipGuard ip_reg f.pc with
-    | some addr =>
-      let arr := frontierByRip.getD addr #[]
-      frontierByRip := frontierByRip.insert addr (arr.push f)
-    | none => frontierNoRip := frontierNoRip.push f
-  let frontierByRip := frontierByRip  -- freeze
-  let frontierNoRip := frontierNoRip
+  let ripIndex ← do
+    let mut byRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
+    let mut noRip : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    for f in frontierArr do
+      match extractRipGuard ip_reg f.pc with
+      | some addr =>
+        let arr := byRip.getD addr #[]
+        byRip := byRip.insert addr (arr.push f)
+      | none => noRip := noRip.push f
+    return (byRip, noRip)
+  let (frontierByRip, frontierNoRip) := ripIndex
   -- Split body into chunks and spawn tasks
   let chunks := splitIntoChunks bodyArr numWorkers
   let tasks ← chunks.mapM fun chunk =>
