@@ -1045,20 +1045,14 @@ def stratifiedFixpoint
   log s!"\n--- Phase 1: Leaf function (next_sym) ---"
   let t0 ← IO.monoMsNow
   let (nextSymName, nextSymBody) := funcBlocks[0]!
-  -- next_sym has no outgoing calls to other parser functions, use normal stabilization
-  match ← computeStabilizationHS ip_reg nextSymBody 200 (some ".lake/stabilization.log") with
-  | some (k, card) =>
+  -- Use computeFunctionStabilization directly (returns branch array as summary).
+  -- Don't double-run with computeStabilizationHS — that keeps two copies of deeply-nested
+  -- symbolic branches alive simultaneously, causing OOM.
+  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log with
+  | some (k, summaryArr) =>
     let t1 ← IO.monoMsNow
-    -- Collect next_sym's final branches as its summary
-    -- Re-run to get the actual branch array (computeStabilizationHS returns count only)
-    -- For now, use computeFunctionStabilization which returns the array
-    match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log with
-    | some (_, summaryArr) =>
-      summaries := summaries.insert functions[0]!.entryAddr summaryArr
-      log s!"  {nextSymName}: converged at K={k}, {summaryArr.size} summary branches, {t1 - t0}ms"
-    | none =>
-      log s!"  {nextSymName}: DID NOT CONVERGE (phase 2)"
-      return
+    summaries := summaries.insert functions[0]!.entryAddr summaryArr
+    log s!"  {nextSymName}: converged at K={k}, {summaryArr.size} summary branches, {t1 - t0}ms"
   | none =>
     log s!"  {nextSymName}: DID NOT CONVERGE"
     return
