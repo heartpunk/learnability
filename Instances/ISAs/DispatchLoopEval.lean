@@ -1276,7 +1276,8 @@ def splitBodyAndExpandCalls {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Re
 
 def stratifiedFixpoint
     (functions : Array FunctionSpec)
-    (log : String → IO Unit) : IO Unit := do
+    (log : String → IO Unit) :
+    IO (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))) := do
   let ip_reg := Amd64Reg.rip
   -- Parse all function blocks into raw body arrays
   let mut funcBlocks : Array (String × Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := #[]
@@ -1284,7 +1285,7 @@ def stratifiedFixpoint
     match parseBlocksWithAddresses func.blocks with
     | .error e =>
       log s!"  PARSE ERROR for {func.name}: {e}"
-      return
+      return {}
     | .ok pairs =>
       let body := flatBodyDenot ip_reg pairs
       let bodyArr := finsetToArray body
@@ -1305,7 +1306,7 @@ def stratifiedFixpoint
     log s!"  {nextSymName}: converged at K={k}, {summaryArr.size} summary branches, {t1 - t0}ms"
   | none =>
     log s!"  {nextSymName}: DID NOT CONVERGE"
-    return
+    return {}
   -- Phase 2: Iterate NT function summaries to fixpoint
   -- At each outer round, for each NT function:
   --   1. Split body into non-call blocks + call-expanded results (via splitBodyAndExpandCalls)
@@ -1343,12 +1344,162 @@ def stratifiedFixpoint
           log s!"  {fname}: K={k}, {newSummary.size} branches (stable), {t1 - t0}ms"
       | none =>
         log s!"  {fname}: DID NOT CONVERGE"
-        return
+        return {}
   log s!"\n=== Stratified fixpoint complete after {outerRound} outer rounds ==="
   for i in [:functions.size] do
     let func := functions[i]!
     let summary := summaries.getD func.entryAddr #[]
     log s!"  {func.name}: {summary.size} branches"
+  return summaries
+
+/-! ## DFA & CFG Extraction -/
+
+/-- Strip rip-guard conjuncts from a PC, returning only the data guard. -/
+def stripRipGuards {Reg : Type} [BEq Reg] (ip_reg : Reg) (pc : SymPC Reg) : SymPC Reg :=
+  let cs := SymPC.conjuncts pc |>.filter fun c => match c with
+    | .eq (.reg r) (.const _) => !(r == ip_reg)
+    | _ => true
+  match cs with
+  | [] => .true
+  | c :: rest => rest.foldl .and c
+
+/-- Pretty-print a SymExpr concisely. -/
+partial def ppExpr : SymExpr Amd64Reg → String
+  | .const v =>
+    let n := v.toNat
+    if n ≥ 32 && n ≤ 126 then s!"'{Char.ofNat n}'"
+    else s!"{n}"
+  | .reg r => toString r
+  | .add64 a b => s!"({ppExpr a}+{ppExpr b})"
+  | .sub64 a b => s!"({ppExpr a}-{ppExpr b})"
+  | .and64 a b => s!"({ppExpr a}&{ppExpr b})"
+  | .or64  a b => s!"({ppExpr a}|{ppExpr b})"
+  | .xor64 a b => s!"({ppExpr a}^{ppExpr b})"
+  | .shr64 a b => s!"({ppExpr a}>>{ppExpr b})"
+  | .shl64 a b => s!"({ppExpr a}<<{ppExpr b})"
+  | .low32 e   => s!"lo32({ppExpr e})"
+  | .uext32 e  => s!"zx32({ppExpr e})"
+  | .sext32to64 e => s!"sx32({ppExpr e})"
+  | _ => "..."
+
+/-- Pretty-print a SymPC atom as a character condition on rax. -/
+partial def ppCharCond (rax : Amd64Reg) : SymPC Amd64Reg → String
+  | .eq (.reg r) (.const c) =>
+    if r == rax then
+      let n := c.toNat
+      if n ≥ 32 && n ≤ 126 then s!"rax=='{Char.ofNat n}'"
+      else s!"rax=={n}"
+    else s!"{r}=={ppExpr (.const c)}"
+  | .eq l r => s!"{ppExpr l}=={ppExpr r}"
+  | .le (.const lo) (.reg r) =>
+    if r == rax then s!"rax>={lo.toNat}" else s!"{lo.toNat}<={r}"
+  | .le (.reg r) (.const hi) =>
+    if r == rax then s!"rax<={hi.toNat}" else s!"{r}<={hi.toNat}"
+  | .le l r => s!"{ppExpr l}<={ppExpr r}"
+  | .lt (.const lo) (.reg r) =>
+    if r == rax then s!"rax>{lo.toNat}" else s!"{lo.toNat}<{r}"
+  | .lt (.reg r) (.const hi) =>
+    if r == rax then s!"rax<{hi.toNat}" else s!"{r}<{hi.toNat}"
+  | .lt l r => s!"{ppExpr l}<{ppExpr r}"
+  | .not inner => "NOT(" ++ ppCharCond rax inner ++ ")"
+  | .true => "true"
+  | _ => "<cond>"
+
+/-- Format a data guard PC (non-rip conjuncts) as a human-readable string. -/
+def describeDataGuard (rax : Amd64Reg) (pc : SymPC Amd64Reg) : String :=
+  let cs := SymPC.conjuncts pc
+  match cs with
+  | [.true] => "*"
+  | _ => " & ".intercalate (cs.map (ppCharCond rax))
+
+/-- Format a UInt64 as a hex address. -/
+def hexAddr (a : UInt64) : String :=
+  s!"0x{String.mk (Nat.toDigits 16 a.toNat)}"
+
+/-- Print DFA transition table from next_sym body branches (single-step transitions). -/
+def printDFATable (log : String → IO Unit)
+    (bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) : IO Unit := do
+  let ip_reg := Amd64Reg.rip
+  let rax_reg := Amd64Reg.rax
+  let mut trans : Array (UInt64 × SymPC Amd64Reg × UInt64) := #[]
+  for b in bodyArr do
+    match extractRipGuard ip_reg b.pc, extractRipTarget ip_reg b.sub with
+    | some src, some tgt =>
+      trans := trans.push (src, stripRipGuards ip_reg b.pc, tgt)
+    | _, _ => pure ()
+  log s!"\n=== DFA Transition Table (next_sym, {trans.size} single-step transitions) ==="
+  let mut bySource : Std.HashMap UInt64 (Array (SymPC Amd64Reg × UInt64)) := {}
+  let mut allStates : Std.HashSet UInt64 := {}
+  for (src, guard, tgt) in trans do
+    let arr := bySource.getD src #[]
+    bySource := bySource.insert src (arr.push (guard, tgt))
+    allStates := allStates.insert src
+    allStates := allStates.insert tgt
+  log s!"  States: {allStates.size}, Source states: {bySource.size}"
+  for (src, edges) in bySource.toArray do
+    log s!"  State {hexAddr src}:"
+    for (guard, tgt) in edges do
+      log s!"    [{describeDataGuard rax_reg guard}] -> {hexAddr tgt}"
+
+/-- Extract CFG info from body branches: count next_sym calls and collect called NT names. -/
+def extractBodyCFG (ip_reg : Amd64Reg)
+    (bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
+    (funcEntries : Std.HashMap UInt64 String) : Nat × Std.HashSet String := Id.run do
+  let mut nsCount : Nat := 0
+  let mut calledNTs : Std.HashSet String := {}
+  for b in bodyArr do
+    match extractRipTarget ip_reg b.sub with
+    | some tgt =>
+      match funcEntries.get? tgt with
+      | some name =>
+        if name == "next_sym" then nsCount := nsCount + 1
+        else calledNTs := calledNTs.insert name
+      | none => pure ()
+    | none => pure ()
+  return (nsCount, calledNTs)
+
+/-! ## Golden Grammar Comparison -/
+
+/-- Expected callee NTs for each NT function (from golden_grammar_tinyc.json). -/
+def goldenCallees : Std.HashMap String (List String) :=
+  ({} : Std.HashMap String (List String))
+    |>.insert "term"       ["paren_expr"]
+    |>.insert "sum"        ["term"]  -- iterative impl: loop body, no recursive call
+    |>.insert "test"       ["sum"]
+    |>.insert "expr"       ["test", "expr"]
+    |>.insert "paren_expr" ["expr"]
+    |>.insert "statement"  ["paren_expr", "statement", "expr"]
+
+/-- Expected: does each NT call next_sym (consume tokens)? -/
+def goldenCallsNextSym : Std.HashMap String Bool :=
+  ({} : Std.HashMap String Bool)
+    |>.insert "term"       true   -- reads id or int tokens
+    |>.insert "sum"        true   -- reads + or - token
+    |>.insert "test"       true   -- reads < token
+    |>.insert "expr"       true   -- reads = token (assignment alt)
+    |>.insert "paren_expr" true   -- reads ( and ) tokens
+    |>.insert "statement"  true   -- reads if/while/do/;/{/} tokens
+
+/-- Compare extracted CFG with golden grammar and print results. -/
+def printGrammarComparison (log : String → IO Unit)
+    (extractedCFG : Std.HashMap String (Nat × List String)) : IO Unit := do
+  log "\n=== Grammar Comparison (Extracted vs Golden) ==="
+  let ntNames := ["term", "sum", "test", "expr", "paren_expr", "statement"]
+  for name in ntNames do
+    let (nsCount, calledNTs) := extractedCFG.getD name (0, [])
+    let expectedCallees := goldenCallees.getD name []
+    let expectedNS := goldenCallsNextSym.getD name false
+    let callsNS := nsCount != 0
+    -- Check if extracted callees contain all expected ones
+    let calledSet : Std.HashSet String := calledNTs.foldl (fun s x => s.insert x) {}
+    let missing := expectedCallees.filter (fun e => !calledSet.contains e)
+    let ntOk := missing.isEmpty
+    let nsOk := callsNS == expectedNS
+    let status := if ntOk && nsOk then "OK" else "MISMATCH"
+    let calledStr := ", ".intercalate calledNTs
+    let expStr := ", ".intercalate expectedCallees
+    let missingStr := if missing.isEmpty then "" else " MISSING=[" ++ ", ".intercalate missing ++ "]"
+    log s!"  [{status}] {name}: next_sym={callsNS}(exp={expectedNS}) calls=[{calledStr}] exp=[{expStr}]{missingStr}"
 
 /-! ## Run stabilization on next_sym -/
 
@@ -1377,4 +1528,35 @@ def dispatchLoopEvalMain : IO Unit := do
     ⟨"paren_expr",  0x40064d, paren_exprBlocks⟩,
     ⟨"statement",   0x4006b1, statementBlocks⟩
   ]
-  stratifiedFixpoint functions log
+  let _summaries ← stratifiedFixpoint functions log
+  -- Task 2B: DFA extraction from next_sym body branches (raw, before stabilization)
+  let ip_reg := Amd64Reg.rip
+  match parseBlocksWithAddresses (nextSymBlocks.take 55) with
+  | .error e => log s!"DFA parse error: {e}"
+  | .ok pairs =>
+    let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+    printDFATable log bodyArr
+  -- Task 2C: CFG extraction from NT body branches
+  let funcEntries : Std.HashMap UInt64 String :=
+    ({} : Std.HashMap UInt64 String)
+      |>.insert 0x40006f "next_sym"
+      |>.insert 0x400427 "term"
+      |>.insert 0x4004be "sum"
+      |>.insert 0x400551 "test"
+      |>.insert 0x4005bd "expr"
+      |>.insert 0x40064d "paren_expr"
+      |>.insert 0x4006b1 "statement"
+  log "\n=== CFG Extraction (NT body branches) ==="
+  let mut extractedCFG : Std.HashMap String (Nat × List String) := {}
+  for i in [1:functions.size] do
+    let func := functions[i]!
+    match parseBlocksWithAddresses func.blocks with
+    | .error e => log s!"  Parse error for {func.name}: {e}"
+    | .ok pairs =>
+      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      let (nsCount, calledNTsHS) := extractBodyCFG ip_reg bodyArr funcEntries
+      let calledList := calledNTsHS.toArray.toList
+      extractedCFG := extractedCFG.insert func.name (nsCount, calledList)
+      log s!"  {func.name}: next_sym_calls={nsCount} NTs=[{", ".intercalate calledList}]"
+  -- Task 2D: Compare with golden grammar
+  printGrammarComparison log extractedCFG
