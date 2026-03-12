@@ -964,8 +964,6 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     frontier := newBranches
   return none
 
-/-- Run stratified fixpoint across all parser functions.
-    Returns summaries for each function. -/
 /-- Expand call branches in a body array using function summaries.
     For each body branch B whose rip target matches a function entry:
     - Compose B with each of that function's summary branches
