@@ -293,6 +293,73 @@ partial def SymPC.conjuncts {Reg : Type} : SymPC Reg → List (SymPC Reg)
   | .and φ ψ => SymPC.conjuncts φ ++ SymPC.conjuncts ψ
   | pc => [pc]
 
+/-! ## PC Expression Canonicalization (Kuznetsov et al. 2012)
+
+Normalizes SymExpr/SymPC so that syntactically different but semantically
+equivalent expressions hash identically. Applied in `computePCSignature`
+before conjunct comparison, strengthening the syntactic fast-path so z3
+is only invoked for genuinely novel signatures. -/
+
+mutual
+/-- Canonicalize a SymExpr: sort operands of commutative ops by hash. -/
+partial def canonicalizeExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → SymExpr Reg
+  | .const v => .const v
+  | .reg r => .reg r
+  | .low32 x => .low32 (canonicalizeExpr x)
+  | .uext32 x => .uext32 (canonicalizeExpr x)
+  | .sext8to32 x => .sext8to32 (canonicalizeExpr x)
+  | .sext32to64 x => .sext32to64 (canonicalizeExpr x)
+  | .add64 a b =>
+    let a' := canonicalizeExpr a; let b' := canonicalizeExpr b
+    if (hash a') < (hash b') then .add64 a' b' else .add64 b' a'
+  | .xor64 a b =>
+    let a' := canonicalizeExpr a; let b' := canonicalizeExpr b
+    if (hash a') < (hash b') then .xor64 a' b' else .xor64 b' a'
+  | .and64 a b =>
+    let a' := canonicalizeExpr a; let b' := canonicalizeExpr b
+    if (hash a') < (hash b') then .and64 a' b' else .and64 b' a'
+  | .or64 a b =>
+    let a' := canonicalizeExpr a; let b' := canonicalizeExpr b
+    if (hash a') < (hash b') then .or64 a' b' else .or64 b' a'
+  | .sub64 a b => .sub64 (canonicalizeExpr a) (canonicalizeExpr b)
+  | .sub32 a b => .sub32 (canonicalizeExpr a) (canonicalizeExpr b)
+  | .shl32 a b => .shl32 (canonicalizeExpr a) (canonicalizeExpr b)
+  | .shl64 a b => .shl64 (canonicalizeExpr a) (canonicalizeExpr b)
+  | .shr64 a b => .shr64 (canonicalizeExpr a) (canonicalizeExpr b)
+  | .load w m addr => .load w (canonicalizeMem m) (canonicalizeExpr addr)
+/-- Canonicalize a SymMem: normalize expressions within stores. -/
+partial def canonicalizeMem {Reg : Type} [Hashable Reg] : SymMem Reg → SymMem Reg
+  | .base => .base
+  | .store w m addr val =>
+    .store w (canonicalizeMem m) (canonicalizeExpr addr) (canonicalizeExpr val)
+end
+
+/-- Reassemble a list of PCs into a right-associated conjunction. -/
+def reassembleAnd {Reg : Type} : List (SymPC Reg) → SymPC Reg
+  | [] => .true
+  | [x] => x
+  | x :: xs => .and x (reassembleAnd xs)
+
+/-- Canonicalize a SymPC:
+    - eq: sort operands by hash (commutativity)
+    - lt/le: canonicalize sub-expressions, keep direction
+    - not(not(x)): eliminate double negation
+    - and: flatten conjuncts, canonicalize each, sort by hash, right-associate -/
+partial def canonicalizePC {Reg : Type} [Hashable Reg] : SymPC Reg → SymPC Reg
+  | .true => .true
+  | .eq a b =>
+    let a' := canonicalizeExpr a; let b' := canonicalizeExpr b
+    if (hash a') < (hash b') then .eq a' b' else .eq b' a'
+  | .lt a b => .lt (canonicalizeExpr a) (canonicalizeExpr b)
+  | .le a b => .le (canonicalizeExpr a) (canonicalizeExpr b)
+  | .not (.not x) => canonicalizePC x
+  | .not x => .not (canonicalizePC x)
+  | .and φ ψ =>
+    let conjuncts := SymPC.conjuncts (.and φ ψ)
+    let canon := conjuncts.map canonicalizePC
+    let sorted := (canon.toArray.qsort (fun a b => (hash a) < (hash b))).toList
+    reassembleAnd sorted
+
 instance : ToString Amd64Reg where
   toString
     | .rax => "rax" | .rcx => "rcx" | .rdx => "rdx" | .rsi => "rsi"
@@ -428,6 +495,17 @@ partial def SymPC.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
   | .and φ ψ, s => SymPC.collectRegsHS ψ (SymPC.collectRegsHS φ s)
   | .not φ, s => SymPC.collectRegsHS φ s
 
+/-- Parse z3 check-sat results from stdout, skipping warnings, blank lines, and
+    any other non-result output.  Only lines that are exactly "sat" or "unsat"
+    count as results; they are collected in order, so result index i corresponds
+    to the i-th check-sat query.  Any query whose result line is absent (e.g.
+    because z3 errored) is simply not represented — callers treat missing entries
+    conservatively (not-unsat). -/
+def parseZ3Results (stdout : String) : Array Bool :=
+  (stdout.splitOn "\n"
+    |>.filter (fun l => l == "sat" || l == "unsat")
+    |>.map (· == "unsat")).toArray
+
 /-- Build the SMT-LIB2 preamble: logic, register declarations, and memory
     declarations if any PCs involve loads. -/
 def smtPreamble (regNames : Std.HashSet String) (needsMem : Bool) : String := Id.run do
@@ -496,17 +574,18 @@ def extractClosure {Reg : Type} [BEq Reg] [BEq (SymPC Reg)] [Hashable (SymPC Reg
     Here we work purely syntactically: a branch's PC "satisfies" a guard PC if
     the branch's PC syntactically implies it (all conjuncts of the guard appear
     in the branch's conjuncts). -/
-def computePCSignature {Reg : Type} [DecidableEq Reg] [Hashable (SymPC Reg)]
+def computePCSignature {Reg : Type} [DecidableEq Reg] [Hashable Reg] [Hashable (SymPC Reg)]
     (closure : Array (SymPC Reg)) (pc : SymPC Reg) : List Bool :=
-  -- Pre-compute conjuncts of pc into a HashSet for O(1) membership checks.
-  -- This is called O(composed_size) times per iteration, so efficiency matters.
-  let pcConjList := SymPC.conjuncts pc
+  -- Canonicalize then extract conjuncts for O(1) membership checks.
+  -- Canonicalization ensures that e.g. eq(a,b) and eq(b,a) hash identically,
+  -- catching more syntactic matches before falling through to z3.
+  let pcConjList := SymPC.conjuncts (canonicalizePC pc)
   let pcConjSet : Std.HashSet (SymPC Reg) :=
     pcConjList.foldl (fun s c => s.insert c) {}
   closure.toList.map fun guardPC =>
     match guardPC with
     | .true => true  -- everything implies .true
-    | _ => pcConjSet.contains guardPC
+    | _ => pcConjSet.contains (canonicalizePC guardPC)
 
 /-- Hash a PC signature (list of bools) for use as a HashMap key. -/
 def hashPCSignature (sig : List Bool) : UInt64 :=
@@ -844,29 +923,38 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
         regNames := SymPC.collectRegNames stronger regNames
         regNames := SymPC.collectRegNames weaker regNames
         if SymPC.hasLoad stronger || SymPC.hasLoad weaker then needsMem := true
-      -- Generate SMT-LIB2 script
-      let mut script := smtPreamble regNames needsMem
-      for (stronger, weaker) in pcPairs do
-        script := script ++ "(push)\n"
-        script := script ++ s!"(assert (and {SymPC.toSMTLib stronger} (not {SymPC.toSMTLib weaker})))\n"
-        script := script ++ "(check-sat)\n"
-        script := script ++ "(pop)\n"
-      script := script ++ "(exit)\n"
-      -- Write and invoke z3
-      let tmpFile : System.FilePath := ".lake/smt_subsumption.smt2"
-      IO.FS.writeFile tmpFile script
-      let result ← IO.Process.output {
-        cmd := "z3"
-        args := #[tmpFile.toString]
-      }
-      -- Parse results
-      let lines := result.stdout.splitOn "\n" |>.filter (· != "")
-      for i in [:pcPairs.size] do
-        if h : i < lines.length then
-          if lines[i] == "unsat" then
-            if h2 : i < queryBranchIdx.size then
-              subsumedSet := subsumedSet.insert queryBranchIdx[i]
-      log s!"    z3: {pcPairs.size} queries, {lines.length} results, {subsumedSet.size} subsumed"
+      -- Chunk z3 calls to ≤1000 pairs each to bound peak memory
+      let subsChunkSize := 1000
+      let mut subsTotalSatUnsat := 0
+      let mut subsChunkStart := 0
+      while subsChunkStart < pcPairs.size do
+        let subsChunkEnd := min (subsChunkStart + subsChunkSize) pcPairs.size
+        let pairChunk := pcPairs.extract subsChunkStart subsChunkEnd
+        let idxChunk  := queryBranchIdx.extract subsChunkStart subsChunkEnd
+        let mut chunkRegNames : Std.HashSet String := {}
+        let mut chunkNeedsMem := false
+        for (stronger, weaker) in pairChunk do
+          chunkRegNames := SymPC.collectRegNames stronger chunkRegNames
+          chunkRegNames := SymPC.collectRegNames weaker chunkRegNames
+          if SymPC.hasLoad stronger || SymPC.hasLoad weaker then chunkNeedsMem := true
+        let mut chunkScript := smtPreamble chunkRegNames chunkNeedsMem
+        for (stronger, weaker) in pairChunk do
+          chunkScript := chunkScript ++ "(push)\n"
+          chunkScript := chunkScript ++ s!"(assert (and {SymPC.toSMTLib stronger} (not {SymPC.toSMTLib weaker})))\n"
+          chunkScript := chunkScript ++ "(check-sat)\n"
+          chunkScript := chunkScript ++ "(pop)\n"
+        chunkScript := chunkScript ++ "(exit)\n"
+        let tmpFile : System.FilePath := ".lake/smt_subsumption.smt2"
+        IO.FS.writeFile tmpFile chunkScript
+        let result ← IO.Process.output { cmd := "z3", args := #[tmpFile.toString] }
+        let satUnsat := parseZ3Results result.stdout
+        subsTotalSatUnsat := subsTotalSatUnsat + satUnsat.size
+        for i in [:idxChunk.size] do
+          if h : i < satUnsat.size then
+            if satUnsat[i] then
+              subsumedSet := subsumedSet.insert idxChunk[i]!
+        subsChunkStart := subsChunkEnd
+      log s!"    z3: {pcPairs.size} queries, {subsTotalSatUnsat} results, {subsumedSet.size} subsumed"
     -- Filter new branches
     let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     branchIdx := 0
@@ -1098,7 +1186,6 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
   current := current.insert initBranch
   -- initialFrontier seeded into current AFTER closedness check (needs projection)
-  let mut sigSeen : Std.HashSet SigDedupKey := {}
   -- Compute closed projection (same as computeStabilizationHS)
   let mut dataPCRegs : Std.HashSet Reg := {}
   let mut dataPCsHaveLoads := false
@@ -1139,33 +1226,27 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       h := mixHash h (hash (sub.regs r))
     if closedNeedsMem then h := mixHash h (hash sub.mem)
     return h
-  -- Convergence dedup uses PC signature: which data guard PCs the branch satisfies.
-  -- After simplification, branches at different call depths have the same resolved
-  -- guard PCs (same token comparisons), so their signatures match even though
-  -- rbp/rsp differ. This is the correct convergence criterion from the theory:
-  -- K ≤ 2^|closure| bounds the number of distinct PC signature classes.
-  -- All distinct branches still go into `current` for the final summary.
-  -- Convergence key: PC signature only. Two branches that satisfy the same
-  -- set of data guard PCs will produce the same guard PC outcomes in future
-  -- iterations, regardless of rbp/rsp/mem differences (call depth).
-  let convKey (b : Branch (SymSub Reg) (SymPC Reg)) : UInt64 :=
-    hashPCSignature (computePCSignature closure b.pc)
-  let mut convSeen : Std.HashSet UInt64 := {}
-  convSeen := convSeen.insert (convKey initBranch)
-  -- Convergence class representatives for semantic PC equivalence check (Task 1A).
-  -- One PC per syntactic-hash class; z3 checks new candidates against all reps.
-  let mut convReps : Array (SymPC Reg) := #[initBranch.pc]
-  -- Build initial frontier: skip + simplified initial frontier seeds
+  -- Convergence via PC signature: syntactic fast-path + z3 semantic check.
+  -- convRep{PCs,SynSigs,SemSigs}: one entry per discovered equivalence class.
+  -- SynSig = which closure PCs the branch syntactically implies (List Bool).
+  -- SemSig = which closure PCs the branch semantically implies (Array Bool);
+  --          computed lazily via z3 the first time a syntactic mismatch occurs.
+  let mut convRepPCs     : Array (SymPC Reg)          := #[initBranch.pc]
+  let mut convRepSynSigs : Array (List Bool)           := #[computePCSignature closure initBranch.pc]
+  let mut convRepSemSigs : Array (Option (Array Bool)) := #[none]
+  -- Build initial frontier: skip + structurally-unique simplified seeds.
+  let mut frontierSet : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {initBranch}
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   for b in initialFrontier do
     match simplifyBranchFull b with
     | none => pure ()
     | some sb =>
       let zb := zeroNonProjected closedRegs ip_reg sb
-      let key := convKey zb
-      unless convSeen.contains key do
-        convSeen := convSeen.insert key
-        convReps := convReps.push zb.pc
+      unless frontierSet.contains zb do
+        frontierSet := frontierSet.insert zb
+        convRepPCs     := convRepPCs.push zb.pc
+        convRepSynSigs := convRepSynSigs.push (computePCSignature closure zb.pc)
+        convRepSemSigs := convRepSemSigs.push none
         frontier := frontier.push zb
   -- Seed initial frontier into current set
   for b in frontier do
@@ -1185,77 +1266,134 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       | some sb => simplified := simplified.push (zeroNonProjected closedRegs ip_reg sb)
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
-    let mut projCollapsed : Nat := 0
-    -- Phase 1: exact-match dedup; collect syntactically-new conv-key candidates
-    let mut syntacticNewCands : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    -- Phase 1: structural dedup — collect all branches not already in current
+    let mut semCands : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     for b in simplified do
       if current.contains b then
         dupes := dupes + 1
       else
-        current := current.insert b  -- ALL distinct branches kept for summary
-        let key := convKey b
-        if convSeen.contains key then
-          projCollapsed := projCollapsed + 1
-        else
-          syntacticNewCands := syntacticNewCands.push b
-    -- Phase 2: semantic equivalence check via z3 for syntactically-new candidates.
-    -- Query: (P_new ∧ ¬P_rep) ∨ (P_rep ∧ ¬P_new) UNSAT ⟺ P_new ≡ P_rep.
-    -- Batch all (cand_i, rep_j) pairs into one z3 invocation using push/pop.
+        current := current.insert b  -- ALL structurally distinct branches kept for summary
+        semCands := semCands.push b
+    -- Phase 2: PC-signature convergence (syntactic fast-path + z3 semantic).
+    -- For each candidate, compute its signature: which closure PCs does it imply?
+    -- Fast path: syntactic sig matches an existing rep sig → collapse.
+    -- Slow path (z3): for candidates with new syntactic sigs, compute semantic sig
+    --   (for each closure PC phi_i, is branch.pc AND NOT phi_i UNSAT?) and
+    --   compare against rep semantic sigs.
     let mut semCollapsed : Nat := 0
-    if syntacticNewCands.size > 0 && convReps.size > 0 then
-      let mut convPairs : Array (SymPC Reg × SymPC Reg) := #[]
-      let mut convPairCandIdx : Array Nat := #[]
-      let mut ci : Nat := 0
-      for cand in syntacticNewCands do
-        for rep in convReps do
-          convPairs := convPairs.push (cand.pc, rep)
-          convPairCandIdx := convPairCandIdx.push ci
-        ci := ci + 1
-      -- Collect SMT variable names across all queries
-      let mut convRegNames : Std.HashSet String := {}
-      let mut convNeedsMem := false
-      for (cp, rp) in convPairs do
-        convRegNames := SymPC.collectRegNames cp convRegNames
-        convRegNames := SymPC.collectRegNames rp convRegNames
-        if SymPC.hasLoad cp || SymPC.hasLoad rp then convNeedsMem := true
-      -- Generate SMT-LIB2 script
-      let mut convScript := smtPreamble convRegNames convNeedsMem
-      for (cp, rp) in convPairs do
-        convScript := convScript ++ "(push)\n"
-        convScript := convScript ++ s!"(assert (or (and {SymPC.toSMTLib cp} (not {SymPC.toSMTLib rp})) (and {SymPC.toSMTLib rp} (not {SymPC.toSMTLib cp}))))\n"
-        convScript := convScript ++ "(check-sat)\n"
-        convScript := convScript ++ "(pop)\n"
-      convScript := convScript ++ "(exit)\n"
-      let convTmpFile : System.FilePath := ".lake/smt_conv_equiv.smt2"
-      IO.FS.writeFile convTmpFile convScript
-      let convZ3 ← IO.Process.output { cmd := "z3", args := #[convTmpFile.toString] }
-      let convLines := convZ3.stdout.splitOn "\n" |>.filter (· != "")
-      -- Find candidates semantically equivalent to at least one rep (unsat = equiv)
-      let mut convEquivCands : Std.HashSet Nat := {}
-      for i in [:convPairs.size] do
-        if h : i < convLines.length then
-          if convLines[i] == "unsat" then
-            if h2 : i < convPairCandIdx.size then
-              convEquivCands := convEquivCands.insert convPairCandIdx[i]
-      log s!"    z3 conv equiv: {convPairs.size} queries → {convEquivCands.size} sem-collapsed"
-      -- Promote candidates: collapsed if equiv to any rep, else new conv class
-      let mut ci2 : Nat := 0
-      for cand in syntacticNewCands do
-        if convEquivCands.contains ci2 then
+    if semCands.size > 0 then
+      -- Compute syntactic sigs for all candidates
+      let candSynSigs := semCands.map (fun c => computePCSignature closure c.pc)
+      -- Fast path: which candidates have a syntactic sig matching an existing rep?
+      let mut synMatched : Std.HashSet Nat := {}
+      for ci in [:semCands.size] do
+        let csig := candSynSigs[ci]!
+        let mut ri := 0
+        while ri < convRepSynSigs.size do
+          if convRepSynSigs[ri]! == csig then
+            synMatched := synMatched.insert ci
+            ri := convRepSynSigs.size  -- break
+          ri := ri + 1
+      -- Collect z3 candidates: those with no syntactic match
+      let mut z3CandIdxs : Array Nat := #[]
+      for ci in [:semCands.size] do
+        unless synMatched.contains ci do
+          z3CandIdxs := z3CandIdxs.push ci
+      -- Semantic path: only if there are unmatched candidates and closure is non-empty
+      let mut candSemSigsArr : Array (Option (Array Bool)) := Array.replicate semCands.size none
+      let mut totalZ3Queries := 0
+      let mut semMatched : Std.HashSet Nat := {}
+      if z3CandIdxs.size > 0 && closure.size > 0 then
+        let n := closure.size
+        -- Build batch of PCs needing semantic sig computation:
+        -- (1) reps with uncomputed sem sigs, (2) z3 candidate branch PCs.
+        -- Use Array.extract to avoid [i]! on SymPC/Branch arrays.
+        let mut batchPCs      : Array (SymPC Reg) := #[]
+        let mut batchIsRep    : Array Bool        := #[]
+        let mut batchRepIdxs  : Array Nat         := #[]
+        let mut batchCandIdxs : Array Nat         := #[]
+        for ri in [:convRepPCs.size] do
+          match convRepSemSigs[ri]? with
+          | some none =>
+            for pc in convRepPCs.extract ri (ri + 1) do
+              batchPCs := batchPCs.push pc
+            batchIsRep    := batchIsRep.push true
+            batchRepIdxs  := batchRepIdxs.push ri
+            batchCandIdxs := batchCandIdxs.push 0  -- dummy
+          | _ => pure ()
+        for ci in z3CandIdxs do
+          for b in semCands.extract ci (ci + 1) do
+            batchPCs := batchPCs.push b.pc
+          batchIsRep    := batchIsRep.push false
+          batchRepIdxs  := batchRepIdxs.push 0  -- dummy
+          batchCandIdxs := batchCandIdxs.push ci
+        -- Batch z3: for each pc in batchPCs, n queries (one per closure PC).
+        -- Chunk so each z3 call covers at most pcsPerChunk PCs.
+        let pcsPerChunk := max 1 (1000 / n)
+        let mut allSemResults : Array Bool := #[]
+        let mut pcChunkStart := 0
+        while pcChunkStart < batchPCs.size do
+          let pcChunkEnd := min (pcChunkStart + pcsPerChunk) batchPCs.size
+          let pcChunk := batchPCs.extract pcChunkStart pcChunkEnd
+          let mut regNames : Std.HashSet String := {}
+          let mut needsMem := false
+          for pc in pcChunk do
+            regNames := SymPC.collectRegNames pc regNames
+            if SymPC.hasLoad pc then needsMem := true
+          for phi in closure do
+            regNames := SymPC.collectRegNames phi regNames
+            if SymPC.hasLoad phi then needsMem := true
+          let mut script := smtPreamble regNames needsMem
+          for pc in pcChunk do
+            for phi in closure do
+              script := script ++ "(push)\n"
+              script := script ++ s!"(assert (and {SymPC.toSMTLib pc} (not {SymPC.toSMTLib phi})))\n"
+              script := script ++ "(check-sat)\n"
+              script := script ++ "(pop)\n"
+          script := script ++ "(exit)\n"
+          let tmpFile : System.FilePath := ".lake/smt_semsig.smt2"
+          IO.FS.writeFile tmpFile script
+          let z3Out ← IO.Process.output { cmd := "z3", args := #[tmpFile.toString] }
+          allSemResults := allSemResults ++ parseZ3Results z3Out.stdout
+          pcChunkStart := pcChunkEnd
+        totalZ3Queries := batchPCs.size * n
+        -- Assign sem sigs: allSemResults[si*n .. (si+1)*n] for batchPCs[si]
+        let mut updatedRepSemSigs := convRepSemSigs
+        let mut si := 0
+        for isRep in batchIsRep do
+          let semSig := allSemResults.extract (si * n) ((si + 1) * n)
+          if isRep then
+            let ri := batchRepIdxs[si]!
+            updatedRepSemSigs := updatedRepSemSigs.set! ri (some semSig)
+          else
+            let ci := batchCandIdxs[si]!
+            candSemSigsArr := candSemSigsArr.set! ci (some semSig)
+          si := si + 1
+        convRepSemSigs := updatedRepSemSigs
+        -- Compare each z3 cand's semantic sig against all rep semantic sigs
+        for ci in z3CandIdxs do
+          if let some candSem := candSemSigsArr[ci]! then
+            let mut ri := 0
+            let mut matched := false
+            while !matched && ri < convRepSemSigs.size do
+              if let some repSem := convRepSemSigs[ri]! then
+                if candSem == repSem then
+                  semMatched := semMatched.insert ci
+                  matched := true
+              ri := ri + 1
+      log s!"    z3 conv: {totalZ3Queries}q → syn-collapsed={synMatched.size} sem-collapsed={semMatched.size}"
+      -- Classify: collapse or promote to new equivalence class
+      for ci in [:semCands.size] do
+        if synMatched.contains ci || semMatched.contains ci then
           semCollapsed := semCollapsed + 1
         else
-          convSeen := convSeen.insert (convKey cand)
-          convReps := convReps.push cand.pc
-          newBranches := newBranches.push cand
-        ci2 := ci2 + 1
-    else
-      -- No reps yet or no candidates: all syntactically-new candidates are new classes
-      for cand in syntacticNewCands do
-        convSeen := convSeen.insert (convKey cand)
-        convReps := convReps.push cand.pc
-        newBranches := newBranches.push cand
+          for b in semCands.extract ci (ci + 1) do
+            convRepPCs     := convRepPCs.push b.pc
+            convRepSynSigs := convRepSynSigs.push candSynSigs[ci]!
+            convRepSemSigs := convRepSemSigs.push candSemSigsArr[ci]!
+            newBranches    := newBranches.push b
     let t_end ← IO.monoMsNow
-    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} |conv_classes|={convSeen.size} |conv_reps|={convReps.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} conv_collapsed={projCollapsed}+{semCollapsed}sem {t_end - t_start}ms"
+    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} |conv_reps|={convRepSynSigs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} sem_collapsed={semCollapsed} {t_end - t_start}ms"
     -- Diagnostic: dump expression details for first few iterations
     if k ≤ 4 && newBranches.size > 0 then
       -- Aggregate stats across all new branches
@@ -1328,30 +1466,39 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
         -- Run z3 semantic check for non-trivial lifted PCs
         let mut closednessViolations : Nat := 0
         if closedQueryPairs.size > 0 then
-          let mut closedRegNames : Std.HashSet String := {}
-          let mut closedNeedsMem2 := false
-          for (cp, rp) in closedQueryPairs do
-            closedRegNames := SymPC.collectRegNames cp closedRegNames
-            closedRegNames := SymPC.collectRegNames rp closedRegNames
-            if SymPC.hasLoad cp || SymPC.hasLoad rp then closedNeedsMem2 := true
-          let mut closedScript := smtPreamble closedRegNames closedNeedsMem2
-          for (cp, rp) in closedQueryPairs do
-            closedScript := closedScript ++ "(push)\n"
-            closedScript := closedScript ++ s!"(assert (or (and {SymPC.toSMTLib cp} (not {SymPC.toSMTLib rp})) (and {SymPC.toSMTLib rp} (not {SymPC.toSMTLib cp}))))\n"
-            closedScript := closedScript ++ "(check-sat)\n"
-            closedScript := closedScript ++ "(pop)\n"
-          closedScript := closedScript ++ "(exit)\n"
-          let closedTmpFile : System.FilePath := ".lake/smt_closedness.smt2"
-          IO.FS.writeFile closedTmpFile closedScript
-          let closedZ3 ← IO.Process.output { cmd := "z3", args := #[closedTmpFile.toString] }
-          let closedLines := closedZ3.stdout.splitOn "\n" |>.filter (· != "")
-          -- Collect lifted PC indices that are semantically closed (unsat = equiv to some phi_j)
+          -- Chunk z3 calls to ≤1000 pairs each
+          let closedChunkSize := 1000
           let mut closedByZ3 : Std.HashSet Nat := {}
-          for i in [:closedQueryPairs.size] do
-            if h : i < closedLines.length then
-              if closedLines[i] == "unsat" then
-                if h2 : i < closedQueryLiftedIdx.size then
-                  closedByZ3 := closedByZ3.insert closedQueryLiftedIdx[i]
+          let mut clChunkStart := 0
+          let mut clTotalSatUnsat := 0
+          while clChunkStart < closedQueryPairs.size do
+            let clChunkEnd := min (clChunkStart + closedChunkSize) closedQueryPairs.size
+            let clPairChunk := closedQueryPairs.extract clChunkStart clChunkEnd
+            let mut clRegNames : Std.HashSet String := {}
+            let mut clNeedsMem2 := false
+            for (cp, rp) in clPairChunk do
+              clRegNames := SymPC.collectRegNames cp clRegNames
+              clRegNames := SymPC.collectRegNames rp clRegNames
+              if SymPC.hasLoad cp || SymPC.hasLoad rp then clNeedsMem2 := true
+            let mut clScript := smtPreamble clRegNames clNeedsMem2
+            for (cp, rp) in clPairChunk do
+              clScript := clScript ++ "(push)\n"
+              clScript := clScript ++ s!"(assert (or (and {SymPC.toSMTLib cp} (not {SymPC.toSMTLib rp})) (and {SymPC.toSMTLib rp} (not {SymPC.toSMTLib cp}))))\n"
+              clScript := clScript ++ "(check-sat)\n"
+              clScript := clScript ++ "(pop)\n"
+            clScript := clScript ++ "(exit)\n"
+            let clTmpFile : System.FilePath := ".lake/smt_closedness.smt2"
+            IO.FS.writeFile clTmpFile clScript
+            let clZ3 ← IO.Process.output { cmd := "z3", args := #[clTmpFile.toString] }
+            let clSatUnsat := parseZ3Results clZ3.stdout
+            clTotalSatUnsat := clTotalSatUnsat + clSatUnsat.size
+            let clChunkLen := clChunkEnd - clChunkStart
+            for i in [:clChunkLen] do
+              if h : i < clSatUnsat.size then
+                if clSatUnsat[i] then
+                  let pairIdx := clChunkStart + i
+                  closedByZ3 := closedByZ3.insert closedQueryLiftedIdx[pairIdx]!
+            clChunkStart := clChunkEnd
           -- Violations: lifted PCs not closed by z3
           for gIdx in liftedNeedingCheck do
             unless closedByZ3.contains gIdx do
