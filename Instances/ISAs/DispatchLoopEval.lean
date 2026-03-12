@@ -350,6 +350,7 @@ The Hashable instances on SymExpr/SymPC/SymSub/Branch enable this. -/
 def extractRipGuard {Reg : Type} [BEq Reg] (ip_reg : Reg) :
     SymPC Reg → Option UInt64
   | .and (.eq (.reg r) (.const addr)) _ => if r == ip_reg then some addr else none
+  | .and left _ => extractRipGuard ip_reg left  -- recurse into left-nested ands
   | .eq (.reg r) (.const addr) => if r == ip_reg then some addr else none
   | _ => none
 
