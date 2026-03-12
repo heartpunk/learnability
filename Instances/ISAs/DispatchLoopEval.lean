@@ -877,18 +877,25 @@ def composeBranchArrayStratified {Reg : Type} [DecidableEq Reg] [Fintype Reg] [B
   let skipped := totalPairs - composed_count
   return (result, composed_count, skipped, dropped, summaryHits)
 
-/-- Per-function stabilization using summary substitution.
-    Like computeStabilizationHS but composes with function summaries
-    when a branch's rip target matches a function entry. -/
+/-- Per-function stabilization with optional initial frontier seeding.
+    When initialFrontier is non-empty, those branches are added to the
+    initial state (along with skip) instead of starting from skip alone.
+    This is used to seed call-expanded results into the frontier without
+    putting them in the body (which would cause expression nesting). -/
 def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg] [ToString Reg]
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
-    (maxIter : Nat) (log : String → IO Unit) : IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)))) := do
+    (maxIter : Nat) (log : String → IO Unit)
+    (initialFrontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]) :
+    IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)))) := do
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
   let (closure, ripCount, dataCount) := extractClosure ip_reg bodyArr (dataOnly := true)
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
   current := current.insert initBranch
+  -- Seed initial frontier (call-expanded results) into current set
+  for b in initialFrontier do
+    current := current.insert b
   let mut sigSeen : Std.HashSet SigDedupKey := {}
   -- Compute closed projection (same as computeStabilizationHS)
   let mut dataPCRegs : Std.HashSet Reg := {}
@@ -934,11 +941,20 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   let initSig := computePCSignature closure initBranch.pc
   let initSigKey : SigDedupKey := ⟨dedupSubHash initBranch.sub, initSig⟩
   sigSeen := sigSeen.insert initSigKey
+  -- Build initial frontier: skip + all initial frontier seeds
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
+  for b in initialFrontier do
+    let sig := computePCSignature closure b.pc
+    let key : SigDedupKey := ⟨dedupSubHash b.sub, sig⟩
+    unless sigSeen.contains key do
+      sigSeen := sigSeen.insert key
+      frontier := frontier.push b
+  log s!"    initial frontier: {frontier.size} branches (skip + {initialFrontier.size} call-expanded)"
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
-    let (composed, pairsComposed, skipped, dropped, summaryHits) :=
-      composeBranchArrayStratified ip_reg bodyArr frontier summaries
+    -- Pure composition: no summary interception, body has no call branches
+    let (composed, pairsComposed, skipped, dropped) :=
+      composeBranchArrayIndexed ip_reg bodyArr frontier
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
     let mut sigCollapsed : Nat := 0
@@ -956,7 +972,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     for b in newBranches do
       current := current.insert b
     let t_end ← IO.monoMsNow
-    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} summary_hits={summaryHits} {t_end - t_start}ms"
+    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} {t_end - t_start}ms"
     if newBranches.size == 0 then
       -- Collect all branches as array for the summary
       let summaryArr := current.toArray
@@ -964,48 +980,49 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     frontier := newBranches
   return none
 
-/-- Expand call branches in a body array using function summaries.
-    For each body branch B whose rip target matches a function entry:
-    - Compose B with each of that function's summary branches
-    - Add the simplified results to the expanded body
-    - Remove the original "call" branch B
-    Body branches targeting unknown addresses are kept as-is.
+/-- Split body branches into non-call (kept in body) and call-expanded
+    (seeded into initial frontier).
 
-    This is done ONCE at body construction time, not at every iteration.
-    The expanded body already includes the effect of function calls,
-    so the normal stabilization loop handles control flow without
-    re-expanding calls at every step. -/
-def expandCallsInBody {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+    For each body branch B:
+    - If B's rip target matches a function entry with a summary:
+      Compose B with each summary branch → add to callResults (initial frontier)
+      B is REMOVED from the body.
+    - Otherwise: B stays in the body for iterative composition.
+
+    This prevents re-expansion: summary results are in the initial frontier,
+    and the body only contains the function's own non-call blocks. Each
+    iteration composes non-call blocks with frontier — no expression nesting. -/
+def splitBodyAndExpandCalls {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
     (ip_reg : Reg)
     (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg)))) :
-    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat × Nat × Nat := Id.run do
+    (Array (Branch (SymSub Reg) (SymPC Reg))  -- nonCallBody (for iterative composition)
+    × Array (Branch (SymSub Reg) (SymPC Reg))  -- callResults (initial frontier seed)
+    × Nat × Nat × Nat) := Id.run do  -- callsExpanded, branchesAdded, dropped
   let isa := vexSummaryISA Reg
-  let mut expanded : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut nonCallBody : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut callResults : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
   let mut callsExpanded : Nat := 0
-  let mut summaryBranchesAdded : Nat := 0
+  let mut branchesAdded : Nat := 0
   let mut dropped : Nat := 0
   for b in bodyArr do
     match extractRipTarget ip_reg b.sub with
     | some target =>
       match summaries.get? target with
       | some summaryBranches =>
-        -- This body branch calls a function we have a summary for.
-        -- Replace it with: B composed with each summary branch.
         callsExpanded := callsExpanded + 1
         for sb in summaryBranches do
           let composed := b.compose isa sb
           match simplifyBranch composed with
           | none => dropped := dropped + 1
           | some b' =>
-            expanded := expanded.push b'
-            summaryBranchesAdded := summaryBranchesAdded + 1
+            callResults := callResults.push b'
+            branchesAdded := branchesAdded + 1
       | none =>
-        -- Target not a known function entry — keep as-is
-        expanded := expanded.push b
+        nonCallBody := nonCallBody.push b
     | none =>
-      expanded := expanded.push b
-  return (expanded, callsExpanded, summaryBranchesAdded, dropped)
+      nonCallBody := nonCallBody.push b
+  return (nonCallBody, callResults, callsExpanded, branchesAdded, dropped)
 
 def stratifiedFixpoint
     (functions : Array FunctionSpec)
@@ -1047,9 +1064,10 @@ def stratifiedFixpoint
     return
   -- Phase 2: Iterate NT function summaries to fixpoint
   -- At each outer round, for each NT function:
-  --   1. Expand calls in the body using current summaries (one-shot, not iterative)
-  --   2. Run normal stabilization on the expanded body
+  --   1. Split body into non-call blocks + call-expanded results (via splitBodyAndExpandCalls)
+  --   2. Run stabilization on non-call body, seeding call results as initial frontier
   --   3. The converged set = new function summary
+  -- Key: non-call body never contains summary-expanded branches, preventing expression nesting
   log s!"\n--- Phase 2: NT functions (mutual recursion) ---"
   -- Initialize NT summaries as empty
   for i in [1:functions.size] do
@@ -1064,13 +1082,13 @@ def stratifiedFixpoint
       let func := functions[i]!
       let (fname, rawBody) := funcBlocks[i]!
       let t0 ← IO.monoMsNow
-      -- Step 1: Expand calls in the raw body using current summaries
-      let (expandedBody, callsExp, branchesAdded, droppedExp) :=
-        expandCallsInBody ip_reg rawBody summaries
-      log s!"    {fname}: expanded {callsExp} calls → {branchesAdded} branches (+{droppedExp} dropped), body: {rawBody.size} → {expandedBody.size}"
-      -- Step 2: Run normal stabilization on the expanded body
+      -- Step 1: Split body into non-call blocks + call-expanded results
+      let (nonCallBody, callResults, callsExp, branchesAdded, droppedExp) :=
+        splitBodyAndExpandCalls ip_reg rawBody summaries
+      log s!"    {fname}: split body {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, {branchesAdded} branches, {droppedExp} dropped)"
+      -- Step 2: Run stabilization on non-call body, seeding call results as initial frontier
       let oldSummary := summaries.getD func.entryAddr #[]
-      match ← computeFunctionStabilization ip_reg expandedBody {} 200 log with
+      match ← computeFunctionStabilization ip_reg nonCallBody {} 200 log (initialFrontier := callResults) with
       | some (k, newSummary) =>
         let t1 ← IO.monoMsNow
         if newSummary.size != oldSummary.size then
