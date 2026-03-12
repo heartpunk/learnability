@@ -90,20 +90,11 @@ partial def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg �
   | .load w mem addr =>
     let addr' := simplifyLoadStoreExpr addr
     let mem' := simplifyLoadStoreMem mem
-    resolveLoad w mem' addr'
-
-/-- Simplify store chains in a SymMem. -/
-partial def simplifyLoadStoreMem {Reg : Type} [DecidableEq Reg] : SymMem Reg → SymMem Reg
-  | .base => .base
-  | .store w mem addr val =>
-    .store w (simplifyLoadStoreMem mem)
-            (simplifyLoadStoreExpr addr)
-            (simplifyLoadStoreExpr val)
-end
+    resolveLoadFrom w mem' addr'
 
 /-- Resolve a load from a (simplified) memory term.
     Walks the store chain looking for a matching address. -/
-partial def resolveLoad {Reg : Type} [DecidableEq Reg]
+partial def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
     (loadWidth : Width) (mem : SymMem Reg) (loadAddr : SymExpr Reg) : SymExpr Reg :=
   match mem with
   | .base => .load loadWidth .base loadAddr
@@ -114,10 +105,19 @@ partial def resolveLoad {Reg : Type} [DecidableEq Reg]
       match (storeAddr, loadAddr) with
       | (.const a, .const b) =>
         if a != b then
-          resolveLoad loadWidth innerMem loadAddr  -- different constant addrs, skip store
+          resolveLoadFrom loadWidth innerMem loadAddr  -- different constant addrs, skip store
         else
           .load loadWidth mem loadAddr  -- same const but different width, keep as-is
       | _ => .load loadWidth mem loadAddr  -- can't determine, keep as-is
+
+/-- Simplify store chains in a SymMem. -/
+partial def simplifyLoadStoreMem {Reg : Type} [DecidableEq Reg] : SymMem Reg → SymMem Reg
+  | .base => .base
+  | .store w mem addr val =>
+    .store w (simplifyLoadStoreMem mem)
+            (simplifyLoadStoreExpr addr)
+            (simplifyLoadStoreExpr val)
+end
 
 /-- Simplify load-after-store patterns in a SymPC. -/
 partial def simplifyLoadStorePC {Reg : Type} [DecidableEq Reg] : SymPC Reg → SymPC Reg
@@ -144,7 +144,7 @@ def simplifyBranchFull {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | some pc' => some ⟨simplifiedSub, pc'⟩
 
 /-- Zero out non-projected registers (memory savings, safe when projection is closed). -/
-def zeroNonProjected {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+def zeroNonProjected {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg] [Hashable Reg]
     (projectedRegs : Std.HashSet Reg) (ip_reg : Reg)
     (b : Branch (SymSub Reg) (SymPC Reg)) : Branch (SymSub Reg) (SymPC Reg) :=
   let projSub : SymSub Reg := {
