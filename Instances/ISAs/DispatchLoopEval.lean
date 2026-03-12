@@ -375,7 +375,9 @@ def parseBlocksWithAddresses (blockStrs : List String) :
 
 /-! ## Run stabilization on next_sym -/
 
-#eval do
+/-- Main entry point for dispatch loop evaluation.
+    Extracted from #eval so it can be used by both #eval and native exe. -/
+def dispatchLoopEvalMain : IO Unit := do
   let logPath : System.FilePath := ".lake/stabilization.log"
   IO.FS.writeFile logPath ""
   let log (msg : String) : IO Unit := do

@@ -80,3 +80,7 @@ name = "CircularCoinduction"
 
 [[lean_lib]]
 name = "ModelEq"
+
+[[lean_exe]]
+name = "dispatchLoopEval"
+root = "DispatchLoopEvalExe"
