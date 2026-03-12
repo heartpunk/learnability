@@ -94,53 +94,53 @@ partial def SymExpr.collectRegs {Reg : Type} [BEq Reg] [Hashable Reg]
     : SymExpr Reg → Std.HashSet Reg → Std.HashSet Reg
   | .const _, s => s
   | .reg r, s => s.insert r
-  | .low32 e, s => e.collectRegs s
-  | .uext32 e, s => e.collectRegs s
-  | .sext8to32 e, s => e.collectRegs s
-  | .sext32to64 e, s => e.collectRegs s
-  | .sub32 l r, s => r.collectRegs (l.collectRegs s)
-  | .shl32 l r, s => r.collectRegs (l.collectRegs s)
-  | .add64 l r, s => r.collectRegs (l.collectRegs s)
-  | .sub64 l r, s => r.collectRegs (l.collectRegs s)
-  | .xor64 l r, s => r.collectRegs (l.collectRegs s)
-  | .and64 l r, s => r.collectRegs (l.collectRegs s)
-  | .or64 l r, s => r.collectRegs (l.collectRegs s)
-  | .shl64 l r, s => r.collectRegs (l.collectRegs s)
-  | .shr64 l r, s => r.collectRegs (l.collectRegs s)
-  | .load _ _ addr, s => addr.collectRegs s
+  | .low32 e, s => SymExpr.collectRegs e s
+  | .uext32 e, s => SymExpr.collectRegs e s
+  | .sext8to32 e, s => SymExpr.collectRegs e s
+  | .sext32to64 e, s => SymExpr.collectRegs e s
+  | .sub32 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
+  | .shl32 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
+  | .add64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
+  | .sub64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
+  | .xor64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
+  | .and64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
+  | .or64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
+  | .shl64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
+  | .shr64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
+  | .load _ _ addr, s => SymExpr.collectRegs addr s
 
 /-- Collect all constants appearing in a SymExpr. -/
 partial def SymExpr.collectConsts {Reg : Type}
     : SymExpr Reg → Std.HashSet UInt64 → Std.HashSet UInt64
   | .const v, s => s.insert v
   | .reg _, s => s
-  | .low32 e, s => e.collectConsts s
-  | .uext32 e, s => e.collectConsts s
-  | .sext8to32 e, s => e.collectConsts s
-  | .sext32to64 e, s => e.collectConsts s
-  | .sub32 l r, s => r.collectConsts (l.collectConsts s)
-  | .shl32 l r, s => r.collectConsts (l.collectConsts s)
-  | .add64 l r, s => r.collectConsts (l.collectConsts s)
-  | .sub64 l r, s => r.collectConsts (l.collectConsts s)
-  | .xor64 l r, s => r.collectConsts (l.collectConsts s)
-  | .and64 l r, s => r.collectConsts (l.collectConsts s)
-  | .or64 l r, s => r.collectConsts (l.collectConsts s)
-  | .shl64 l r, s => r.collectConsts (l.collectConsts s)
-  | .shr64 l r, s => r.collectConsts (l.collectConsts s)
-  | .load _ _ addr, s => addr.collectConsts s
+  | .low32 e, s => SymExpr.collectConsts e s
+  | .uext32 e, s => SymExpr.collectConsts e s
+  | .sext8to32 e, s => SymExpr.collectConsts e s
+  | .sext32to64 e, s => SymExpr.collectConsts e s
+  | .sub32 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
+  | .shl32 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
+  | .add64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
+  | .sub64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
+  | .xor64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
+  | .and64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
+  | .or64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
+  | .shl64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
+  | .shr64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
+  | .load _ _ addr, s => SymExpr.collectConsts addr s
 
 /-- Collect registers and constants from a SymPC. -/
 partial def SymPC.collectRegsConsts {Reg : Type} [BEq Reg] [Hashable Reg]
     : SymPC Reg → Std.HashSet Reg → Std.HashSet UInt64
     → Std.HashSet Reg × Std.HashSet UInt64
   | .true, rs, cs => (rs, cs)
-  | .eq l r, rs, cs => (r.collectRegs (l.collectRegs rs), r.collectConsts (l.collectConsts cs))
-  | .lt l r, rs, cs => (r.collectRegs (l.collectRegs rs), r.collectConsts (l.collectConsts cs))
-  | .le l r, rs, cs => (r.collectRegs (l.collectRegs rs), r.collectConsts (l.collectConsts cs))
+  | .eq l r, rs, cs => (SymExpr.collectRegs r (SymExpr.collectRegs l rs), SymExpr.collectConsts r (SymExpr.collectConsts l cs))
+  | .lt l r, rs, cs => (SymExpr.collectRegs r (SymExpr.collectRegs l rs), SymExpr.collectConsts r (SymExpr.collectConsts l cs))
+  | .le l r, rs, cs => (SymExpr.collectRegs r (SymExpr.collectRegs l rs), SymExpr.collectConsts r (SymExpr.collectConsts l cs))
   | .and φ ψ, rs, cs =>
-    let (rs', cs') := φ.collectRegsConsts rs cs
-    ψ.collectRegsConsts rs' cs'
-  | .not φ, rs, cs => φ.collectRegsConsts rs cs
+    let (rs', cs') := SymPC.collectRegsConsts φ rs cs
+    SymPC.collectRegsConsts ψ rs' cs'
+  | .not φ, rs, cs => SymPC.collectRegsConsts φ rs cs
 
 /-- Generate critical test values from constants: each constant, ± 1, plus 0. -/
 def criticalValues (consts : Std.HashSet UInt64) : Array UInt64 := Id.run do
