@@ -202,41 +202,6 @@ def branchSubsumedBy {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (b1 b2 : Branch (SymSub Reg) (SymPC Reg)) (baseEnv : Reg → UInt64) : Bool :=
   b1.sub == b2.sub && b1.pc != b2.pc && SymPC.semanticImplies b1.pc b2.pc baseEnv
 
-/-- Prune subsumed branches from an array, using HashMap grouping by sub hash.
-    For each group of branches with the same sub, remove any branch whose PC
-    is semantically implied by another branch in the group.
-    Returns (prunedArray, prunedCount). -/
-def pruneBranches {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
-    [BEq Reg]
-    (branches : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (baseEnv : Reg → UInt64) :
-    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat := Id.run do
-  -- Group branches by sub hash for efficient comparison
-  let mut groups : Std.HashMap UInt64 (Array Nat) := {}
-  for i in [:branches.size] do
-    let h := hash branches[i]!.sub
-    let arr := groups.getD h #[]
-    groups := groups.insert h (arr.push i)
-  -- Within each group, prune subsumed branches
-  let mut keep : Array Bool := Array.mkArray branches.size true
-  let mut pruned : Nat := 0
-  for (_, groupIndices) in groups.toArray do
-    for i in groupIndices do
-      if keep[i]! then
-        let bi := branches[i]!
-        for j in groupIndices do
-          if i != j && keep[j]! then
-            let bj := branches[j]!
-            if branchSubsumedBy bi bj baseEnv then
-              keep := keep.set! i false
-              pruned := pruned + 1
-              break
-  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-  for i in [:branches.size] do
-    if keep[i]! then
-      result := result.push branches[i]!
-  return (result, pruned)
-
 /-! ## PC-Signature Equivalence Class Dedup
 
 Two branches with the same substitution and the same PC signature (which guard PCs
@@ -598,7 +563,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     let mut frontierSubs : Std.HashSet UInt64 := {}
     for b in newBranches do
       frontierSubs := frontierSubs.insert (hash b.sub)
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} |distinct_subs|={frontierSubs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} pruned={prunedCount} time={t_end - t_start}ms"
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} |distinct_subs|={frontierSubs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} pruned={prunedCount} compose={t_prune_start - t_start}ms prune={t_end - t_prune_start}ms total={t_end - t_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
@@ -718,7 +683,7 @@ def dispatchLoopEvalMain : IO Unit := do
   | .ok allPairs =>
     log s!"Total blocks available: {allPairs.length}"
     log "N, |bodyDenot|, K, |S_final|, bodyDenot_ms, stabilization_ms"
-    for n in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55] do
+    for n in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60] do
       if n > allPairs.length then
         log s!"{n}, ---, SKIP (only {allPairs.length} blocks), ---, ---, ---"
       else
