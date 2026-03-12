@@ -72,6 +72,55 @@ def composeBranchFinsetsSimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     | none => ∅
     | some b' => {b'})
 
+/-! ## HashSet-based Stabilization (fast path)
+
+Uses `Std.HashSet` for O(1) membership checks instead of Finset's O(n) linear scan.
+The Hashable instances on SymExpr/SymPC/SymSub/Branch enable this. -/
+
+/-- Compose body branches with frontier branches, simplify, return as Array.
+    Uses direct iteration instead of Finset.biUnion/image. -/
+def composeBranchArraySimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg))) :
+    Array (Branch (SymSub Reg) (SymPC Reg)) := Id.run do
+  let isa := vexSummaryISA Reg
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  for b1 in bodyArr do
+    for b2 in frontierArr do
+      let composed := b1.compose isa b2
+      match simplifyBranch composed with
+      | none => pure ()
+      | some b' => result := result.push b'
+  return result
+
+/-- Fast incremental stabilization using HashSet for O(1) membership. -/
+def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg]
+    (bodyDenot : Finset (Branch (SymSub Reg) (SymPC Reg)))
+    (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
+  let isa := vexSummaryISA Reg
+  let bodyArr := bodyDenot.val.toList.toArray
+  let initBranch := Branch.skip isa
+  let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
+  current := current.insert initBranch
+  let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
+  let log (msg : String) : IO Unit := do
+    IO.println msg
+    if let some path := logFile then
+      let h ← IO.FS.Handle.mk path .append
+      h.putStrLn msg
+  for k in List.range maxIter do
+    let composed := composeBranchArraySimplified bodyArr frontier
+    let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    for b in composed do
+      if !current.contains b then
+        newBranches := newBranches.push b
+        current := current.insert b
+    if k % 5 == 0 || newBranches.size == 0 then
+      log s!"  K={k}: |S| = {current.size}, |frontier| = {frontier.size}, |new| = {newBranches.size}"
+    if newBranches.size == 0 then
+      return some (k, current.size)
+    frontier := newBranches
+  return none
+
 /-! ## Stabilization Computation -/
 
 /-- Naive stabilization: composes bodyDenot with the FULL accumulated set each
@@ -182,7 +231,7 @@ def parseBlocksWithAddresses (blockStrs : List String) :
         let body := flatBodyDenot Amd64Reg.rip pairs
         let t1 ← IO.monoMsNow
         log s!"  N={n}: |bodyDenot|={body.card}, starting stabilization..."
-        match ← computeStabilization body 200 logPath with
+        match ← computeStabilizationHS body 200 logPath with
         | some (k, card) =>
           let t2 ← IO.monoMsNow
           log s!"{n}, {body.card}, {k}, {card}, {t1 - t0}, {t2 - t1}"

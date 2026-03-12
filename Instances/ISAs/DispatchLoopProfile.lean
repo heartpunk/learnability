@@ -139,7 +139,7 @@ def profileTrial (log : IO.FS.Handle) (seed : UInt64)
   let body := flatBodyDenot Amd64Reg.rip blocks
   let t1 ← IO.monoMsNow
   let logPath : System.FilePath := ".lake/profile.log"
-  match ← computeStabilization body 200 logPath with
+  match ← computeStabilizationHS body 200 logPath with
   | some (k, card) =>
     let t2 ← IO.monoMsNow
     let line := s!"{seed}, {n}, {branchWidth}, {exprDepth}, {regSpread}, {body.card}, {k}, {card}, {t1 - t0}, {t2 - t1}"

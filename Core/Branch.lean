@@ -42,6 +42,9 @@ structure Branch (Sub : Type*) (PC : Type*) where
   pc : PC
   deriving DecidableEq
 
+instance {Sub PC : Type*} [Hashable Sub] [Hashable PC] : Hashable (Branch Sub PC) where
+  hash b := mixHash (hash b.sub) (hash b.pc)
+
 section BranchOps
 
 variable {Sub PC State : Type*} (isa : SymbolicISA Sub PC State)

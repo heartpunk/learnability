@@ -424,4 +424,50 @@ theorem evalSymPC_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     Summary.apply (Summary.id : Summary Reg) state = state := by
   simp [Summary.id, Summary.apply]
 
+/-! ## Hashable instances for fast HashSet-based computation -/
+
+mutual
+partial def hashSymExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → UInt64
+  | .const v => mixHash 1 (hash v)
+  | .reg r => mixHash 2 (hash r)
+  | .low32 e => mixHash 3 (hashSymExpr e)
+  | .uext32 e => mixHash 4 (hashSymExpr e)
+  | .sext8to32 e => mixHash 5 (hashSymExpr e)
+  | .sext32to64 e => mixHash 6 (hashSymExpr e)
+  | .sub32 l r => mixHash 7 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .shl32 l r => mixHash 8 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .add64 l r => mixHash 9 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .sub64 l r => mixHash 10 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .xor64 l r => mixHash 11 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .and64 l r => mixHash 12 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .or64 l r => mixHash 13 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .shl64 l r => mixHash 14 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .shr64 l r => mixHash 15 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .load w m a => mixHash 16 (mixHash (hash w.byteCount) (mixHash (hashSymMem m) (hashSymExpr a)))
+
+partial def hashSymMem {Reg : Type} [Hashable Reg] : SymMem Reg → UInt64
+  | .base => 17
+  | .store w m a v => mixHash 18 (mixHash (hash w.byteCount) (mixHash (hashSymMem m) (mixHash (hashSymExpr a) (hashSymExpr v))))
+end
+
+instance {Reg : Type} [Hashable Reg] : Hashable (SymExpr Reg) := ⟨hashSymExpr⟩
+instance {Reg : Type} [Hashable Reg] : Hashable (SymMem Reg) := ⟨hashSymMem⟩
+
+instance {Reg : Type} [Hashable Reg] : Hashable (SymPC Reg) where
+  hash
+    | .true => 19
+    | .eq l r => mixHash 20 (mixHash (hash l) (hash r))
+    | .lt l r => mixHash 21 (mixHash (hash l) (hash r))
+    | .le l r => mixHash 22 (mixHash (hash l) (hash r))
+    | .and φ ψ => mixHash 23 (mixHash (hash φ) (hash ψ))
+    | .not φ => mixHash 24 (hash φ)
+
+instance {Reg : Type} [Hashable Reg] [Fintype Reg] [DecidableEq Reg] : Hashable (SymSub Reg) where
+  hash sub :=
+    let regHash := Finset.univ.fold (mixHash) 0 (fun r => hash (sub.regs r))
+    mixHash regHash (hash sub.mem)
+
+instance {Reg : Type} [Hashable Reg] [Fintype Reg] [DecidableEq Reg] : Hashable (Summary Reg) where
+  hash s := mixHash (hash s.sub) (hash s.pc)
+
 end VexISA
