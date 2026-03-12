@@ -1152,13 +1152,15 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
         if bNodes > maxNodes then maxNodes := bNodes
       log s!"      expr stats: total_nodes={totalNodes} avg={totalNodes / newBranches.size} max={maxNodes} unresolved_loads={totalUnresolved}"
       -- Dump first 2 new branches in detail
-      for i in [:min 2 newBranches.size] do
-        let b := newBranches[i]!
-        let mut regSummaries : List String := []
-        for r in closedRegsArr do
-          let e := b.sub.regs r
-          regSummaries := regSummaries ++ [s!"{r}={exprSummary e 3}[{exprNodeCount e}n,{exprUnresolvedLoads e}ul]"]
-        log s!"      branch[{i}]: {", ".intercalate regSummaries} mem[{memNodeCount b.sub.mem}n]"
+      let mut dumpIdx : Nat := 0
+      for b in newBranches do
+        if dumpIdx < 2 then
+          let mut regSummaries : List String := []
+          for r in closedRegsArr do
+            let e := b.sub.regs r
+            regSummaries := regSummaries ++ [s!"{r}={exprSummary e 3}[{exprNodeCount e}n,{exprUnresolvedLoads e}ul]"]
+          log s!"      branch[{dumpIdx}]: {", ".intercalate regSummaries} mem[{memNodeCount b.sub.mem}n]"
+          dumpIdx := dumpIdx + 1
     if newBranches.size == 0 then
       -- Collect all branches as array for the summary
       let summaryArr := current.toArray
