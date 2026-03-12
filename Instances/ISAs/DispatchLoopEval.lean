@@ -100,16 +100,21 @@ def computeStabilizationNaive {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     can produce genuinely new branches. -/
 def computeStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (bodyDenot : Finset (Branch (SymSub Reg) (SymPC Reg)))
-    (maxIter : Nat) : IO (Option (Nat × Nat)) := do
+    (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
   let isa := vexSummaryISA Reg
   let init : Finset (Branch (SymSub Reg) (SymPC Reg)) := {Branch.skip isa}
   let mut current := init
   let mut frontier := init
+  let log (msg : String) : IO Unit := do
+    IO.println msg
+    if let some path := logFile then
+      let h ← IO.FS.Handle.mk path .append
+      h.putStrLn msg
   for k in List.range maxIter do
     let composed := composeBranchFinsetsSimplified bodyDenot frontier
     let newBranches := composed \ current
     if k % 5 == 0 || newBranches.card == 0 then
-      IO.println s!"  K={k}: |S| = {current.card}, |frontier| = {frontier.card}, |new| = {newBranches.card}"
+      log s!"  K={k}: |S| = {current.card}, |frontier| = {frontier.card}, |new| = {newBranches.card}"
     if newBranches.card == 0 then
       return some (k, current.card)
     current := current ∪ newBranches
@@ -156,25 +161,31 @@ def parseBlocksWithAddresses (blockStrs : List String) :
 /-! ## Run stabilization on next_sym -/
 
 #eval do
-  IO.println "=== Dispatch Loop Stabilization: next_sym (60 blocks) ==="
+  let logPath : System.FilePath := ".lake/stabilization.log"
+  IO.FS.writeFile logPath ""
+  let log (msg : String) : IO Unit := do
+    IO.println msg
+    let h ← IO.FS.Handle.mk logPath .append
+    h.putStrLn msg
+  log "=== Dispatch Loop Stabilization: next_sym (60 blocks) ==="
   match parseBlocksWithAddresses nextSymBlocks with
-  | .error e => IO.println s!"PARSE ERROR: {e}"
+  | .error e => log s!"PARSE ERROR: {e}"
   | .ok allPairs =>
-    IO.println s!"Total blocks available: {allPairs.length}"
-    IO.println "N, |bodyDenot|, K, |S_final|, bodyDenot_ms, stabilization_ms"
+    log s!"Total blocks available: {allPairs.length}"
+    log "N, |bodyDenot|, K, |S_final|, bodyDenot_ms, stabilization_ms"
     for n in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60] do
       if n > allPairs.length then
-        IO.println s!"{n}, ---, SKIP (only {allPairs.length} blocks), ---, ---, ---"
+        log s!"{n}, ---, SKIP (only {allPairs.length} blocks), ---, ---, ---"
       else
         let pairs := allPairs.take n
         let t0 ← IO.monoMsNow
         let body := flatBodyDenot Amd64Reg.rip pairs
         let t1 ← IO.monoMsNow
-        IO.println s!"  N={n}: |bodyDenot|={body.card}, starting stabilization..."
-        match ← computeStabilization body 200 with
+        log s!"  N={n}: |bodyDenot|={body.card}, starting stabilization..."
+        match ← computeStabilization body 200 logPath with
         | some (k, card) =>
           let t2 ← IO.monoMsNow
-          IO.println s!"{n}, {body.card}, {k}, {card}, {t1 - t0}, {t2 - t1}"
+          log s!"{n}, {body.card}, {k}, {card}, {t1 - t0}, {t2 - t1}"
         | none =>
           let t2 ← IO.monoMsNow
-          IO.println s!"{n}, {body.card}, DNF, DNF, {t1 - t0}, {t2 - t1}"
+          log s!"{n}, {body.card}, DNF, DNF, {t1 - t0}, {t2 - t1}"
