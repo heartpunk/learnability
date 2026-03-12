@@ -69,6 +69,60 @@ compute, just at the symbolic level. No information is lost. Combined with
 simplifyConst (which handles const-const comparisons), this collapses the
 expression chains that cause unbounded growth in iterative composition. -/
 
+/-! ## Expression Diagnostics -/
+
+mutual
+/-- Count nodes in a symbolic expression tree. -/
+partial def SymExpr.nodeCount {Reg : Type} : SymExpr Reg → Nat
+  | .const _ => 1
+  | .reg _ => 1
+  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x => 1 + x.nodeCount
+  | .sub32 a b | .shl32 a b | .add64 a b | .sub64 a b
+  | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b =>
+    1 + a.nodeCount + b.nodeCount
+  | .load _ m addr => 1 + m.nodeCount + addr.nodeCount
+
+/-- Count nodes in a symbolic memory tree. -/
+partial def SymMem.nodeCount {Reg : Type} : SymMem Reg → Nat
+  | .base => 1
+  | .store _ m addr val => 1 + m.nodeCount + addr.nodeCount + val.nodeCount
+end
+
+/-- Compact summary of an expression (depth-limited). -/
+partial def SymExpr.summary {Reg : Type} [ToString Reg] : SymExpr Reg → Nat → String
+  | .const v, _ => s!"C({v})"
+  | .reg r, _ => s!"R({r})"
+  | _, 0 => s!"..."
+  | .low32 x, d => s!"lo32({x.summary (d-1)})"
+  | .uext32 x, d => s!"zx32({x.summary (d-1)})"
+  | .sext8to32 x, d => s!"sx8({x.summary (d-1)})"
+  | .sext32to64 x, d => s!"sx32({x.summary (d-1)})"
+  | .add64 a b, d => s!"add({a.summary (d-1)},{b.summary (d-1)})"
+  | .sub64 a b, d => s!"sub({a.summary (d-1)},{b.summary (d-1)})"
+  | .xor64 a b, d => s!"xor({a.summary (d-1)},{b.summary (d-1)})"
+  | .and64 a b, d => s!"and({a.summary (d-1)},{b.summary (d-1)})"
+  | .or64 a b, d => s!"or({a.summary (d-1)},{b.summary (d-1)})"
+  | .shl64 a b, d => s!"shl({a.summary (d-1)},{b.summary (d-1)})"
+  | .shr64 a b, d => s!"shr({a.summary (d-1)},{b.summary (d-1)})"
+  | .sub32 a b, d => s!"sub32({a.summary (d-1)},{b.summary (d-1)})"
+  | .shl32 a b, d => s!"shl32({a.summary (d-1)},{b.summary (d-1)})"
+  | .load w m addr, d => s!"ld{w.byteCount*8}(mem[{m.nodeCount}],{addr.summary (d-1)})"
+
+/-- Count unresolved loads in an expression (loads from non-base memory). -/
+mutual
+partial def SymExpr.unresolvedLoads {Reg : Type} : SymExpr Reg → Nat
+  | .const _ | .reg _ => 0
+  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x => x.unresolvedLoads
+  | .sub32 a b | .shl32 a b | .add64 a b | .sub64 a b
+  | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b =>
+    a.unresolvedLoads + b.unresolvedLoads
+  | .load _ m addr => (match m with | .base => 0 | _ => 1) + m.unresolvedLoadsMem + addr.unresolvedLoads
+
+partial def SymMem.unresolvedLoadsMem {Reg : Type} : SymMem Reg → Nat
+  | .base => 0
+  | .store _ m addr val => m.unresolvedLoadsMem + addr.unresolvedLoads + val.unresolvedLoads
+end
+
 mutual
 /-- Simplify load-after-store patterns in a SymExpr. -/
 partial def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymExpr Reg
@@ -1085,6 +1139,32 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
           newBranches := newBranches.push b  -- only new proj classes go to frontier
     let t_end ← IO.monoMsNow
     log s!"    K={k}: |S|={current.size} |new|={newBranches.size} |proj_classes|={projSeen.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} proj_collapsed={projCollapsed} {t_end - t_start}ms"
+    -- Diagnostic: dump expression details for first few iterations
+    if k ≤ 4 && newBranches.size > 0 then
+      -- Aggregate stats across all new branches
+      let mut totalNodes : Nat := 0
+      let mut totalUnresolved : Nat := 0
+      let mut maxNodes : Nat := 0
+      for b in newBranches do
+        let mut bNodes : Nat := 0
+        let mut bUnresolved : Nat := 0
+        for r in closedRegsArr do
+          let e := b.sub.regs r
+          bNodes := bNodes + e.nodeCount
+          bUnresolved := bUnresolved + e.unresolvedLoads
+        bNodes := bNodes + b.sub.mem.nodeCount
+        totalNodes := totalNodes + bNodes
+        totalUnresolved := totalUnresolved + bUnresolved
+        if bNodes > maxNodes then maxNodes := bNodes
+      log s!"      expr stats: total_nodes={totalNodes} avg={totalNodes / newBranches.size} max={maxNodes} unresolved_loads={totalUnresolved}"
+      -- Dump first 2 new branches in detail
+      for i in [:min 2 newBranches.size] do
+        let b := newBranches[i]!
+        let mut regSummaries : List String := []
+        for r in closedRegsArr do
+          let e := b.sub.regs r
+          regSummaries := regSummaries ++ [s!"{r}={e.summary 3}[{e.nodeCount}n,{e.unresolvedLoads}ul]"]
+        log s!"      branch[{i}]: {", ".intercalate regSummaries} mem[{b.sub.mem.nodeCount}n]"
     if newBranches.size == 0 then
       -- Collect all branches as array for the summary
       let summaryArr := current.toArray
@@ -1194,7 +1274,7 @@ def stratifiedFixpoint
       log s!"    {fname}: split body {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, {branchesAdded} branches, {droppedExp} dropped)"
       -- Step 2: Run stabilization on non-call body, seeding call results as initial frontier
       let oldSummary := summaries.getD func.entryAddr #[]
-      match ← computeFunctionStabilization ip_reg nonCallBody {} 200 log (initialFrontier := callResults) with
+      match ← computeFunctionStabilization ip_reg nonCallBody {} 8 log (initialFrontier := callResults) with
       | some (k, newSummary) =>
         let t1 ← IO.monoMsNow
         if newSummary.size != oldSummary.size then
