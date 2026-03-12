@@ -1152,6 +1152,9 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     hashPCSignature (computePCSignature closure b.pc)
   let mut convSeen : Std.HashSet UInt64 := {}
   convSeen := convSeen.insert (convKey initBranch)
+  -- Convergence class representatives for semantic PC equivalence check (Task 1A).
+  -- One PC per syntactic-hash class; z3 checks new candidates against all reps.
+  let mut convReps : Array (SymPC Reg) := #[initBranch.pc]
   -- Build initial frontier: skip + simplified initial frontier seeds
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   for b in initialFrontier do
@@ -1162,6 +1165,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       let key := convKey zb
       unless convSeen.contains key do
         convSeen := convSeen.insert key
+        convReps := convReps.push zb.pc
         frontier := frontier.push zb
   -- Seed initial frontier into current set
   for b in frontier do
@@ -1182,6 +1186,8 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
     let mut projCollapsed : Nat := 0
+    -- Phase 1: exact-match dedup; collect syntactically-new conv-key candidates
+    let mut syntacticNewCands : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     for b in simplified do
       if current.contains b then
         dupes := dupes + 1
@@ -1191,10 +1197,65 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
         if convSeen.contains key then
           projCollapsed := projCollapsed + 1
         else
-          convSeen := convSeen.insert key
-          newBranches := newBranches.push b  -- only new conv classes go to frontier
+          syntacticNewCands := syntacticNewCands.push b
+    -- Phase 2: semantic equivalence check via z3 for syntactically-new candidates.
+    -- Query: (P_new ∧ ¬P_rep) ∨ (P_rep ∧ ¬P_new) UNSAT ⟺ P_new ≡ P_rep.
+    -- Batch all (cand_i, rep_j) pairs into one z3 invocation using push/pop.
+    let mut semCollapsed : Nat := 0
+    if syntacticNewCands.size > 0 && convReps.size > 0 then
+      let mut convPairs : Array (SymPC Reg × SymPC Reg) := #[]
+      let mut convPairCandIdx : Array Nat := #[]
+      let mut ci : Nat := 0
+      for cand in syntacticNewCands do
+        for rep in convReps do
+          convPairs := convPairs.push (cand.pc, rep)
+          convPairCandIdx := convPairCandIdx.push ci
+        ci := ci + 1
+      -- Collect SMT variable names across all queries
+      let mut convRegNames : Std.HashSet String := {}
+      let mut convNeedsMem := false
+      for (cp, rp) in convPairs do
+        convRegNames := SymPC.collectRegNames cp convRegNames
+        convRegNames := SymPC.collectRegNames rp convRegNames
+        if SymPC.hasLoad cp || SymPC.hasLoad rp then convNeedsMem := true
+      -- Generate SMT-LIB2 script
+      let mut convScript := smtPreamble convRegNames convNeedsMem
+      for (cp, rp) in convPairs do
+        convScript := convScript ++ "(push)\n"
+        convScript := convScript ++ s!"(assert (or (and {SymPC.toSMTLib cp} (not {SymPC.toSMTLib rp})) (and {SymPC.toSMTLib rp} (not {SymPC.toSMTLib cp}))))\n"
+        convScript := convScript ++ "(check-sat)\n"
+        convScript := convScript ++ "(pop)\n"
+      convScript := convScript ++ "(exit)\n"
+      let convTmpFile : System.FilePath := ".lake/smt_conv_equiv.smt2"
+      IO.FS.writeFile convTmpFile convScript
+      let convZ3 ← IO.Process.output { cmd := "z3", args := #[convTmpFile.toString] }
+      let convLines := convZ3.stdout.splitOn "\n" |>.filter (· != "")
+      -- Find candidates semantically equivalent to at least one rep (unsat = equiv)
+      let mut convEquivCands : Std.HashSet Nat := {}
+      for i in [:convPairs.size] do
+        if h : i < convLines.length then
+          if convLines[i] == "unsat" then
+            if h2 : i < convPairCandIdx.size then
+              convEquivCands := convEquivCands.insert convPairCandIdx[i]
+      log s!"    z3 conv equiv: {convPairs.size} queries → {convEquivCands.size} sem-collapsed"
+      -- Promote candidates: collapsed if equiv to any rep, else new conv class
+      let mut ci2 : Nat := 0
+      for cand in syntacticNewCands do
+        if convEquivCands.contains ci2 then
+          semCollapsed := semCollapsed + 1
+        else
+          convSeen := convSeen.insert (convKey cand)
+          convReps := convReps.push cand.pc
+          newBranches := newBranches.push cand
+        ci2 := ci2 + 1
+    else
+      -- No reps yet or no candidates: all syntactically-new candidates are new classes
+      for cand in syntacticNewCands do
+        convSeen := convSeen.insert (convKey cand)
+        convReps := convReps.push cand.pc
+        newBranches := newBranches.push cand
     let t_end ← IO.monoMsNow
-    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} |conv_classes|={convSeen.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} conv_collapsed={projCollapsed} {t_end - t_start}ms"
+    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} |conv_classes|={convSeen.size} |conv_reps|={convReps.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} conv_collapsed={projCollapsed}+{semCollapsed}sem {t_end - t_start}ms"
     -- Diagnostic: dump expression details for first few iterations
     if k ≤ 4 && newBranches.size > 0 then
       -- Aggregate stats across all new branches
@@ -1226,6 +1287,78 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     if newBranches.size == 0 then
       -- Collect all branches as array for the summary
       let summaryArr := current.toArray
+      -- Task 1B: Closure closedness verification.
+      -- For each branch b in summaryArr and each data guard PC phi in closure:
+      --   lifted = substSymPC b.sub phi  (the pc_lift from VexSummary/VexCompTree)
+      --   simplified = simplifyLoadStorePC lifted |> SymPC.simplifyConst
+      --   check: simplified ≡ some phi_j in closure, or trivially true/false
+      do
+        log s!"    [closedness] checking {summaryArr.size} branches × {closure.size} guards..."
+        let mut trivClosedPairs : Nat := 0   -- simplified to true/false or syntactic match
+        let mut needsZ3Pairs : Nat := 0      -- require z3 semantic check
+        -- z3 query data: for each lifted PC that fails syntactic check,
+        -- compare against each phi_j in closure
+        let mut closedQueryPairs : Array (SymPC Reg × SymPC Reg) := #[]
+        let mut closedQueryLiftedIdx : Array Nat := #[]
+        let mut liftedNeedingCheck : Array Nat := #[]  -- globalIdx of non-trivial lifted PCs
+        let mut globalIdx : Nat := 0
+        for b in summaryArr do
+          for phi in closure do
+            let lifted := substSymPC b.sub phi
+            let liftedSimplified := simplifyLoadStorePC lifted
+            match SymPC.simplifyConst liftedSimplified with
+            | none =>
+              trivClosedPairs := trivClosedPairs + 1  -- false: unsatisfiable, trivially closed
+            | some .true =>
+              trivClosedPairs := trivClosedPairs + 1  -- true: trivially closed
+            | some pc' =>
+              -- Fast-path: syntactic match against closure
+              let inClosure := pc' == .true || closure.any (fun phi_j => phi_j == pc')
+              if inClosure then
+                trivClosedPairs := trivClosedPairs + 1
+              else
+                -- Need z3 check: is pc' semantically equiv to some phi_j?
+                for phi_j in closure do
+                  closedQueryPairs := closedQueryPairs.push (pc', phi_j)
+                  closedQueryLiftedIdx := closedQueryLiftedIdx.push globalIdx
+                liftedNeedingCheck := liftedNeedingCheck.push globalIdx
+                needsZ3Pairs := needsZ3Pairs + 1
+            globalIdx := globalIdx + 1
+        log s!"    [closedness] trivial={trivClosedPairs}/{globalIdx} z3_candidates={needsZ3Pairs}"
+        -- Run z3 semantic check for non-trivial lifted PCs
+        let mut closednessViolations : Nat := 0
+        if closedQueryPairs.size > 0 then
+          let mut closedRegNames : Std.HashSet String := {}
+          let mut closedNeedsMem2 := false
+          for (cp, rp) in closedQueryPairs do
+            closedRegNames := SymPC.collectRegNames cp closedRegNames
+            closedRegNames := SymPC.collectRegNames rp closedRegNames
+            if SymPC.hasLoad cp || SymPC.hasLoad rp then closedNeedsMem2 := true
+          let mut closedScript := smtPreamble closedRegNames closedNeedsMem2
+          for (cp, rp) in closedQueryPairs do
+            closedScript := closedScript ++ "(push)\n"
+            closedScript := closedScript ++ s!"(assert (or (and {SymPC.toSMTLib cp} (not {SymPC.toSMTLib rp})) (and {SymPC.toSMTLib rp} (not {SymPC.toSMTLib cp}))))\n"
+            closedScript := closedScript ++ "(check-sat)\n"
+            closedScript := closedScript ++ "(pop)\n"
+          closedScript := closedScript ++ "(exit)\n"
+          let closedTmpFile : System.FilePath := ".lake/smt_closedness.smt2"
+          IO.FS.writeFile closedTmpFile closedScript
+          let closedZ3 ← IO.Process.output { cmd := "z3", args := #[closedTmpFile.toString] }
+          let closedLines := closedZ3.stdout.splitOn "\n" |>.filter (· != "")
+          -- Collect lifted PC indices that are semantically closed (unsat = equiv to some phi_j)
+          let mut closedByZ3 : Std.HashSet Nat := {}
+          for i in [:closedQueryPairs.size] do
+            if h : i < closedLines.length then
+              if closedLines[i] == "unsat" then
+                if h2 : i < closedQueryLiftedIdx.size then
+                  closedByZ3 := closedByZ3.insert closedQueryLiftedIdx[i]
+          -- Violations: lifted PCs not closed by z3
+          for gIdx in liftedNeedingCheck do
+            unless closedByZ3.contains gIdx do
+              closednessViolations := closednessViolations + 1
+          log s!"    [closedness] z3: {closedQueryPairs.size} queries, {closedByZ3.size} closed, {closednessViolations} violations"
+        let isClosed := closednessViolations == 0
+        log s!"    [closedness] closure closed: {if isClosed then "YES" else "NO"}, violations={closednessViolations}"
       return some (k, summaryArr)
     frontier := newBranches
   return none
