@@ -162,7 +162,7 @@ def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq 
     Combines compose + simplify + HashSet dedup in a single pass.
     No intermediate array allocated.
     Returns (newBranches, updatedCurrent, pairsComposed, skipped, dropped, dupes). -/
-def composeAndDedup {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [BEq Reg]
+def composeAndDedup {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
     (ip_reg : Reg) (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg))) :
     Array (Branch (SymSub Reg) (SymPC Reg)) × Std.HashSet (Branch (SymSub Reg) (SymPC Reg))
