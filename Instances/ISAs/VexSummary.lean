@@ -463,11 +463,6 @@ partial def hashSymPC {Reg : Type} [Hashable Reg] : SymPC Reg → UInt64
 
 instance {Reg : Type} [Hashable Reg] : Hashable (SymPC Reg) := ⟨hashSymPC⟩
 
-/-- Computable register enumeration for hashing. Finset.toList is noncomputable
-    in Mathlib, so we provide a concrete list instead. -/
-class EnumReg (Reg : Type) where
-  allRegs : List Reg
-
 instance {Reg : Type} [Hashable Reg] [EnumReg Reg] : Hashable (SymSub Reg) where
   hash sub :=
     let regHash := EnumReg.allRegs.foldl (fun acc r => mixHash acc (hash (sub.regs r))) 0

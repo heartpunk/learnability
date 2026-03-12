@@ -335,4 +335,9 @@ def TempEnv.write (temps : TempEnv) (tmp : Nat) (value : UInt64) : TempEnv :=
     (value : UInt64) (h : reg' ≠ reg) : (state.write reg value).read reg' = state.read reg' := by
   simp [ConcreteState.write, ConcreteState.read, h]
 
+/-- Computable register enumeration for hashing. Finset.toList is noncomputable
+    in Mathlib, so we provide a concrete list instead. -/
+class EnumReg (Reg : Type) where
+  allRegs : List Reg
+
 end VexISA
