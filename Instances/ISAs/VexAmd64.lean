@@ -27,6 +27,9 @@ instance : Hashable Amd64Reg where
     | .rbp => 4 | .rsp => 5 | .rdi => 6 | .rip => 7
     | .cc_op => 8 | .cc_dep1 => 9 | .cc_dep2 => 10 | .cc_ndep => 11
 
+instance : EnumReg Amd64Reg where
+  allRegs := [.rax, .rcx, .rdx, .rsi, .rbp, .rsp, .rdi, .rip, .cc_op, .cc_dep1, .cc_dep2, .cc_ndep]
+
 instance : Fintype Amd64Reg :=
   ⟨{.rax, .rcx, .rdx, .rsi, .rbp, .rsp, .rdi, .rip, .cc_op, .cc_dep1, .cc_dep2, .cc_ndep}, by
     intro reg

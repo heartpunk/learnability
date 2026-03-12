@@ -93,7 +93,7 @@ def composeBranchArraySimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   return result
 
 /-- Fast incremental stabilization using HashSet for O(1) membership. -/
-def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg]
+def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
     (bodyDenot : Finset (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
   let isa := vexSummaryISA Reg
