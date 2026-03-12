@@ -99,8 +99,8 @@ instance : ToString Amd64Reg where
 def Width.toSMTWidth : Width → String
   | .w8 => "8" | .w16 => "16" | .w32 => "32" | .w64 => "64"
 
-/-- Encode a SymExpr as an SMT-LIB2 bitvector expression (64-bit). -/
 mutual
+/-- Encode a SymExpr as an SMT-LIB2 bitvector expression (64-bit). -/
 partial def SymExpr.toSMTLib {Reg : Type} [ToString Reg] : SymExpr Reg → String
   | .const v => s!"(_ bv{v.toNat} 64)"
   | .reg r => s!"reg_{toString r}"
@@ -117,13 +117,13 @@ partial def SymExpr.toSMTLib {Reg : Type} [ToString Reg] : SymExpr Reg → Strin
   | .or64 l r => s!"(bvor {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
   | .shl64 l r => s!"(bvshl {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
   | .shr64 l r => s!"(bvlshr {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
-  | .load w m addr => s!"(load_{w.toSMTWidth} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr})"
+  | .load w m addr => s!"(load_{Width.toSMTWidth w} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr})"
 
 /-- Encode a SymMem as an SMT-LIB2 expression (uninterpreted sort). -/
 partial def SymMem.toSMTLib {Reg : Type} [ToString Reg] : SymMem Reg → String
   | .base => "base_mem"
   | .store w m addr val =>
-    s!"(store_{w.toSMTWidth} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr} {SymExpr.toSMTLib val})"
+    s!"(store_{Width.toSMTWidth w} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr} {SymExpr.toSMTLib val})"
 end
 
 /-- Encode a SymPC as an SMT-LIB2 boolean formula.
@@ -165,8 +165,8 @@ partial def SymPC.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashabl
   | .and φ ψ, s => SymPC.collectRegNames ψ (SymPC.collectRegNames φ s)
   | .not φ, s => SymPC.collectRegNames φ s
 
-/-- Check if a SymPC mentions any memory loads (which need uninterpreted function decls). -/
 mutual
+/-- Check if a SymExpr mentions any memory loads. -/
 partial def SymExpr.hasLoad {Reg : Type} : SymExpr Reg → Bool
   | .load _ _ _ => true
   | .const _ | .reg _ => false
