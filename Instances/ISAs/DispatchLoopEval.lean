@@ -228,7 +228,9 @@ def composeAndDedupParallel {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashab
     IO.asTask (prio := .dedicated) do
       return composeChunk ip_reg chunk frontierByRip frontierNoRip frontierArr
   -- Collect results
-  let results ← tasks.mapM fun task => IO.ofExcept (← IO.wait task)
+  let results ← tasks.mapM fun task => do
+    let r ← IO.wait task
+    IO.ofExcept r
   -- Merge into HashSet (sequential — avoids concurrent mutation)
   let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
   let mut cur := current
