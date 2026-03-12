@@ -155,21 +155,39 @@ By deduplicating on (sub, signature), we collapse exponentially many branches in
 at most 2^|closure| classes per distinct substitution, preventing the ~5x/iteration
 blowup that causes OOM. -/
 
+/-- Check if a guard PC is a rip-routing guard (eq (reg ip) (const addr)).
+    These are determined by control flow path, not by data — filtering them
+    out gives the data-only closure (P₀ from the convergence plan). -/
+def isRipGuardPC {Reg : Type} [BEq Reg] (ip_reg : Reg) : SymPC Reg → Bool
+  | .eq (.reg r) (.const _) => r == ip_reg
+  | .eq (.const _) (.reg r) => r == ip_reg
+  | _ => false
+
 /-- Extract the closure from body branches: all distinct atomic conjuncts
-    appearing in any body branch's PC. These are the guard PCs that determine
-    the PC-signature equivalence classes. -/
-def extractClosure {Reg : Type} [BEq (SymPC Reg)] [Hashable (SymPC Reg)]
-    (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg))) :
-    Array (SymPC Reg) := Id.run do
+    appearing in any body branch's PC.
+    If `dataOnly` is true, filters out rip-routing guards (eq rip (const addr)),
+    keeping only data-level guard PCs. This gives P₀ from the convergence plan. -/
+def extractClosure {Reg : Type} [BEq Reg] [BEq (SymPC Reg)] [Hashable (SymPC Reg)]
+    (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (dataOnly : Bool := false) :
+    Array (SymPC Reg) × Nat × Nat := Id.run do
   let mut seen : Std.HashSet (SymPC Reg) := {}
   let mut result : Array (SymPC Reg) := #[]
+  let mut ripCount : Nat := 0
+  let mut dataCount : Nat := 0
   for b in bodyArr do
     let conjuncts := SymPC.conjuncts b.pc
     for c in conjuncts do
       unless seen.contains c do
         seen := seen.insert c
-        result := result.push c
-  return result
+        if isRipGuardPC ip_reg c then
+          ripCount := ripCount + 1
+          unless dataOnly do
+            result := result.push c
+        else
+          dataCount := dataCount + 1
+          result := result.push c
+  return (result, ripCount, dataCount)
 
 /-- Compute the PC signature of a branch w.r.t. a closure.
     Returns a list of bools: for each guard PC in the closure, does the branch's
@@ -411,8 +429,8 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
   -- Extract the closure: all distinct atomic guard PCs from body branches.
-  -- This is the fixed set of conditions that determine PC-signature classes.
-  let closure := extractClosure bodyArr
+  -- dataOnly=true filters rip-routing guards, keeping only data PCs (P₀).
+  let (closure, ripCount, dataCount) := extractClosure ip_reg bodyArr (dataOnly := true)
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
   current := current.insert initBranch
   -- sigSeen tracks (sub, signature) classes across ALL iterations.
@@ -426,7 +444,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     if let some path := logFile then
       let h ← IO.FS.Handle.mk path .append
       h.putStrLn msg
-  log s!"  closure_size={closure.size}"
+  log s!"  closure: total={ripCount + dataCount} rip={ripCount} data={dataCount} (using data-only={closure.size})"
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     let (composed, pairsComposed, skipped, dropped) :=
