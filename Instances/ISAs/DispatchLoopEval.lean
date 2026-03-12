@@ -180,18 +180,17 @@ def extractClosure {Reg : Type} [BEq (SymPC Reg)] [Hashable (SymPC Reg)]
     Here we work purely syntactically: a branch's PC "satisfies" a guard PC if
     the branch's PC syntactically implies it (all conjuncts of the guard appear
     in the branch's conjuncts). -/
-def computePCSignature {Reg : Type} [DecidableEq Reg]
+def computePCSignature {Reg : Type} [DecidableEq Reg] [Hashable (SymPC Reg)]
     (closure : Array (SymPC Reg)) (pc : SymPC Reg) : List Bool :=
-  -- Pre-compute conjuncts of pc once, build a HashSet for O(1) lookup
-  let pcConj := SymPC.conjuncts pc
+  -- Pre-compute conjuncts of pc into a HashSet for O(1) membership checks.
+  -- This is called O(composed_size) times per iteration, so efficiency matters.
+  let pcConjList := SymPC.conjuncts pc
+  let pcConjSet : Std.HashSet (SymPC Reg) :=
+    pcConjList.foldl (fun s c => s.insert c) {}
   closure.toList.map fun guardPC =>
     match guardPC with
     | .true => true  -- everything implies .true
-    | _ =>
-      if pc == guardPC then true
-      else
-        let weakConj := SymPC.conjuncts guardPC
-        weakConj.all fun wc => pcConj.any fun sc => sc == wc
+    | _ => pcConjSet.contains guardPC
 
 /-- Hash a PC signature (list of bools) for use as a HashMap key. -/
 def hashPCSignature (sig : List Bool) : UInt64 :=
