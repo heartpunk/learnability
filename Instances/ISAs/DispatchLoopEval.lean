@@ -121,34 +121,27 @@ def pruneBranches {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [E
     (branches : Array (Branch (SymSub Reg) (SymPC Reg))) :
     Array (Branch (SymSub Reg) (SymPC Reg)) × Nat := Id.run do
   -- Group branches by sub hash for efficient comparison
-  -- Key = hash of sub, Value = array of (index, branch) pairs
-  let mut groups : Std.HashMap UInt64 (Array Nat) := {}
-  for i in [:branches.size] do
-    let b := branches[i]!
+  let mut groups : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
+  for b in branches do
     let h := hash b.sub
     let arr := groups.getD h #[]
-    groups := groups.insert h (arr.push i)
-  -- For each branch, check if any other branch in its hash group subsumes it
-  let mut keep : Array Bool := Array.mkArray branches.size true
-  let mut pruned : Nat := 0
-  for i in [:branches.size] do
-    if keep[i]! then
-      let bi := branches[i]!
-      let h := hash bi.sub
-      let groupIndices := groups.getD h #[]
-      for j in groupIndices do
-        if i != j && keep[j]! then
-          let bj := branches[j]!
-          -- bi is subsumed by bj if bi's PC implies bj's PC (bi is stronger)
-          if branchSubsumedBy bi bj then
-            keep := keep.set! i false
-            pruned := pruned + 1
-            break
-  -- Build result from non-pruned branches
+    groups := groups.insert h (arr.push b)
+  -- Within each group, prune subsumed branches
   let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-  for i in [:branches.size] do
-    if keep[i]! then
-      result := result.push branches[i]!
+  let mut pruned : Nat := 0
+  for (_, group) in groups.toArray do
+    -- For each branch, check if any other branch in the group subsumes it
+    for b_i in group do
+      let mut subsumed := false
+      for b_j in group do
+        -- b_i is subsumed by b_j if they differ and b_i's PC implies b_j's PC
+        if branchSubsumedBy b_i b_j then
+          subsumed := true
+          break
+      if subsumed then
+        pruned := pruned + 1
+      else
+        result := result.push b_i
   return (result, pruned)
 
 /-! ## PC-Signature Equivalence Class Dedup
