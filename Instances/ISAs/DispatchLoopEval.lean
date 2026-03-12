@@ -185,6 +185,45 @@ partial def SymPC.hasLoad {Reg : Type} : SymPC Reg → Bool
   | .and φ ψ => SymPC.hasLoad φ || SymPC.hasLoad ψ
   | .not φ => SymPC.hasLoad φ
 
+mutual
+/-- Collect all registers referenced in a SymExpr (as Reg values). -/
+partial def SymExpr.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
+    : SymExpr Reg → Std.HashSet Reg → Std.HashSet Reg
+  | .const _, s => s
+  | .reg r, s => s.insert r
+  | .low32 e, s => SymExpr.collectRegsHS e s
+  | .uext32 e, s => SymExpr.collectRegsHS e s
+  | .sext8to32 e, s => SymExpr.collectRegsHS e s
+  | .sext32to64 e, s => SymExpr.collectRegsHS e s
+  | .sub32 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .shl32 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .add64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .sub64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .xor64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .and64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .or64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .shl64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .shr64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .load _ m addr, s => SymExpr.collectRegsHS addr (SymMem.collectRegsHS m s)
+
+/-- Collect all registers referenced in a SymMem. -/
+partial def SymMem.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
+    : SymMem Reg → Std.HashSet Reg → Std.HashSet Reg
+  | .base, s => s
+  | .store _ m addr val, s =>
+    SymExpr.collectRegsHS val (SymExpr.collectRegsHS addr (SymMem.collectRegsHS m s))
+end
+
+/-- Collect all registers referenced in a SymPC. -/
+partial def SymPC.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
+    : SymPC Reg → Std.HashSet Reg → Std.HashSet Reg
+  | .true, s => s
+  | .eq l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .lt l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .le l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .and φ ψ, s => SymPC.collectRegsHS ψ (SymPC.collectRegsHS φ s)
+  | .not φ, s => SymPC.collectRegsHS φ s
+
 /-- Build the SMT-LIB2 preamble: logic, register declarations, and memory
     declarations if any PCs involve loads. -/
 def smtPreamble (regNames : Std.HashSet String) (needsMem : Bool) : String := Id.run do
@@ -503,6 +542,14 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       let h ← IO.FS.Handle.mk path .append
       h.putStrLn msg
   log s!"  closure: total={ripCount + dataCount} rip={ripCount} data={dataCount} (using data-only={closure.size})"
+  -- Collect registers referenced by data PCs (for projection/widening diagnostic)
+  let mut dataPCRegs : Std.HashSet Reg := {}
+  let mut dataPCsHaveLoads := false
+  for pc in closure do
+    dataPCRegs := SymPC.collectRegsHS pc dataPCRegs
+    if SymPC.hasLoad pc then dataPCsHaveLoads := true
+  let dataPCRegsArr := dataPCRegs.toArray
+  log s!"  data PC regs: [{", ".intercalate (dataPCRegsArr.toList.map toString)}] ({dataPCRegsArr.size} regs, loads={dataPCsHaveLoads})"
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     let (composed, pairsComposed, skipped, dropped) :=
@@ -591,11 +638,18 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     -- Count distinct subs in frontier (diagnostic: how many "paths"?)
     let mut frontierSubs : Std.HashSet UInt64 := {}
     let mut frontierSubsNoRip : Std.HashSet UInt64 := {}
+    let mut projectedSubs : Std.HashSet UInt64 := {}
     for b in newBranches do
       frontierSubs := frontierSubs.insert (hash b.sub)
       let noRipSub : SymSub Reg := { b.sub with regs := fun r => if r == ip_reg then .const 0 else b.sub.regs r }
       frontierSubsNoRip := frontierSubsNoRip.insert (hash noRipSub)
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} |distinct_subs|={frontierSubs.size} |no_rip|={frontierSubsNoRip.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} pruned={prunedCount} compose={t_prune_start - t_start}ms prune={t_end - t_prune_start}ms total={t_end - t_start}ms"
+      -- Project sub onto only data-PC registers (widening equivalence class)
+      let mut projHash : UInt64 := 0
+      for r in dataPCRegsArr do
+        projHash := mixHash projHash (hash (b.sub.regs r))
+      if dataPCsHaveLoads then projHash := mixHash projHash (hash b.sub.mem)
+      projectedSubs := projectedSubs.insert projHash
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} |distinct_subs|={frontierSubs.size} |no_rip|={frontierSubsNoRip.size} |proj|={projectedSubs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} pruned={prunedCount} compose={t_prune_start - t_start}ms prune={t_end - t_prune_start}ms total={t_end - t_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
