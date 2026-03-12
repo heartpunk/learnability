@@ -78,19 +78,21 @@ Uses `Std.HashSet` for O(1) membership checks instead of Finset's O(n) linear sc
 The Hashable instances on SymExpr/SymPC/SymSub/Branch enable this. -/
 
 /-- Compose body branches with frontier branches, simplify, return as Array.
-    Uses direct iteration instead of Finset.biUnion/image. -/
+    Uses direct iteration instead of Finset.biUnion/image.
+    Returns (result, totalPairs, droppedCount). -/
 def composeBranchArraySimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg))) :
-    Array (Branch (SymSub Reg) (SymPC Reg)) := Id.run do
+    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat × Nat := Id.run do
   let isa := vexSummaryISA Reg
   let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut dropped : Nat := 0
   for b1 in bodyArr do
     for b2 in frontierArr do
       let composed := b1.compose isa b2
       match simplifyBranch composed with
-      | none => pure ()
+      | none => dropped := dropped + 1
       | some b' => result := result.push b'
-  return result
+  return (result, bodyArr.size * frontierArr.size, dropped)
 
 /-- Fast incremental stabilization using HashSet for O(1) membership. -/
 def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
@@ -107,14 +109,16 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       let h ← IO.FS.Handle.mk path .append
       h.putStrLn msg
   for k in List.range maxIter do
-    let composed := composeBranchArraySimplified bodyArr frontier
+    let t_start ← IO.monoMsNow
+    let (composed, totalPairs, dropped) := composeBranchArraySimplified bodyArr frontier
+    let t_compose ← IO.monoMsNow
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     for b in composed do
       if !current.contains b then
         newBranches := newBranches.push b
         current := current.insert b
-    if k % 5 == 0 || newBranches.size == 0 then
-      log s!"  K={k}: |S| = {current.size}, |frontier| = {frontier.size}, |new| = {newBranches.size}"
+    let t_dedup ← IO.monoMsNow
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |composed|={composed.size} |new|={newBranches.size} pairs={totalPairs} dropped={dropped} compose={t_compose - t_start}ms dedup={t_dedup - t_compose}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
@@ -159,10 +163,12 @@ def computeStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       let h ← IO.FS.Handle.mk path .append
       h.putStrLn msg
   for k in List.range maxIter do
+    let t_start ← IO.monoMsNow
     let composed := composeBranchFinsetsSimplified bodyDenot frontier
+    let t_compose ← IO.monoMsNow
     let newBranches := composed \ current
-    if k % 5 == 0 || newBranches.card == 0 then
-      log s!"  K={k}: |S| = {current.card}, |frontier| = {frontier.card}, |new| = {newBranches.card}"
+    let t_diff ← IO.monoMsNow
+    log s!"  K={k}: |S|={current.card} |frontier|={frontier.card} |composed|={composed.card} |new|={newBranches.card} compose={t_compose - t_start}ms diff={t_diff - t_compose}ms"
     if newBranches.card == 0 then
       return some (k, current.card)
     current := current ∪ newBranches
