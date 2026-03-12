@@ -24,6 +24,7 @@
               angr-nix.packages.${system}.default
               pkgs.lean4
               pkgs.git
+              pkgs.jujutsu
               pkgs.uv
               pkgs.jq
             ];
