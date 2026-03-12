@@ -72,6 +72,82 @@ def composeBranchFinsetsSimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     | none => ∅
     | some b' => {b'})
 
+/-! ## Branch Subsumption Pruning
+
+A branch B1 is *subsumed* by B2 if they have the same substitution and B1's
+path condition is strictly stronger (i.e., B1.pc implies B2.pc syntactically).
+Every concrete state satisfying B1.pc also satisfies B2.pc and produces the
+same effect, so B1 is redundant — we keep only the more general B2.
+
+This is a syntactic approximation: we flatten PCs into conjunct sets and check
+whether one set is a superset of another. Sound (never drops a needed branch)
+but incomplete (misses some semantic implications). -/
+
+/-- Collect the top-level conjuncts of a PC into a list.
+    `and (and a b) c` → `[a, b, c]`. Non-and terms are singletons. -/
+partial def SymPC.conjuncts {Reg : Type} : SymPC Reg → List (SymPC Reg)
+  | .and φ ψ => SymPC.conjuncts φ ++ SymPC.conjuncts ψ
+  | pc => [pc]
+
+/-- Syntactic PC implication check: does `stronger` imply `weaker`?
+    Returns true if every conjunct of `weaker` appears in `stronger`'s conjuncts.
+    This means `stronger` has all the constraints of `weaker` (and possibly more),
+    so any state satisfying `stronger` also satisfies `weaker`.
+    Special case: `.true` is implied by everything. -/
+def SymPC.syntacticImplies {Reg : Type} [DecidableEq Reg]
+    (stronger weaker : SymPC Reg) : Bool :=
+  match weaker with
+  | .true => true  -- everything implies .true
+  | _ =>
+    if stronger == weaker then true  -- identical PCs
+    else
+      let strongConj := SymPC.conjuncts stronger
+      let weakConj := SymPC.conjuncts weaker
+      -- weaker is implied if all its conjuncts appear in stronger
+      weakConj.all fun wc => strongConj.any fun sc => sc == wc
+
+/-- Check if branch `b1` is subsumed by branch `b2`:
+    same substitution, and b1's PC is strictly stronger than b2's PC.
+    If so, b1 is redundant (b2 covers a superset of states with same effect). -/
+def branchSubsumedBy {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (b1 b2 : Branch (SymSub Reg) (SymPC Reg)) : Bool :=
+  b1.sub == b2.sub && b1.pc != b2.pc && SymPC.syntacticImplies b1.pc b2.pc
+
+/-- Prune subsumed branches from an array, using HashMap grouping by sub hash.
+    For each group of branches with the same sub, remove any branch whose PC
+    is syntactically implied by another branch in the group.
+    Returns (prunedArray, prunedCount). -/
+def pruneBranches {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
+    (branches : Array (Branch (SymSub Reg) (SymPC Reg))) :
+    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat := Id.run do
+  -- Group branches by sub hash for efficient comparison
+  let mut groups : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
+  for b in branches do
+    let h := hash b.sub
+    let arr := groups.getD h #[]
+    groups := groups.insert h (arr.push b)
+  -- Within each group, prune subsumed branches
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut pruned : Nat := 0
+  for (_, group) in groups.toArray do
+    -- For small groups, do pairwise check. For each branch, check if any
+    -- other branch in the group subsumes it (has same sub but weaker PC).
+    for i in [:group.size] do
+      let bi := group[i]!
+      let mut subsumed := false
+      for j in [:group.size] do
+        if i != j then
+          let bj := group[j]!
+          -- bi is subsumed by bj if bi's PC implies bj's PC (bi is stronger)
+          if branchSubsumedBy bi bj then
+            subsumed := true
+            break
+      if subsumed then
+        pruned := pruned + 1
+      else
+        result := result.push bi
+  return (result, pruned)
+
 /-! ## HashSet-based Stabilization (fast path)
 
 Uses `Std.HashSet` for O(1) membership checks instead of Finset's O(n) linear scan.
@@ -250,7 +326,8 @@ def composeAndDedupParallel {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashab
   return (newBranches, cur, totalComposed, skipped, totalDropped, dupes)
 
 /-- Fast incremental stabilization using HashSet for O(1) membership.
-    Single-threaded rip-indexed composition with inline dedup. -/
+    Single-threaded rip-indexed composition with inline dedup.
+    Includes branch subsumption pruning after each iteration. -/
 def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
@@ -259,6 +336,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
   current := current.insert initBranch
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
+  let mut allBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   let log (msg : String) : IO Unit := do
     IO.println msg
     if let some path := logFile then
@@ -277,8 +355,27 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       else
         newBranches := newBranches.push b
         current := current.insert b
+    -- Add new branches to the full array for pruning
+    for b in newBranches do
+      allBranches := allBranches.push b
+    let preSize := allBranches.size
+    -- Prune subsumed branches from the full accumulated set
+    let t_prune_start ← IO.monoMsNow
+    let (prunedArr, prunedCount) := pruneBranches allBranches
+    allBranches := prunedArr
+    -- Rebuild current HashSet from pruned array
+    if prunedCount > 0 then
+      current := {}
+      for b in allBranches do
+        current := current.insert b
+      -- Rebuild frontier: only keep new branches that survived pruning
+      let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+      for b in newBranches do
+        if current.contains b then
+          survivingNew := survivingNew.push b
+      newBranches := survivingNew
     let t_end ← IO.monoMsNow
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} time={t_end - t_start}ms"
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} pruned={prunedCount} pre_prune={preSize} time={t_end - t_start}ms prune_time={t_end - t_prune_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
@@ -398,7 +495,7 @@ def dispatchLoopEvalMain : IO Unit := do
   | .ok allPairs =>
     log s!"Total blocks available: {allPairs.length}"
     log "N, |bodyDenot|, K, |S_final|, bodyDenot_ms, stabilization_ms"
-    for n in [60] do
+    for n in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55] do
       if n > allPairs.length then
         log s!"{n}, ---, SKIP (only {allPairs.length} blocks), ---, ---, ---"
       else
