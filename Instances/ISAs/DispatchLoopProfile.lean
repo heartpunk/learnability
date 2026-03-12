@@ -138,9 +138,7 @@ def profileTrial (log : IO.FS.Handle) (seed : UInt64)
   let t0 ← IO.monoMsNow
   let body := flatBodyDenot Amd64Reg.rip blocks
   let t1 ← IO.monoMsNow
-  let mut bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
-  for b in body do
-    bodyArr := bodyArr.push b
+  let bodyArr := finsetToArray body
   let logPath : System.FilePath := ".lake/profile.log"
   match ← computeStabilizationHS bodyArr 200 logPath with
   | some (k, card) =>

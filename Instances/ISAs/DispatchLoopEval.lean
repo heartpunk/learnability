@@ -196,6 +196,15 @@ def flatBodyDenot {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     acc ∪ composeBranchFinsets isa {guard} blockDenot)
     ∅
 
+/-- Convert Finset to Array at runtime. Multiset is Quot (List.Perm),
+    which is erased to List at runtime. unsafeCast recovers it. -/
+private unsafe def finsetToArrayImpl {α : Type} (s : Finset α) : Array α :=
+  (unsafeCast s.val : List α).toArray
+
+@[implemented_by finsetToArrayImpl]
+private def finsetToArray {α : Type} (s : Finset α) : Array α :=
+  #[]
+
 /-! ## Parse blocks with addresses -/
 
 /-- Parse block strings into (address, block) pairs. -/
@@ -229,10 +238,7 @@ def parseBlocksWithAddresses (blockStrs : List String) :
         let t0 ← IO.monoMsNow
         let body := flatBodyDenot Amd64Reg.rip pairs
         let t1 ← IO.monoMsNow
-        -- Convert Finset to Array in IO (Finset.toList is noncomputable)
-        let mut bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
-        for b in body do
-          bodyArr := bodyArr.push b
+        let bodyArr := finsetToArray body
         log s!"  N={n}: |bodyDenot|={bodyArr.size}, starting stabilization..."
         match ← computeStabilizationHS bodyArr 200 logPath with
         | some (k, card) =>
