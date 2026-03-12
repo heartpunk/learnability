@@ -159,16 +159,18 @@ def parseBlocksWithAddresses (blockStrs : List String) :
   IO.println "=== Dispatch Loop Stabilization: next_sym (60 blocks) ==="
   match parseBlocksWithAddresses nextSymBlocks with
   | .error e => IO.println s!"PARSE ERROR: {e}"
-  | .ok pairs =>
-    IO.println s!"Parsed {pairs.length} blocks"
-    -- Build flat body denotation
-    let bodyDenot := flatBodyDenot Amd64Reg.rip pairs
-    IO.println s!"|bodyDenot| = {bodyDenot.card}"
-    -- Run stabilization
-    match ← computeStabilization bodyDenot 200 with
-    | some (k, card) =>
-      IO.println s!"\nSTABILIZED at K = {k}"
-      IO.println s!"|S(K)| = {card}"
-      IO.println s!"(P₀ = 15, 2^P₀ = {2^15})"
-    | none =>
-      IO.println s!"\nDid NOT stabilize within 200 iterations"
+  | .ok allPairs =>
+    IO.println "N, |bodyDenot|, K, |S_final|, bodyDenot_ms, stabilization_ms"
+    for n in List.range 10 do
+      let n := n + 1  -- 1..10
+      let pairs := allPairs.take n
+      let t0 ← IO.monoMsNow
+      let body := flatBodyDenot Amd64Reg.rip pairs
+      let t1 ← IO.monoMsNow
+      match ← computeStabilization body 50 with
+      | some (k, card) =>
+        let t2 ← IO.monoMsNow
+        IO.println s!"{n}, {body.card}, {k}, {card}, {t1 - t0}, {t2 - t1}"
+      | none =>
+        let t2 ← IO.monoMsNow
+        IO.println s!"{n}, {body.card}, DNF, DNF, {t1 - t0}, {t2 - t1}"
