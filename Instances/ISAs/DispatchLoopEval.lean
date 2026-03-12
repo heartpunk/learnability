@@ -72,68 +72,169 @@ def composeBranchFinsetsSimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     | none => ∅
     | some b' => {b'})
 
-/-! ## Branch Subsumption Pruning
+/-! ## Branch Subsumption Pruning (Semantic)
 
 A branch B1 is *subsumed* by B2 if they have the same substitution and B1's
-path condition is strictly stronger (i.e., B1.pc implies B2.pc syntactically).
-Every concrete state satisfying B1.pc also satisfies B2.pc and produces the
-same effect, so B1 is redundant — we keep only the more general B2.
+path condition semantically implies B2.pc — every concrete state satisfying
+B1.pc also satisfies B2.pc. B1 is then redundant (B2 covers a superset of
+states with the same effect).
 
-This is a syntactic approximation: we flatten PCs into conjunct sets and check
-whether one set is a superset of another. Sound (never drops a needed branch)
-but incomplete (misses some semantic implications). -/
+We use concrete evaluation on critical boundary values: for each register that
+appears in the PCs, we test with all constants that appear in comparisons ± 1,
+plus 0 and max. This is complete for piecewise-constant predicates (which our
+tokenizer PCs are — they compare registers against fixed constants). -/
 
-/-- Collect the top-level conjuncts of a PC into a list.
-    `and (and a b) c` → `[a, b, c]`. Non-and terms are singletons. -/
+/-- Collect the top-level conjuncts of a PC into a list. -/
 partial def SymPC.conjuncts {Reg : Type} : SymPC Reg → List (SymPC Reg)
   | .and φ ψ => SymPC.conjuncts φ ++ SymPC.conjuncts ψ
   | pc => [pc]
 
-/-- Syntactic PC implication check: does `stronger` imply `weaker`?
-    Returns true if every conjunct of `weaker` appears in `stronger`'s conjuncts.
-    This means `stronger` has all the constraints of `weaker` (and possibly more),
-    so any state satisfying `stronger` also satisfies `weaker`.
-    Special case: `.true` is implied by everything. -/
-def SymPC.syntacticImplies {Reg : Type} [DecidableEq Reg]
-    (stronger weaker : SymPC Reg) : Bool :=
-  match weaker with
-  | .true => true  -- everything implies .true
-  | _ =>
-    if stronger == weaker then true  -- identical PCs
-    else
-      let strongConj := SymPC.conjuncts stronger
-      let weakConj := SymPC.conjuncts weaker
-      -- weaker is implied if all its conjuncts appear in stronger
-      weakConj.all fun wc => strongConj.any fun sc => sc == wc
+/-- Collect all registers appearing in a SymExpr. -/
+partial def SymExpr.collectRegs {Reg : Type} [BEq Reg] [Hashable Reg]
+    : SymExpr Reg → Std.HashSet Reg → Std.HashSet Reg
+  | .const _, s => s
+  | .reg r, s => s.insert r
+  | .low32 e, s => e.collectRegs s
+  | .uext32 e, s => e.collectRegs s
+  | .sext8to32 e, s => e.collectRegs s
+  | .sext32to64 e, s => e.collectRegs s
+  | .sub32 l r, s => r.collectRegs (l.collectRegs s)
+  | .shl32 l r, s => r.collectRegs (l.collectRegs s)
+  | .add64 l r, s => r.collectRegs (l.collectRegs s)
+  | .sub64 l r, s => r.collectRegs (l.collectRegs s)
+  | .xor64 l r, s => r.collectRegs (l.collectRegs s)
+  | .and64 l r, s => r.collectRegs (l.collectRegs s)
+  | .or64 l r, s => r.collectRegs (l.collectRegs s)
+  | .shl64 l r, s => r.collectRegs (l.collectRegs s)
+  | .shr64 l r, s => r.collectRegs (l.collectRegs s)
+  | .load _ _ addr, s => addr.collectRegs s
+
+/-- Collect all constants appearing in a SymExpr. -/
+partial def SymExpr.collectConsts {Reg : Type}
+    : SymExpr Reg → Std.HashSet UInt64 → Std.HashSet UInt64
+  | .const v, s => s.insert v
+  | .reg _, s => s
+  | .low32 e, s => e.collectConsts s
+  | .uext32 e, s => e.collectConsts s
+  | .sext8to32 e, s => e.collectConsts s
+  | .sext32to64 e, s => e.collectConsts s
+  | .sub32 l r, s => r.collectConsts (l.collectConsts s)
+  | .shl32 l r, s => r.collectConsts (l.collectConsts s)
+  | .add64 l r, s => r.collectConsts (l.collectConsts s)
+  | .sub64 l r, s => r.collectConsts (l.collectConsts s)
+  | .xor64 l r, s => r.collectConsts (l.collectConsts s)
+  | .and64 l r, s => r.collectConsts (l.collectConsts s)
+  | .or64 l r, s => r.collectConsts (l.collectConsts s)
+  | .shl64 l r, s => r.collectConsts (l.collectConsts s)
+  | .shr64 l r, s => r.collectConsts (l.collectConsts s)
+  | .load _ _ addr, s => addr.collectConsts s
+
+/-- Collect registers and constants from a SymPC. -/
+partial def SymPC.collectRegsConsts {Reg : Type} [BEq Reg] [Hashable Reg]
+    : SymPC Reg → Std.HashSet Reg → Std.HashSet UInt64
+    → Std.HashSet Reg × Std.HashSet UInt64
+  | .true, rs, cs => (rs, cs)
+  | .eq l r, rs, cs => (r.collectRegs (l.collectRegs rs), r.collectConsts (l.collectConsts cs))
+  | .lt l r, rs, cs => (r.collectRegs (l.collectRegs rs), r.collectConsts (l.collectConsts cs))
+  | .le l r, rs, cs => (r.collectRegs (l.collectRegs rs), r.collectConsts (l.collectConsts cs))
+  | .and φ ψ, rs, cs =>
+    let (rs', cs') := φ.collectRegsConsts rs cs
+    ψ.collectRegsConsts rs' cs'
+  | .not φ, rs, cs => φ.collectRegsConsts rs cs
+
+/-- Generate critical test values from constants: each constant, ± 1, plus 0. -/
+def criticalValues (consts : Std.HashSet UInt64) : Array UInt64 := Id.run do
+  let mut vals : Std.HashSet UInt64 := {}
+  vals := vals.insert 0
+  for c in consts do
+    vals := vals.insert c
+    vals := vals.insert (c - 1)
+    vals := vals.insert (c + 1)
+  return vals.toArray
+
+/-- Generate all assignments of `vals` to `regs` (Cartesian product).
+    Returns array of (Reg → UInt64) functions.
+    Caps at `maxPoints` to avoid combinatorial explosion. -/
+def generateTestPoints {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (regs : Array Reg) (vals : Array UInt64) (baseEnv : Reg → UInt64)
+    (maxPoints : Nat := 10000) :
+    Array (ConcreteState Reg) := Id.run do
+  if regs.size == 0 then
+    return #[⟨baseEnv, ByteMem.empty⟩]
+  -- Build assignments iteratively
+  let mut envs : Array (Reg → UInt64) := #[baseEnv]
+  for reg in regs do
+    let mut nextEnvs : Array (Reg → UInt64) := #[]
+    for env in envs do
+      for v in vals do
+        if nextEnvs.size >= maxPoints then break
+        nextEnvs := nextEnvs.push (fun r => if r == reg then v else env r)
+      if nextEnvs.size >= maxPoints then break
+    envs := nextEnvs
+  return envs.map (fun e => ⟨e, ByteMem.empty⟩)
+
+/-- Semantic implication check: does `stronger` imply `weaker`?
+    Evaluates both PCs on critical boundary values. If `stronger` is true at
+    any point where `weaker` is false, returns false (not implied).
+    Sound for piecewise-constant PCs over the tested constants. -/
+def SymPC.semanticImplies {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    [BEq Reg] [Hashable Reg]
+    (stronger weaker : SymPC Reg) (baseEnv : Reg → UInt64) : Bool := Id.run do
+  if stronger == weaker then return true
+  -- Collect registers and constants from both PCs
+  let (regs1, consts1) := stronger.collectRegsConsts {} {}
+  let (regs2, consts2) := weaker.collectRegsConsts regs1 consts1
+  let allRegs := regs2.toArray
+  let allConsts := consts2
+  let vals := criticalValues allConsts
+  -- Generate test points and check implication
+  let points := generateTestPoints allRegs vals baseEnv
+  for state in points do
+    if evalSymPC state stronger && !(evalSymPC state weaker) then
+      return false  -- Found a counterexample
+  return true
 
 /-- Check if branch `b1` is subsumed by branch `b2`:
-    same substitution, and b1's PC is strictly stronger than b2's PC.
+    same substitution, and b1's PC semantically implies b2's PC.
     If so, b1 is redundant (b2 covers a superset of states with same effect). -/
 def branchSubsumedBy {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (b1 b2 : Branch (SymSub Reg) (SymPC Reg)) : Bool :=
-  b1.sub == b2.sub && b1.pc != b2.pc && SymPC.syntacticImplies b1.pc b2.pc
+    [BEq Reg] [Hashable Reg]
+    (b1 b2 : Branch (SymSub Reg) (SymPC Reg)) (baseEnv : Reg → UInt64) : Bool :=
+  b1.sub == b2.sub && b1.pc != b2.pc && SymPC.semanticImplies b1.pc b2.pc baseEnv
 
 /-- Prune subsumed branches from an array, using HashMap grouping by sub hash.
     For each group of branches with the same sub, remove any branch whose PC
-    is syntactically implied by another branch in the group.
+    is semantically implied by another branch in the group.
     Returns (prunedArray, prunedCount). -/
 def pruneBranches {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
-    (branches : Array (Branch (SymSub Reg) (SymPC Reg))) :
+    [BEq Reg]
+    (branches : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (baseEnv : Reg → UInt64) :
     Array (Branch (SymSub Reg) (SymPC Reg)) × Nat := Id.run do
-  -- For each branch, check if any other branch in the array subsumes it.
-  -- branchSubsumedBy checks sub equality first, so mismatched subs are fast rejects.
-  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  -- Group branches by sub hash for efficient comparison
+  let mut groups : Std.HashMap UInt64 (Array Nat) := {}
+  for i in [:branches.size] do
+    let h := hash branches[i]!.sub
+    let arr := groups.getD h #[]
+    groups := groups.insert h (arr.push i)
+  -- Within each group, prune subsumed branches
+  let mut keep : Array Bool := Array.mkArray branches.size true
   let mut pruned : Nat := 0
-  for bi in branches do
-    let mut subsumed := false
-    for bj in branches do
-      if branchSubsumedBy bi bj then
-        subsumed := true
-        break
-    if subsumed then
-      pruned := pruned + 1
-    else
-      result := result.push bi
+  for (_, groupIndices) in groups.toArray do
+    for i in groupIndices do
+      if keep[i]! then
+        let bi := branches[i]!
+        for j in groupIndices do
+          if i != j && keep[j]! then
+            let bj := branches[j]!
+            if branchSubsumedBy bi bj baseEnv then
+              keep := keep.set! i false
+              pruned := pruned + 1
+              break
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  for i in [:branches.size] do
+    if keep[i]! then
+      result := result.push branches[i]!
   return (result, pruned)
 
 /-! ## PC-Signature Equivalence Class Dedup
@@ -431,8 +532,9 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   let initSig := computePCSignature closure initBranch.pc
   sigSeen := sigSeen.insert ⟨hash initBranch.sub, initSig⟩
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
-  -- allBranches tracks the full accumulated set as an array for subsumption pruning
-  let mut allBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
+  -- allBranchesBySub: sub hash → array of branches, for efficient subsumption check
+  let mut allBranchesBySub : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
+  allBranchesBySub := allBranchesBySub.insert (hash initBranch.sub) #[initBranch]
   let log (msg : String) : IO Unit := do
     IO.println msg
     if let some path := logFile then
@@ -459,26 +561,38 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
         else
           sigSeen := sigSeen.insert key
           newBranches := newBranches.push b
-          current := current.insert b
-    -- Add new branches to full array for subsumption pruning
-    for b in newBranches do
-      allBranches := allBranches.push b
-    let preSize := allBranches.size
-    -- Prune subsumed branches from the full accumulated set
+    -- Semantic subsumption: prune new branches that are subsumed by existing ones
     let t_prune_start ← IO.monoMsNow
-    let (prunedArr, prunedCount) := pruneBranches allBranches
-    allBranches := prunedArr
-    -- Rebuild current HashSet from pruned array if anything was pruned
-    if prunedCount > 0 then
-      current := {}
-      for b in allBranches do
-        current := current.insert b
-      -- Rebuild frontier: only keep new branches that survived pruning
-      let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-      for b in newBranches do
-        if current.contains b then
-          survivingNew := survivingNew.push b
-      newBranches := survivingNew
+    let baseEnv : Reg → UInt64 := fun _ => 0
+    let mut prunedCount : Nat := 0
+    let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    -- For each new branch, check if any EXISTING branch with same sub subsumes it
+    -- (i.e., existing has a weaker PC — covers more states with same effect)
+    for bi in newBranches do
+      let mut subsumed := false
+      let h := hash bi.sub
+      let existingGroup := allBranchesBySub.getD h #[]
+      for bj in existingGroup do
+        if bi.pc != bj.pc && SymPC.semanticImplies bi.pc bj.pc baseEnv then
+          subsumed := true
+          break
+      -- Also check within new branches
+      if !subsumed then
+        for bj in survivingNew do
+          if bi.sub == bj.sub && bi.pc != bj.pc && SymPC.semanticImplies bi.pc bj.pc baseEnv then
+            subsumed := true
+            break
+      if subsumed then
+        prunedCount := prunedCount + 1
+      else
+        survivingNew := survivingNew.push bi
+    newBranches := survivingNew
+    -- Update tracking structures with surviving new branches
+    for b in newBranches do
+      current := current.insert b
+      let h := hash b.sub
+      let arr := allBranchesBySub.getD h #[]
+      allBranchesBySub := allBranchesBySub.insert h (arr.push b)
     let t_end ← IO.monoMsNow
     -- Count distinct subs in frontier (diagnostic: how many "paths"?)
     let mut frontierSubs : Std.HashSet UInt64 := {}
