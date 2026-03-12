@@ -1441,6 +1441,253 @@ def printDFATable (log : String → IO Unit)
     for (guard, tgt) in edges do
       log s!"    [{describeDataGuard rax_reg guard}] -> {hexAddr tgt}"
 
+/-! ## Production Extraction via Body CFG -/
+
+/-- Check if a SymExpr references the rsp register (for detecting call return-address stores). -/
+partial def exprUsesRSP : SymExpr Amd64Reg → Bool
+  | .reg .rsp => true
+  | .add64 a b | .sub64 a b => exprUsesRSP a || exprUsesRSP b
+  | .load _ _ addr => exprUsesRSP addr
+  | _ => false
+
+/-- Extract the constant return address pushed by a call instruction at [rsp - k]. -/
+partial def extractCallReturn (mem : SymMem Amd64Reg) : Option UInt64 :=
+  match mem with
+  | .base => none
+  | .store _ inner addr (.const v) =>
+    if exprUsesRSP addr then some v else extractCallReturn inner
+  | .store _ inner _ _ => extractCallReturn inner
+
+/-- Strip sign-extension / low-extract wrappers and +offset to reach a raw constant.
+    Used to decode the character constants inside VEX-style signed-comparison expressions
+    (e.g. sx32(lo32(lo32(const '/')))+2^63  →  '/').
+    Returns Some v only if v is a printable ASCII char (32..126). -/
+partial def stripToCharConst : SymExpr Amd64Reg → Option UInt64
+  | .const v => if v.toNat ≥ 32 && v.toNat ≤ 126 then some v else none
+  | .low32 inner | .uext32 inner | .sext32to64 inner => stripToCharConst inner
+  | .add64 a b => stripToCharConst a <|> stripToCharConst b
+  | _ => none
+
+/-- Try to extract a printable ASCII character from an expression (even if wrapped). -/
+def extractCharConstFromExpr (e : SymExpr Amd64Reg) : Option Char :=
+  (stripToCharConst e).bind fun v =>
+    let n := v.toNat
+    if n ≥ 32 && n ≤ 126 then some (Char.ofNat n) else none
+
+/-- Describe the expected token at a next_sym call site, given the data guard PC.
+    Extracts character constants and infers token class (id, int, or specific char). -/
+def describeCallSiteToken (guard : SymPC Amd64Reg) : String :=
+  let cs := SymPC.conjuncts guard
+  if cs == [.true] then "token"
+  else
+    -- Priority 1: exact equality (specific character)
+    let eqChar := cs.findSome? fun c => match c with
+      | .eq l r => extractCharConstFromExpr l <|> extractCharConstFromExpr r
+      | _ => none
+    match eqChar with
+    | some ch => s!"'{ch}'"
+    | none =>
+      -- Priority 2: range check → infer digit / letter class
+      let loBounds := cs.filterMap fun c => match c with
+        | .le l _ | .lt l _ => extractCharConstFromExpr l
+        | _ => none
+      let hiBounds := cs.filterMap fun c => match c with
+        | .le _ r | .lt _ r => extractCharConstFromExpr r
+        | _ => none
+      match loBounds, hiBounds with
+      | lo :: _, hi :: _ =>
+        if lo == '/' || lo == '0' then "int"
+        else if lo == '`' || lo == 'a' then "id"
+        else s!"[{lo}..{hi}]"
+      | _, hi :: _ => s!"..{hi}"
+      | lo :: _, _ => s!"{lo}.."
+      | _, _ => "token"
+
+/-- Annotated body CFG: src_addr → [(dataGuard, tgt_addr, returnAddr?)] -/
+abbrev AnnotatedCFG := Std.HashMap UInt64 (Array (SymPC Amd64Reg × UInt64 × Option UInt64))
+
+/-- Build annotated body CFG from raw body branches. -/
+def buildAnnotatedBodyCFG (ip_reg : Amd64Reg)
+    (bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) :
+    AnnotatedCFG × Std.HashSet UInt64 := Id.run do
+  let mut cfg : AnnotatedCFG := {}
+  let mut blocks : Std.HashSet UInt64 := {}
+  for b in bodyArr do
+    match extractRipGuard ip_reg b.pc, extractRipTarget ip_reg b.sub with
+    | some src, some tgt =>
+      blocks := blocks.insert src
+      let guard := stripRipGuards ip_reg b.pc
+      let ret := extractCallReturn b.sub.mem
+      let edges := cfg.getD src #[]
+      cfg := cfg.insert src (edges.push (guard, tgt, ret))
+    | _, _ => pure ()
+  return (cfg, blocks)
+
+/-- DFS through body CFG collecting ordered call sequences as productions.
+    Each external call (to next_sym or another NT) becomes one production symbol.
+    The return address in memory is used to find the continuation after each call. -/
+partial def dfsExtractProds
+    (cur : UInt64)
+    (steps : Array String)
+    (cfg : AnnotatedCFG)
+    (blocks : Std.HashSet UInt64)
+    (funcEntries : Std.HashMap UInt64 String)
+    (visited : Std.HashSet UInt64)
+    (depth : Nat) :
+    Array (Array String) := Id.run do
+  if depth > 60 || visited.contains cur then return #[steps]
+  let visited' := visited.insert cur
+  let edges := cfg.getD cur #[]
+  if edges.isEmpty then
+    return if steps.isEmpty then #[] else #[steps]
+  let mut allPaths : Array (Array String) := #[]
+  for (guard, tgt, retOpt) in edges do
+    match funcEntries.get? tgt with
+    | some "_exit" =>
+      -- Error/abort path: drop this alternative (do not record, do not continue)
+      pure ()
+    | some callee =>
+      -- External call: record as a production symbol
+      let sym := if callee == "next_sym"
+                 then describeCallSiteToken guard
+                 else callee
+      let steps' := steps.push sym
+      match retOpt with
+      | some ret =>
+        if blocks.contains ret then
+          allPaths := allPaths.append
+            (dfsExtractProds ret steps' cfg blocks funcEntries visited' (depth + 1))
+        else
+          allPaths := allPaths.push steps'  -- call is at function tail
+      | none =>
+        allPaths := allPaths.push steps'  -- can't determine continuation
+    | none =>
+      -- Internal transition, known-unknown helper, or function exit
+      if blocks.contains tgt then
+        -- Internal transition within this function: recurse without recording a step
+        allPaths := allPaths.append
+          (dfsExtractProds tgt steps cfg blocks funcEntries visited' (depth + 1))
+      else
+        -- External call to unknown helper (e.g. a helper like isdigit called before next_sym).
+        -- Follow the return address to find the continuation (the helper is transparent).
+        match retOpt with
+        | some ret =>
+          if blocks.contains ret then
+            allPaths := allPaths.append
+              (dfsExtractProds ret steps cfg blocks funcEntries visited' (depth + 1))
+          else if !steps.isEmpty then
+            allPaths := allPaths.push steps  -- tail call to unknown, end path
+        | none =>
+          if !steps.isEmpty then
+            allPaths := allPaths.push steps  -- true exit
+  return allPaths
+
+/-- Golden grammar productions (from golden_grammar_tinyc.json).
+    Each entry: (NT name, list of RHS alternatives as symbol sequences). -/
+def goldenProds : Std.HashMap String (List (List String)) :=
+  ({} : Std.HashMap String (List (List String)))
+    |>.insert "term"       [["id"], ["int"], ["paren_expr"]]
+    |>.insert "sum"        [["term"], ["term", "'+' term ...loop"]]
+    |>.insert "test"       [["sum"], ["sum", "'<'", "sum"]]
+    |>.insert "expr"       [["test"], ["id", "'='", "expr"]]
+    |>.insert "paren_expr" [["'('", "expr", "')'"]]
+    |>.insert "statement"  [
+        ["'('", "expr", "')'", "statement"],
+        ["'('", "expr", "')'", "statement", "'else'", "statement"],
+        ["statement", "'while'", "'('", "expr", "')'", "';'"],
+        ["expr", "';'"],
+        ["'{'"],
+        ["'}'"],
+        ["';'"]
+      ]
+
+/-- BFS to find all blocks reachable from entry, following:
+    - internal transitions (tgt in blocks)
+    - return continuations after external calls (retOpt if tgt not in blocks) -/
+def cfgReachable (entry : UInt64) (cfg : AnnotatedCFG) (blocks : Std.HashSet UInt64)
+    (funcEntries : Std.HashMap UInt64 String) :
+    Std.HashSet UInt64 := Id.run do
+  let mut visited : Std.HashSet UInt64 := {}
+  let mut queue : Array UInt64 := #[entry]
+  while !queue.isEmpty do
+    let cur := queue.back!
+    queue := queue.pop
+    if visited.contains cur then pure ()
+    else
+      visited := visited.insert cur
+      for (_, tgt, retOpt) in cfg.getD cur #[] do
+        if blocks.contains tgt && !visited.contains tgt then
+          queue := queue.push tgt   -- internal transition
+        else
+          -- external call: follow return continuation
+          match retOpt with
+          | some ret =>
+            if blocks.contains ret && !visited.contains ret then
+              queue := queue.push ret
+          | none => pure ()
+  return visited
+
+/-- Extract productions for one NT function and print them with golden comparison. -/
+def printFunctionProductions (log : String → IO Unit)
+    (funcName : String) (entryAddr : UInt64)
+    (bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
+    (funcEntries : Std.HashMap UInt64 String) : IO Unit := do
+  let ip_reg := Amd64Reg.rip
+  let (cfg, blocks) := buildAnnotatedBodyCFG ip_reg bodyArr
+  let rawPaths := dfsExtractProds entryAddr #[] cfg blocks funcEntries {} 0
+  -- Also explore orphan loop-body blocks (not reachable from entry via internal CFG).
+  -- For NT calls (not next_sym) in orphan blocks, start DFS from the return continuation
+  -- with the callee as the first step. This captures iterative loop alternatives like
+  -- sum's "term '+' term" without spurious fragments from next_sym return sites.
+  let reachable := cfgReachable entryAddr cfg blocks funcEntries
+  let mut orphanPaths : Array (Array String) := #[]
+  for (src, edges) in cfg.toArray do
+    if reachable.contains src then pure ()  -- skip reachable blocks
+    else
+      for (_guard, tgt, retOpt) in edges do
+        match funcEntries.get? tgt with
+        | some "_exit" | some "next_sym" => pure ()  -- skip exit and terminals
+        | some callee =>
+          match retOpt with
+          | some ret =>
+            if blocks.contains ret then
+              -- Start DFS from NT call's return continuation, with callee as first step
+              orphanPaths := orphanPaths.append
+                (dfsExtractProds ret #[callee] cfg blocks funcEntries {} 0)
+          | none => pure ()
+        | none => pure ()
+  -- Deduplicate
+  let mut seen : Std.HashSet String := {}
+  let mut unique : Array (Array String) := #[]
+  for p in rawPaths.append orphanPaths do
+    let key := " ".intercalate p.toList
+    if !seen.contains key then
+      seen := seen.insert key
+      unique := unique.push p
+  let golden := goldenProds.getD funcName []
+  log s!"\n{funcName}: {unique.size} extracted productions (golden has {golden.length} alternatives)"
+  for prod in unique do
+    let rhs := if prod.isEmpty then "ε" else " ".intercalate prod.toList
+    log s!"  {funcName} -> {rhs}"
+  if !golden.isEmpty then
+    log s!"  -- Golden:"
+    for g in golden do
+      log s!"  -- {funcName} -> {" ".intercalate g}"
+
+/-- Print productions for all NT functions. -/
+def printGrammarProductions (log : String → IO Unit)
+    (functions : Array FunctionSpec)
+    (funcEntries : Std.HashMap UInt64 String) : IO Unit := do
+  log "\n=== Grammar Productions (Body CFG DFS) ==="
+  let ip_reg := Amd64Reg.rip
+  for i in [1:functions.size] do
+    let func := functions[i]!
+    match parseBlocksWithAddresses func.blocks with
+    | .error e => log s!"  Parse error for {func.name}: {e}"
+    | .ok pairs =>
+      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      printFunctionProductions log func.name func.entryAddr bodyArr funcEntries
+
 /-- Extract CFG info from body branches: count next_sym calls and collect called NT names. -/
 def extractBodyCFG (ip_reg : Amd64Reg)
     (bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
@@ -1546,6 +1793,7 @@ def dispatchLoopEvalMain : IO Unit := do
       |>.insert 0x4005bd "expr"
       |>.insert 0x40064d "paren_expr"
       |>.insert 0x4006b1 "statement"
+      |>.insert 0x400000 "_exit"
   log "\n=== CFG Extraction (NT body branches) ==="
   let mut extractedCFG : Std.HashMap String (Nat × List String) := {}
   for i in [1:functions.size] do
@@ -1558,5 +1806,7 @@ def dispatchLoopEvalMain : IO Unit := do
       let calledList := calledNTsHS.toArray.toList
       extractedCFG := extractedCFG.insert func.name (nsCount, calledList)
       log s!"  {func.name}: next_sym_calls={nsCount} NTs=[{", ".intercalate calledList}]"
-  -- Task 2D: Compare with golden grammar
+  -- Task 2D: Compare with golden grammar (call graph)
   printGrammarComparison log extractedCFG
+  -- Task 2D (productions): extract actual grammar productions via body CFG DFS
+  printGrammarProductions log functions funcEntries
