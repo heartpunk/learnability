@@ -453,18 +453,19 @@ end
 instance {Reg : Type} [Hashable Reg] : Hashable (SymExpr Reg) := ⟨hashSymExpr⟩
 instance {Reg : Type} [Hashable Reg] : Hashable (SymMem Reg) := ⟨hashSymMem⟩
 
-instance {Reg : Type} [Hashable Reg] : Hashable (SymPC Reg) where
-  hash
-    | .true => 19
-    | .eq l r => mixHash 20 (mixHash (hash l) (hash r))
-    | .lt l r => mixHash 21 (mixHash (hash l) (hash r))
-    | .le l r => mixHash 22 (mixHash (hash l) (hash r))
-    | .and φ ψ => mixHash 23 (mixHash (hash φ) (hash ψ))
-    | .not φ => mixHash 24 (hash φ)
+partial def hashSymPC {Reg : Type} [Hashable Reg] : SymPC Reg → UInt64
+  | .true => 19
+  | .eq l r => mixHash 20 (mixHash (hash l) (hash r))
+  | .lt l r => mixHash 21 (mixHash (hash l) (hash r))
+  | .le l r => mixHash 22 (mixHash (hash l) (hash r))
+  | .and φ ψ => mixHash 23 (mixHash (hashSymPC φ) (hashSymPC ψ))
+  | .not φ => mixHash 24 (hashSymPC φ)
+
+instance {Reg : Type} [Hashable Reg] : Hashable (SymPC Reg) := ⟨hashSymPC⟩
 
 instance {Reg : Type} [Hashable Reg] [Fintype Reg] [DecidableEq Reg] : Hashable (SymSub Reg) where
   hash sub :=
-    let regHash := Finset.univ.fold (mixHash) 0 (fun r => hash (sub.regs r))
+    let regHash := Finset.univ.toList.foldl (fun acc r => mixHash acc (hash (sub.regs r))) 0
     mixHash regHash (hash sub.mem)
 
 instance {Reg : Type} [Hashable Reg] [Fintype Reg] [DecidableEq Reg] : Hashable (Summary Reg) where
