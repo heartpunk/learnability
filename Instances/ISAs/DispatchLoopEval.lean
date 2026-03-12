@@ -569,7 +569,7 @@ def dispatchLoopEvalMain : IO Unit := do
   | .ok allPairs =>
     log s!"Total blocks available: {allPairs.length}"
     log "N, |bodyDenot|, K, |S_final|, bodyDenot_ms, stabilization_ms"
-    for n in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55] do
+    for n in [60] do
       if n > allPairs.length then
         log s!"{n}, ---, SKIP (only {allPairs.length} blocks), ---, ---, ---"
       else
