@@ -966,11 +966,54 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
 
 /-- Run stratified fixpoint across all parser functions.
     Returns summaries for each function. -/
+/-- Expand call branches in a body array using function summaries.
+    For each body branch B whose rip target matches a function entry:
+    - Compose B with each of that function's summary branches
+    - Add the simplified results to the expanded body
+    - Remove the original "call" branch B
+    Body branches targeting unknown addresses are kept as-is.
+
+    This is done ONCE at body construction time, not at every iteration.
+    The expanded body already includes the effect of function calls,
+    so the normal stabilization loop handles control flow without
+    re-expanding calls at every step. -/
+def expandCallsInBody {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+    (ip_reg : Reg)
+    (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg)))) :
+    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat × Nat × Nat := Id.run do
+  let isa := vexSummaryISA Reg
+  let mut expanded : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut callsExpanded : Nat := 0
+  let mut summaryBranchesAdded : Nat := 0
+  let mut dropped : Nat := 0
+  for b in bodyArr do
+    match extractRipTarget ip_reg b.sub with
+    | some target =>
+      match summaries.get? target with
+      | some summaryBranches =>
+        -- This body branch calls a function we have a summary for.
+        -- Replace it with: B composed with each summary branch.
+        callsExpanded := callsExpanded + 1
+        for sb in summaryBranches do
+          let composed := b.compose isa sb
+          match simplifyBranch composed with
+          | none => dropped := dropped + 1
+          | some b' =>
+            expanded := expanded.push b'
+            summaryBranchesAdded := summaryBranchesAdded + 1
+      | none =>
+        -- Target not a known function entry — keep as-is
+        expanded := expanded.push b
+    | none =>
+      expanded := expanded.push b
+  return (expanded, callsExpanded, summaryBranchesAdded, dropped)
+
 def stratifiedFixpoint
     (functions : Array FunctionSpec)
     (log : String → IO Unit) : IO Unit := do
   let ip_reg := Amd64Reg.rip
-  -- Parse all function blocks
+  -- Parse all function blocks into raw body arrays
   let mut funcBlocks : Array (String × Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := #[]
   for func in functions do
     match parseBlocksWithAddresses func.blocks with
@@ -982,24 +1025,33 @@ def stratifiedFixpoint
       let bodyArr := finsetToArray body
       funcBlocks := funcBlocks.push (func.name, bodyArr)
       log s!"  {func.name} @ 0x{String.mk (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
-  -- Build entry address → function index map
-  let mut entryToIdx : Std.HashMap UInt64 Nat := {}
-  for i in [:functions.size] do
-    entryToIdx := entryToIdx.insert functions[i]!.entryAddr i
   -- Phase 1: Compute leaf function (next_sym) fixpoint — no summaries needed
   let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
   log s!"\n--- Phase 1: Leaf function (next_sym) ---"
   let t0 ← IO.monoMsNow
   let (nextSymName, nextSymBody) := funcBlocks[0]!
-  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log with
-  | some (k, summaryArr) =>
+  -- next_sym has no outgoing calls to other parser functions, use normal stabilization
+  match ← computeStabilizationHS ip_reg nextSymBody 200 (some ".lake/stabilization.log") with
+  | some (k, card) =>
     let t1 ← IO.monoMsNow
-    summaries := summaries.insert functions[0]!.entryAddr summaryArr
-    log s!"  {nextSymName}: converged at K={k}, {summaryArr.size} summary branches, {t1 - t0}ms"
+    -- Collect next_sym's final branches as its summary
+    -- Re-run to get the actual branch array (computeStabilizationHS returns count only)
+    -- For now, use computeFunctionStabilization which returns the array
+    match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log with
+    | some (_, summaryArr) =>
+      summaries := summaries.insert functions[0]!.entryAddr summaryArr
+      log s!"  {nextSymName}: converged at K={k}, {summaryArr.size} summary branches, {t1 - t0}ms"
+    | none =>
+      log s!"  {nextSymName}: DID NOT CONVERGE (phase 2)"
+      return
   | none =>
     log s!"  {nextSymName}: DID NOT CONVERGE"
     return
   -- Phase 2: Iterate NT function summaries to fixpoint
+  -- At each outer round, for each NT function:
+  --   1. Expand calls in the body using current summaries (one-shot, not iterative)
+  --   2. Run normal stabilization on the expanded body
+  --   3. The converged set = new function summary
   log s!"\n--- Phase 2: NT functions (mutual recursion) ---"
   -- Initialize NT summaries as empty
   for i in [1:functions.size] do
@@ -1012,10 +1064,15 @@ def stratifiedFixpoint
     log s!"\n  === Outer round {outerRound} ==="
     for i in [1:functions.size] do
       let func := functions[i]!
-      let (fname, bodyArr) := funcBlocks[i]!
+      let (fname, rawBody) := funcBlocks[i]!
       let t0 ← IO.monoMsNow
+      -- Step 1: Expand calls in the raw body using current summaries
+      let (expandedBody, callsExp, branchesAdded, droppedExp) :=
+        expandCallsInBody ip_reg rawBody summaries
+      log s!"    {fname}: expanded {callsExp} calls → {branchesAdded} branches (+{droppedExp} dropped), body: {rawBody.size} → {expandedBody.size}"
+      -- Step 2: Run normal stabilization on the expanded body
       let oldSummary := summaries.getD func.entryAddr #[]
-      match ← computeFunctionStabilization ip_reg bodyArr summaries 200 log with
+      match ← computeFunctionStabilization ip_reg expandedBody {} 200 log with
       | some (k, newSummary) =>
         let t1 ← IO.monoMsNow
         if newSummary.size != oldSummary.size then
@@ -1028,7 +1085,6 @@ def stratifiedFixpoint
         log s!"  {fname}: DID NOT CONVERGE"
         return
   log s!"\n=== Stratified fixpoint complete after {outerRound} outer rounds ==="
-  -- Print final summary sizes
   for i in [:functions.size] do
     let func := functions[i]!
     let summary := summaries.getD func.entryAddr #[]
