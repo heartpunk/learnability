@@ -182,8 +182,8 @@ def SymPC.semanticImplies {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (stronger weaker : SymPC Reg) (baseEnv : Reg → UInt64) : Bool := Id.run do
   if stronger == weaker then return true
   -- Collect registers and constants from both PCs
-  let (regs1, consts1) := stronger.collectRegsConsts {} {}
-  let (regs2, consts2) := weaker.collectRegsConsts regs1 consts1
+  let (regs1, consts1) := SymPC.collectRegsConsts stronger {} {}
+  let (regs2, consts2) := SymPC.collectRegsConsts weaker regs1 consts1
   let allRegs := regs2.toArray
   let allConsts := consts2
   let vals := criticalValues allConsts
