@@ -250,7 +250,7 @@ def composeAndDedupParallel {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashab
   return (newBranches, cur, totalComposed, skipped, totalDropped, dupes)
 
 /-- Fast incremental stabilization using HashSet for O(1) membership.
-    Uses parallel rip-indexed composition — splits body across N workers. -/
+    Single-threaded rip-indexed composition with inline dedup. -/
 def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
@@ -266,9 +266,17 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       h.putStrLn msg
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
-    let (newBranches, current', pairsComposed, skipped, dropped, dupes) ←
-      composeAndDedupParallel ip_reg bodyArr frontier current
-    current := current'
+    let (composed, pairsComposed, skipped, dropped) :=
+      composeBranchArrayIndexed ip_reg bodyArr frontier
+    -- Inline dedup into HashSet
+    let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    let mut dupes : Nat := 0
+    for b in composed do
+      if current.contains b then
+        dupes := dupes + 1
+      else
+        newBranches := newBranches.push b
+        current := current.insert b
     let t_end ← IO.monoMsNow
     log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} time={t_end - t_start}ms"
     if newBranches.size == 0 then
