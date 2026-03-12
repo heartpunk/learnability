@@ -421,8 +421,6 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   let initSig := computePCSignature closure initBranch.pc
   sigSeen := sigSeen.insert ⟨hash initBranch.sub, initSig⟩
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
-  -- allBranches tracks the full accumulated set as an array for subsumption pruning
-  let mut allBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   let log (msg : String) : IO Unit := do
     IO.println msg
     if let some path := logFile then
@@ -450,27 +448,8 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
           sigSeen := sigSeen.insert key
           newBranches := newBranches.push b
           current := current.insert b
-    -- Add new branches to full array for subsumption pruning
-    for b in newBranches do
-      allBranches := allBranches.push b
-    let preSize := allBranches.size
-    -- Prune subsumed branches from the full accumulated set
-    let t_prune_start ← IO.monoMsNow
-    let (prunedArr, prunedCount) := pruneBranches allBranches
-    allBranches := prunedArr
-    -- Rebuild current HashSet from pruned array if anything was pruned
-    if prunedCount > 0 then
-      current := {}
-      for b in allBranches do
-        current := current.insert b
-      -- Rebuild frontier: only keep new branches that survived pruning
-      let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-      for b in newBranches do
-        if current.contains b then
-          survivingNew := survivingNew.push b
-      newBranches := survivingNew
     let t_end ← IO.monoMsNow
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} |sig_classes|={sigSeen.size} pruned={prunedCount} pre_prune={preSize} time={t_end - t_start}ms prune_time={t_end - t_prune_start}ms"
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} |sig_classes|={sigSeen.size} time={t_end - t_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
