@@ -74,10 +74,9 @@ def composeBranchFinsetsSimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 
 /-! ## Stabilization Computation -/
 
-/-- Compute the stabilization step K and final branch count.
-    Returns `(K, |S(K)|)` where `S(K) = S(K+1)`, or `none` if
-    not stabilized within `maxIter` steps. -/
-def computeStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+/-- Naive stabilization: composes bodyDenot with the FULL accumulated set each
+    iteration. Kept for correctness comparison. -/
+def computeStabilizationNaive {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (bodyDenot : Finset (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) : IO (Option (Nat × Nat)) := do
   let isa := vexSummaryISA Reg
@@ -90,6 +89,31 @@ def computeStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     if next == current then
       return some (k, current.card)
     current := next
+  return none
+
+/-- Incremental stabilization: only composes bodyDenot with the frontier
+    (branches added in the previous round), not the full accumulated set.
+
+    Correctness: composition distributes over union in the second argument.
+    If `current = old ∪ frontier`, then `body ⊗ current = (body ⊗ old) ∪ (body ⊗ frontier)`.
+    Since `body ⊗ old ⊆ current` (computed in prior rounds), only `body ⊗ frontier`
+    can produce genuinely new branches. -/
+def computeStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (bodyDenot : Finset (Branch (SymSub Reg) (SymPC Reg)))
+    (maxIter : Nat) : IO (Option (Nat × Nat)) := do
+  let isa := vexSummaryISA Reg
+  let init : Finset (Branch (SymSub Reg) (SymPC Reg)) := {Branch.skip isa}
+  let mut current := init
+  let mut frontier := init
+  for k in List.range maxIter do
+    let composed := composeBranchFinsetsSimplified bodyDenot frontier
+    let newBranches := composed \ current
+    if k % 5 == 0 || newBranches.card == 0 then
+      IO.println s!"  K={k}: |S| = {current.card}, |frontier| = {frontier.card}, |new| = {newBranches.card}"
+    if newBranches.card == 0 then
+      return some (k, current.card)
+    current := current ∪ newBranches
+    frontier := newBranches
   return none
 
 /-! ## Dispatch Body Construction -/

@@ -23,6 +23,7 @@
             packages = [
               angr-nix.packages.${system}.default
               pkgs.lean4
+              pkgs.git
               pkgs.uv
               pkgs.jq
             ];
