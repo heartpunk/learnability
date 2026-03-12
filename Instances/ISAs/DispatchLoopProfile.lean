@@ -140,7 +140,7 @@ def profileTrial (log : IO.FS.Handle) (seed : UInt64)
   let t1 ← IO.monoMsNow
   let bodyArr := finsetToArray body
   let logPath : System.FilePath := ".lake/profile.log"
-  match ← computeStabilizationHS bodyArr 200 logPath with
+  match ← computeStabilizationHS Amd64Reg.rip bodyArr 200 logPath with
   | some (k, card) =>
     let t2 ← IO.monoMsNow
     let line := s!"{seed}, {n}, {branchWidth}, {exprDepth}, {regSpread}, {bodyArr.size}, {k}, {card}, {t1 - t0}, {t2 - t1}"

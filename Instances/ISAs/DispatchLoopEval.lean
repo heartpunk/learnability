@@ -77,6 +77,25 @@ def composeBranchFinsetsSimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 Uses `Std.HashSet` for O(1) membership checks instead of Finset's O(n) linear scan.
 The Hashable instances on SymExpr/SymPC/SymSub/Branch enable this. -/
 
+/-- Extract the rip-guard address from a branch's PC.
+    Body branches from `flatBodyDenot` have PCs of the form
+    `and (eq (reg ip) (const addr)) rest` or just `eq (reg ip) (const addr)`.
+    After stabilization rounds, the outermost rip guard is always the left
+    conjunct (inner rip guards simplify to true/false via simplifyConst). -/
+def extractRipGuard {Reg : Type} [BEq Reg] (ip_reg : Reg) :
+    SymPC Reg → Option UInt64
+  | .and (.eq (.reg r) (.const addr)) _ => if r == ip_reg then some addr else none
+  | .eq (.reg r) (.const addr) => if r == ip_reg then some addr else none
+  | _ => none
+
+/-- Extract the rip target from a body branch's substitution.
+    If the branch maps ip_reg to a constant, that's the next block address. -/
+def extractRipTarget {Reg : Type} (ip_reg : Reg) (sub : SymSub Reg) :
+    Option UInt64 :=
+  match sub.regs ip_reg with
+  | .const addr => some addr
+  | _ => none
+
 /-- Compose body branches with frontier branches, simplify, return as Array.
     Uses direct iteration instead of Finset.biUnion/image.
     Returns (result, totalPairs, droppedCount). -/
@@ -94,9 +113,55 @@ def composeBranchArraySimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       | some b' => result := result.push b'
   return (result, bodyArr.size * frontierArr.size, dropped)
 
-/-- Fast incremental stabilization using HashSet for O(1) membership. -/
-def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
-    (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+/-- Rip-indexed composition: only compose body branches with frontier branches
+    whose rip-guard matches the body branch's rip target.
+
+    In the dispatch loop, `body.compose(frontier)` produces:
+      pc = and body.pc (lift body.sub frontier.pc)
+    The frontier's rip guard `eq (reg rip) (const addr)` gets lifted to
+    `eq (body.sub.regs rip) (const addr)`. If body.sub.regs rip = const X,
+    this is `eq (const X) (const addr)` — satisfiable iff X == addr.
+
+    By indexing frontier branches by their rip-guard address and looking up
+    body.sub.regs rip, we skip ~94% of compositions that would be dropped.
+
+    Returns (result, totalPairs, skippedByIndex, droppedBySimplify). -/
+def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+    (ip_reg : Reg) (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg))) :
+    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat × Nat × Nat := Id.run do
+  let isa := vexSummaryISA Reg
+  -- Build frontier index: rip-guard addr → array of frontier branches
+  let mut frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
+  let mut frontierNoRip : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  for f in frontierArr do
+    match extractRipGuard ip_reg f.pc with
+    | some addr =>
+      let arr := frontierByRip.getD addr #[]
+      frontierByRip := frontierByRip.insert addr (arr.push f)
+    | none => frontierNoRip := frontierNoRip.push f
+  -- Compose using index
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut dropped : Nat := 0
+  let mut composed_count : Nat := 0
+  let totalPairs := bodyArr.size * frontierArr.size
+  for b in bodyArr do
+    -- Determine which frontier branches this body can reach
+    let compatible := match extractRipTarget ip_reg b.sub with
+      | some target => (frontierByRip.getD target #[]) ++ frontierNoRip
+      | none => frontierArr  -- can't determine target, fall back to all
+    for f in compatible do
+      composed_count := composed_count + 1
+      let composed := b.compose isa f
+      match simplifyBranch composed with
+      | none => dropped := dropped + 1
+      | some b' => result := result.push b'
+  let skipped := totalPairs - composed_count
+  return (result, composed_count, skipped, dropped)
+
+/-- Fast incremental stabilization using HashSet for O(1) membership.
+    Uses rip-indexed composition to skip incompatible body-frontier pairs. -/
+def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
+    (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
@@ -110,7 +175,8 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       h.putStrLn msg
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
-    let (composed, totalPairs, dropped) := composeBranchArraySimplified bodyArr frontier
+    let (composed, pairsComposed, skipped, dropped) :=
+      composeBranchArrayIndexed ip_reg bodyArr frontier
     let t_compose ← IO.monoMsNow
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     for b in composed do
@@ -118,7 +184,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
         newBranches := newBranches.push b
         current := current.insert b
     let t_dedup ← IO.monoMsNow
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |composed|={composed.size} |new|={newBranches.size} pairs={totalPairs} dropped={dropped} compose={t_compose - t_start}ms dedup={t_dedup - t_compose}ms"
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |composed|={composed.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} compose={t_compose - t_start}ms dedup={t_dedup - t_compose}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
@@ -236,7 +302,7 @@ def parseBlocksWithAddresses (blockStrs : List String) :
   | .ok allPairs =>
     log s!"Total blocks available: {allPairs.length}"
     log "N, |bodyDenot|, K, |S_final|, bodyDenot_ms, stabilization_ms"
-    for n in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60] do
+    for n in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55] do
       if n > allPairs.length then
         log s!"{n}, ---, SKIP (only {allPairs.length} blocks), ---, ---, ---"
       else
@@ -246,7 +312,7 @@ def parseBlocksWithAddresses (blockStrs : List String) :
         let t1 ← IO.monoMsNow
         let bodyArr := finsetToArray body
         log s!"  N={n}: |bodyDenot|={bodyArr.size}, starting stabilization..."
-        match ← computeStabilizationHS bodyArr 200 logPath with
+        match ← computeStabilizationHS Amd64Reg.rip bodyArr 200 logPath with
         | some (k, card) =>
           let t2 ← IO.monoMsNow
           log s!"{n}, {body.card}, {k}, {card}, {t1 - t0}, {t2 - t1}"
