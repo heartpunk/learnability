@@ -56,6 +56,81 @@ def simplifyBranch {Sub : Type*} {Reg : Type} (b : Branch Sub (SymPC Reg)) :
   | none => none
   | some pc' => some ⟨b.sub, pc'⟩
 
+/-! ## Expression Depth Bounding
+
+After composition, symbolic expressions grow without bound as each iteration
+nests the frontier's expressions inside the body's. Depth truncation replaces
+deep subexpressions with `const (hash subexpr)`, creating canonical bounded
+representations that:
+1. Bound per-branch memory (prevent OOM from deeply nested expressions)
+2. Enable convergence (branches at different depths that represent the same
+   semantic state get canonicalized to the same bounded form)
+3. Preserve distinction (different deep subexpressions get different hash
+   constants, so genuinely different states remain distinguished) -/
+
+mutual
+partial def SymExpr.truncateAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
+    (maxDepth : Nat) : SymExpr Reg → SymExpr Reg
+  | e@(.const _) => e
+  | e@(.reg _) => e
+  | e => if maxDepth == 0 then .const (hash e).val else
+    match e with
+    | .low32 x => .low32 (x.truncateAtDepth (maxDepth - 1))
+    | .uext32 x => .uext32 (x.truncateAtDepth (maxDepth - 1))
+    | .sext8to32 x => .sext8to32 (x.truncateAtDepth (maxDepth - 1))
+    | .sext32to64 x => .sext32to64 (x.truncateAtDepth (maxDepth - 1))
+    | .sub32 a b => .sub32 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
+    | .shl32 a b => .shl32 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
+    | .add64 a b => .add64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
+    | .sub64 a b => .sub64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
+    | .xor64 a b => .xor64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
+    | .and64 a b => .and64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
+    | .or64 a b => .or64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
+    | .shl64 a b => .shl64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
+    | .shr64 a b => .shr64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
+    | .load w m a => .load w (m.truncateAtDepth (maxDepth - 1)) (a.truncateAtDepth (maxDepth - 1))
+    | .const _ => e  -- already handled above
+    | .reg _ => e  -- already handled above
+
+partial def SymMem.truncateAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
+    (maxDepth : Nat) : SymMem Reg → SymMem Reg
+  | .base => .base
+  | m@(.store _ _ _ _) => if maxDepth == 0 then .base else
+    match m with
+    | .store w mem addr val =>
+      .store w (mem.truncateAtDepth (maxDepth - 1))
+             (SymExpr.truncateAtDepth (maxDepth - 1) addr)
+             (SymExpr.truncateAtDepth (maxDepth - 1) val)
+    | .base => .base  -- already handled
+end
+
+partial def SymPC.truncateAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
+    (maxDepth : Nat) : SymPC Reg → SymPC Reg
+  | .true => .true
+  | .eq a b => .eq (a.truncateAtDepth maxDepth) (b.truncateAtDepth maxDepth)
+  | .lt a b => .lt (a.truncateAtDepth maxDepth) (b.truncateAtDepth maxDepth)
+  | .le a b => .le (a.truncateAtDepth maxDepth) (b.truncateAtDepth maxDepth)
+  | .and φ ψ => .and (SymPC.truncateAtDepth maxDepth φ) (SymPC.truncateAtDepth maxDepth ψ)
+  | .not φ => .not (SymPC.truncateAtDepth maxDepth φ)
+
+/-- Project a branch onto the closed register set, zeroing non-projected
+    registers and truncating all expressions to bounded depth.
+    This is applied after composition to prevent expression-size blowup. -/
+def projectBranch {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+    [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
+    (projectedRegs : Std.HashSet Reg) (ip_reg : Reg)
+    (needsMem : Bool) (exprDepth : Nat)
+    (b : Branch (SymSub Reg) (SymPC Reg)) : Branch (SymSub Reg) (SymPC Reg) :=
+  let projSub : SymSub Reg := {
+    regs := fun r =>
+      if r == ip_reg then b.sub.regs r  -- keep rip as-is (needed for routing)
+      else if projectedRegs.contains r then
+        (b.sub.regs r).truncateAtDepth exprDepth
+      else .const 0  -- zero out non-projected registers
+    mem := if needsMem then b.sub.mem.truncateAtDepth exprDepth else .base
+  }
+  ⟨projSub, b.pc.truncateAtDepth exprDepth⟩
+
 /-! ## Simplified Composition
 
 Compose two branch Finsets and simplify, dropping unsatisfiable branches. -/
@@ -893,9 +968,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   let (closure, ripCount, dataCount) := extractClosure ip_reg bodyArr (dataOnly := true)
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
   current := current.insert initBranch
-  -- Seed initial frontier (call-expanded results) into current set
-  for b in initialFrontier do
-    current := current.insert b
+  -- initialFrontier seeded into current AFTER closedness check (needs projection)
   let mut sigSeen : Std.HashSet SigDedupKey := {}
   -- Compute closed projection (same as computeStabilizationHS)
   let mut dataPCRegs : Std.HashSet Reg := {}
@@ -941,24 +1014,34 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   let initSig := computePCSignature closure initBranch.pc
   let initSigKey : SigDedupKey := ⟨dedupSubHash initBranch.sub, initSig⟩
   sigSeen := sigSeen.insert initSigKey
-  -- Build initial frontier: skip + all initial frontier seeds
+  -- Build initial frontier: skip + all initial frontier seeds (projected)
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   for b in initialFrontier do
-    let sig := computePCSignature closure b.pc
-    let key : SigDedupKey := ⟨dedupSubHash b.sub, sig⟩
+    let pb := projectBranch closedRegs ip_reg closedNeedsMem 4 b
+    let sig := computePCSignature closure pb.pc
+    let key : SigDedupKey := ⟨dedupSubHash pb.sub, sig⟩
     unless sigSeen.contains key do
       sigSeen := sigSeen.insert key
-      frontier := frontier.push b
+      frontier := frontier.push pb
+  -- Seed projected initial frontier into current set
+  for b in frontier do
+    current := current.insert b
   log s!"    initial frontier: {frontier.size} branches (skip + {initialFrontier.size} call-expanded)"
+  -- Expression depth limit for truncation after composition.
+  -- Depth 4 preserves `load(mem, add64(reg, const))` patterns (depth 3)
+  -- while bounding growth from repeated composition.
+  let exprDepthLimit : Nat := 4
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     -- Pure composition: no summary interception, body has no call branches
     let (composed, pairsComposed, skipped, dropped) :=
       composeBranchArrayIndexed ip_reg bodyArr frontier
+    -- Project + truncate composed branches to bounded depth
+    let projected := composed.map (projectBranch closedRegs ip_reg closedNeedsMem exprDepthLimit)
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
     let mut sigCollapsed : Nat := 0
-    for b in composed do
+    for b in projected do
       if current.contains b then
         dupes := dupes + 1
       else
