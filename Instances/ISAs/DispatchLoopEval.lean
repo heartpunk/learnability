@@ -77,6 +77,25 @@ def composeBranchFinsetsSimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 Uses `Std.HashSet` for O(1) membership checks instead of Finset's O(n) linear scan.
 The Hashable instances on SymExpr/SymPC/SymSub/Branch enable this. -/
 
+/-- Extract the rip-guard address from a branch's PC.
+    Body branches from `flatBodyDenot` have PCs of the form
+    `and (eq (reg ip) (const addr)) rest` or just `eq (reg ip) (const addr)`.
+    After stabilization rounds, the outermost rip guard is always the left
+    conjunct (inner rip guards simplify to true/false via simplifyConst). -/
+def extractRipGuard {Reg : Type} [BEq Reg] (ip_reg : Reg) :
+    SymPC Reg → Option UInt64
+  | .and (.eq (.reg r) (.const addr)) _ => if r == ip_reg then some addr else none
+  | .eq (.reg r) (.const addr) => if r == ip_reg then some addr else none
+  | _ => none
+
+/-- Extract the rip target from a body branch's substitution.
+    If the branch maps ip_reg to a constant, that's the next block address. -/
+def extractRipTarget {Reg : Type} (ip_reg : Reg) (sub : SymSub Reg) :
+    Option UInt64 :=
+  match sub.regs ip_reg with
+  | .const addr => some addr
+  | _ => none
+
 /-- Compose body branches with frontier branches, simplify, return as Array.
     Uses direct iteration instead of Finset.biUnion/image.
     Returns (result, totalPairs, droppedCount). -/
@@ -94,9 +113,144 @@ def composeBranchArraySimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       | some b' => result := result.push b'
   return (result, bodyArr.size * frontierArr.size, dropped)
 
-/-- Fast incremental stabilization using HashSet for O(1) membership. -/
-def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
-    (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+/-- Rip-indexed composition: only compose body branches with frontier branches
+    whose rip-guard matches the body branch's rip target.
+
+    In the dispatch loop, `body.compose(frontier)` produces:
+      pc = and body.pc (lift body.sub frontier.pc)
+    The frontier's rip guard `eq (reg rip) (const addr)` gets lifted to
+    `eq (body.sub.regs rip) (const addr)`. If body.sub.regs rip = const X,
+    this is `eq (const X) (const addr)` — satisfiable iff X == addr.
+
+    By indexing frontier branches by their rip-guard address and looking up
+    body.sub.regs rip, we skip ~94% of compositions that would be dropped.
+
+    Returns (result, totalPairs, skippedByIndex, droppedBySimplify). -/
+def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+    (ip_reg : Reg) (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg))) :
+    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat × Nat × Nat := Id.run do
+  let isa := vexSummaryISA Reg
+  -- Build frontier index: rip-guard addr → array of frontier branches
+  let mut frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
+  let mut frontierNoRip : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  for f in frontierArr do
+    match extractRipGuard ip_reg f.pc with
+    | some addr =>
+      let arr := frontierByRip.getD addr #[]
+      frontierByRip := frontierByRip.insert addr (arr.push f)
+    | none => frontierNoRip := frontierNoRip.push f
+  -- Compose using index
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut dropped : Nat := 0
+  let mut composed_count : Nat := 0
+  let totalPairs := bodyArr.size * frontierArr.size
+  for b in bodyArr do
+    -- Determine which frontier branches this body can reach
+    let compatible := match extractRipTarget ip_reg b.sub with
+      | some target => (frontierByRip.getD target #[]) ++ frontierNoRip
+      | none => frontierArr  -- can't determine target, fall back to all
+    for f in compatible do
+      composed_count := composed_count + 1
+      let composed := b.compose isa f
+      match simplifyBranch composed with
+      | none => dropped := dropped + 1
+      | some b' => result := result.push b'
+  let skipped := totalPairs - composed_count
+  return (result, composed_count, skipped, dropped)
+
+/-- Per-chunk composition result for parallel merge. -/
+structure ChunkResult (Sub PC : Type*) where
+  branches : Array (Branch Sub PC)
+  composed : Nat
+  dropped : Nat
+
+/-- Compose a chunk of body branches with the frontier (rip-indexed).
+    Pure function — no shared mutable state, safe to run in parallel. -/
+def composeChunk {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+    (ip_reg : Reg) (bodyChunk : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
+    (frontierNoRip : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (frontierAll : Array (Branch (SymSub Reg) (SymPC Reg))) :
+    ChunkResult (SymSub Reg) (SymPC Reg) := Id.run do
+  let isa := vexSummaryISA Reg
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut dropped : Nat := 0
+  let mut composed_count : Nat := 0
+  for b in bodyChunk do
+    let compatible := match extractRipTarget ip_reg b.sub with
+      | some target => (frontierByRip.getD target #[]) ++ frontierNoRip
+      | none => frontierAll
+    for f in compatible do
+      composed_count := composed_count + 1
+      let composed := b.compose isa f
+      match simplifyBranch composed with
+      | none => dropped := dropped + 1
+      | some b' => result := result.push b'
+  return ⟨result, composed_count, dropped⟩
+
+/-- Split an array into N roughly-equal chunks. -/
+def splitIntoChunks {α : Type} (arr : Array α) (n : Nat) : Array (Array α) := Id.run do
+  if n == 0 || arr.size == 0 then return #[arr]
+  let chunkSize := (arr.size + n - 1) / n
+  let mut chunks : Array (Array α) := #[]
+  let mut i := 0
+  while i < arr.size do
+    let endIdx := min (i + chunkSize) arr.size
+    chunks := chunks.push (arr.extract i endIdx)
+    i := endIdx
+  return chunks
+
+/-- Parallel rip-indexed composition with dedup.
+    Splits body array into chunks, composes each chunk in parallel via IO.asTask,
+    then merges results into the HashSet sequentially.
+    Returns (newBranches, updatedCurrent, pairsComposed, skipped, dropped, dupes). -/
+def composeAndDedupParallel {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
+    (ip_reg : Reg) (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)))
+    (numWorkers : Nat := 8) :
+    IO (Array (Branch (SymSub Reg) (SymPC Reg)) × Std.HashSet (Branch (SymSub Reg) (SymPC Reg))
+      × Nat × Nat × Nat × Nat) := do
+  -- Build frontier index (shared across workers, immutable)
+  let mut frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
+  let mut frontierNoRip : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  for f in frontierArr do
+    match extractRipGuard ip_reg f.pc with
+    | some addr =>
+      let arr := frontierByRip.getD addr #[]
+      frontierByRip := frontierByRip.insert addr (arr.push f)
+    | none => frontierNoRip := frontierNoRip.push f
+  let frontierByRip := frontierByRip  -- freeze
+  let frontierNoRip := frontierNoRip
+  -- Split body into chunks and spawn tasks
+  let chunks := splitIntoChunks bodyArr numWorkers
+  let tasks ← chunks.mapM fun chunk =>
+    IO.asTask (prio := .dedicated) do
+      return composeChunk ip_reg chunk frontierByRip frontierNoRip frontierArr
+  -- Collect results
+  let results ← tasks.mapM fun task => IO.ofExcept (← IO.wait task)
+  -- Merge into HashSet (sequential — avoids concurrent mutation)
+  let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut cur := current
+  let mut totalComposed : Nat := 0
+  let mut totalDropped : Nat := 0
+  let mut dupes : Nat := 0
+  for r in results do
+    totalComposed := totalComposed + r.composed
+    totalDropped := totalDropped + r.dropped
+    for b in r.branches do
+      if cur.contains b then
+        dupes := dupes + 1
+      else
+        newBranches := newBranches.push b
+        cur := cur.insert b
+  let totalPairs := bodyArr.size * frontierArr.size
+  let skipped := totalPairs - totalComposed
+  return (newBranches, cur, totalComposed, skipped, totalDropped, dupes)
+
+/-- Fast incremental stabilization using HashSet for O(1) membership.
+    Uses parallel rip-indexed composition — splits body across N workers. -/
+def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
+    (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
@@ -110,15 +264,11 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       h.putStrLn msg
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
-    let (composed, totalPairs, dropped) := composeBranchArraySimplified bodyArr frontier
-    let t_compose ← IO.monoMsNow
-    let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-    for b in composed do
-      if !current.contains b then
-        newBranches := newBranches.push b
-        current := current.insert b
-    let t_dedup ← IO.monoMsNow
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |composed|={composed.size} |new|={newBranches.size} pairs={totalPairs} dropped={dropped} compose={t_compose - t_start}ms dedup={t_dedup - t_compose}ms"
+    let (newBranches, current', pairsComposed, skipped, dropped, dupes) ←
+      composeAndDedupParallel ip_reg bodyArr frontier current
+    current := current'
+    let t_end ← IO.monoMsNow
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} time={t_end - t_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
@@ -246,7 +396,7 @@ def parseBlocksWithAddresses (blockStrs : List String) :
         let t1 ← IO.monoMsNow
         let bodyArr := finsetToArray body
         log s!"  N={n}: |bodyDenot|={bodyArr.size}, starting stabilization..."
-        match ← computeStabilizationHS bodyArr 200 logPath with
+        match ← computeStabilizationHS Amd64Reg.rip bodyArr 200 logPath with
         | some (k, card) =>
           let t2 ← IO.monoMsNow
           log s!"{n}, {body.card}, {k}, {card}, {t1 - t0}, {t2 - t1}"
