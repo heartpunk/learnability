@@ -121,32 +121,117 @@ def pruneBranches {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [E
     (branches : Array (Branch (SymSub Reg) (SymPC Reg))) :
     Array (Branch (SymSub Reg) (SymPC Reg)) × Nat := Id.run do
   -- Group branches by sub hash for efficient comparison
-  let mut groups : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
-  for b in branches do
+  -- Key = hash of sub, Value = array of (index, branch) pairs
+  let mut groups : Std.HashMap UInt64 (Array Nat) := {}
+  for i in [:branches.size] do
+    let b := branches[i]!
     let h := hash b.sub
     let arr := groups.getD h #[]
-    groups := groups.insert h (arr.push b)
-  -- Within each group, prune subsumed branches
-  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    groups := groups.insert h (arr.push i)
+  -- For each branch, check if any other branch in its hash group subsumes it
+  let mut keep : Array Bool := Array.mkArray branches.size true
   let mut pruned : Nat := 0
-  for (_, group) in groups.toArray do
-    -- For small groups, do pairwise check. For each branch, check if any
-    -- other branch in the group subsumes it (has same sub but weaker PC).
-    for i in [:group.size] do
-      let bi := group[i]!
-      let mut subsumed := false
-      for j in [:group.size] do
-        if i != j then
-          let bj := group[j]!
+  for i in [:branches.size] do
+    if keep[i]! then
+      let bi := branches[i]!
+      let h := hash bi.sub
+      let groupIndices := groups.getD h #[]
+      for j in groupIndices do
+        if i != j && keep[j]! then
+          let bj := branches[j]!
           -- bi is subsumed by bj if bi's PC implies bj's PC (bi is stronger)
           if branchSubsumedBy bi bj then
-            subsumed := true
+            keep := keep.set! i false
+            pruned := pruned + 1
             break
-      if subsumed then
-        pruned := pruned + 1
-      else
-        result := result.push bi
+  -- Build result from non-pruned branches
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  for i in [:branches.size] do
+    if keep[i]! then
+      result := result.push branches[i]!
   return (result, pruned)
+
+/-! ## PC-Signature Equivalence Class Dedup
+
+Two branches with the same substitution and the same PC signature (which guard PCs
+from the closure they satisfy) will behave identically in all future compositions.
+The convergence proof (`dispatch_branchClassesStable`) shows K ≤ 2^|closure| because
+there are only that many distinct signature classes.
+
+By deduplicating on (sub, signature), we collapse exponentially many branches into
+at most 2^|closure| classes per distinct substitution, preventing the ~5x/iteration
+blowup that causes OOM. -/
+
+/-- Extract the closure from body branches: all distinct atomic conjuncts
+    appearing in any body branch's PC. These are the guard PCs that determine
+    the PC-signature equivalence classes. -/
+def extractClosure {Reg : Type} [BEq (SymPC Reg)] [Hashable (SymPC Reg)]
+    (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg))) :
+    Array (SymPC Reg) := Id.run do
+  let mut seen : Std.HashSet (SymPC Reg) := {}
+  let mut result : Array (SymPC Reg) := #[]
+  for b in bodyArr do
+    let conjuncts := SymPC.conjuncts b.pc
+    for c in conjuncts do
+      unless seen.contains c do
+        seen := seen.insert c
+        result := result.push c
+  return result
+
+/-- Compute the PC signature of a branch w.r.t. a closure.
+    Returns a list of bools: for each guard PC in the closure, does the branch's
+    PC syntactically imply it?
+
+    This is the computational analog of `pcSignatureWith` from VexDispatchLoop.lean,
+    which filters the closure to the subset satisfied by a concrete state.
+    Here we work purely syntactically: a branch's PC "satisfies" a guard PC if
+    the branch's PC syntactically implies it (all conjuncts of the guard appear
+    in the branch's conjuncts). -/
+def computePCSignature {Reg : Type} [DecidableEq Reg]
+    (closure : Array (SymPC Reg)) (pc : SymPC Reg) : List Bool :=
+  -- Pre-compute conjuncts of pc once, build a HashSet for O(1) lookup
+  let pcConj := SymPC.conjuncts pc
+  closure.toList.map fun guardPC =>
+    match guardPC with
+    | .true => true  -- everything implies .true
+    | _ =>
+      if pc == guardPC then true
+      else
+        let weakConj := SymPC.conjuncts guardPC
+        weakConj.all fun wc => pcConj.any fun sc => sc == wc
+
+/-- Hash a PC signature (list of bools) for use as a HashMap key. -/
+def hashPCSignature (sig : List Bool) : UInt64 :=
+  sig.foldl (fun acc b => mixHash acc (if b then 1 else 0)) 7
+
+/-- Key for PC-signature dedup: combines substitution hash with PC signature.
+    Two branches with the same dedup key are in the same equivalence class. -/
+structure SigDedupKey where
+  subHash : UInt64
+  sig : List Bool
+  deriving BEq
+
+instance : Hashable SigDedupKey where
+  hash k := mixHash k.subHash (hashPCSignature k.sig)
+
+/-- Dedup an array of branches by (sub, PC-signature) equivalence class.
+    Returns (dedupedArray, collapsedCount). -/
+def dedupBySignature {Reg : Type} [DecidableEq Reg] [Hashable Reg] [EnumReg Reg]
+    (closure : Array (SymPC Reg))
+    (branches : Array (Branch (SymSub Reg) (SymPC Reg))) :
+    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat := Id.run do
+  let mut seen : Std.HashSet SigDedupKey := {}
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut collapsed : Nat := 0
+  for b in branches do
+    let sig := computePCSignature closure b.pc
+    let key : SigDedupKey := ⟨hash b.sub, sig⟩
+    if seen.contains key then
+      collapsed := collapsed + 1
+    else
+      seen := seen.insert key
+      result := result.push b
+  return (result, collapsed)
 
 /-! ## HashSet-based Stabilization (fast path)
 
@@ -327,35 +412,53 @@ def composeAndDedupParallel {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashab
 
 /-- Fast incremental stabilization using HashSet for O(1) membership.
     Single-threaded rip-indexed composition with inline dedup.
-    Includes branch subsumption pruning after each iteration. -/
+    Includes PC-signature equivalence class dedup and subsumption pruning. -/
 def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
+  -- Extract the closure: all distinct atomic guard PCs from body branches.
+  -- This is the fixed set of conditions that determine PC-signature classes.
+  let closure := extractClosure bodyArr
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
   current := current.insert initBranch
+  -- sigSeen tracks (sub, signature) classes across ALL iterations.
+  -- A new branch is only added if its signature class hasn't been seen before.
+  let mut sigSeen : Std.HashSet SigDedupKey := {}
+  let initSig := computePCSignature closure initBranch.pc
+  sigSeen := sigSeen.insert ⟨hash initBranch.sub, initSig⟩
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
+  -- allBranches tracks the full accumulated set as an array for subsumption pruning
   let mut allBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   let log (msg : String) : IO Unit := do
     IO.println msg
     if let some path := logFile then
       let h ← IO.FS.Handle.mk path .append
       h.putStrLn msg
+  log s!"  closure_size={closure.size}"
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     let (composed, pairsComposed, skipped, dropped) :=
       composeBranchArrayIndexed ip_reg bodyArr frontier
-    -- Inline dedup into HashSet
+    -- Inline dedup: exact-match via HashSet + signature-class via sigSeen
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
+    let mut sigCollapsed : Nat := 0
     for b in composed do
       if current.contains b then
         dupes := dupes + 1
       else
-        newBranches := newBranches.push b
-        current := current.insert b
-    -- Add new branches to the full array for pruning
+        -- Check signature-class dedup
+        let sig := computePCSignature closure b.pc
+        let key : SigDedupKey := ⟨hash b.sub, sig⟩
+        if sigSeen.contains key then
+          sigCollapsed := sigCollapsed + 1
+        else
+          sigSeen := sigSeen.insert key
+          newBranches := newBranches.push b
+          current := current.insert b
+    -- Add new branches to full array for subsumption pruning
     for b in newBranches do
       allBranches := allBranches.push b
     let preSize := allBranches.size
@@ -363,7 +466,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     let t_prune_start ← IO.monoMsNow
     let (prunedArr, prunedCount) := pruneBranches allBranches
     allBranches := prunedArr
-    -- Rebuild current HashSet from pruned array
+    -- Rebuild current HashSet from pruned array if anything was pruned
     if prunedCount > 0 then
       current := {}
       for b in allBranches do
@@ -375,7 +478,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
           survivingNew := survivingNew.push b
       newBranches := survivingNew
     let t_end ← IO.monoMsNow
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} pruned={prunedCount} pre_prune={preSize} time={t_end - t_start}ms prune_time={t_end - t_prune_start}ms"
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} |sig_classes|={sigSeen.size} pruned={prunedCount} pre_prune={preSize} time={t_end - t_start}ms prune_time={t_end - t_prune_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
@@ -489,7 +592,7 @@ def dispatchLoopEvalMain : IO Unit := do
     IO.println msg
     let h ← IO.FS.Handle.mk logPath .append
     h.putStrLn msg
-  log "=== Dispatch Loop Stabilization: next_sym (60 blocks) ==="
+  log "=== Dispatch Loop Stabilization: next_sym (PC-signature dedup) ==="
   match parseBlocksWithAddresses nextSymBlocks with
   | .error e => log s!"PARSE ERROR: {e}"
   | .ok allPairs =>
