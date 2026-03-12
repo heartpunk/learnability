@@ -1047,8 +1047,13 @@ def dispatchLoopEvalMain : IO Unit := do
     h.putStrLn msg
   -- Stratified fixpoint: per-function summaries
   log "=== Stratified Dispatch Loop Stabilization ==="
+  -- Use nextSymBlocks.take 55 for the leaf portion of next_sym (blocks 56-60
+  -- in nextSymBlocks are calling-convention blocks from other functions that
+  -- were included before proper per-function extraction). The 55 leaf blocks
+  -- converge to 414 branches with a 3-register projection {rax, rbp, rsp}.
+  -- NT function block lists come from parser_nt_blocks.json extraction.
   let functions : Array FunctionSpec := #[
-    ⟨"next_sym",    0x40006f, nextSymBlocks⟩,
+    ⟨"next_sym",    0x40006f, nextSymBlocks.take 55⟩,
     ⟨"term",        0x400427, termBlocks⟩,
     ⟨"sum",         0x4004be, sumBlocks⟩,
     ⟨"test",        0x400551, testBlocks⟩,
