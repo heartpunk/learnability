@@ -56,78 +56,105 @@ def simplifyBranch {Sub : Type*} {Reg : Type} (b : Branch Sub (SymPC Reg)) :
   | none => none
   | some pc' => some ⟨b.sub, pc'⟩
 
-/-! ## Expression Depth Bounding
+/-! ## Load-After-Store Memory Simplification
 
-After composition, symbolic expressions grow without bound as each iteration
-nests the frontier's expressions inside the body's. Depth truncation replaces
-deep subexpressions with `const (hash subexpr)`, creating canonical bounded
-representations that:
-1. Bound per-branch memory (prevent OOM from deeply nested expressions)
-2. Enable convergence (branches at different depths that represent the same
-   semantic state get canonicalized to the same bounded form)
-3. Preserve distinction (different deep subexpressions get different hash
-   constants, so genuinely different states remain distinguished) -/
+After composition, memory terms grow as chains of `store` operations.
+`load(W, store(W, mem, addr, val), addr')` can be simplified:
+- If W matches and addr == addr' (syntactically): result is `val`
+- If addr and addr' are different constants: skip the store, recurse into mem
+- Otherwise: keep as-is (can't determine statically)
+
+This is an EXACT optimization — it evaluates what the concrete semantics would
+compute, just at the symbolic level. No information is lost. Combined with
+simplifyConst (which handles const-const comparisons), this collapses the
+expression chains that cause unbounded growth in iterative composition. -/
 
 mutual
-partial def truncateExprAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
-    (maxDepth : Nat) : SymExpr Reg → SymExpr Reg
-  | e@(.const _) => e
-  | e@(.reg _) => e
-  | e => if maxDepth == 0 then .const (hash e) else
-    match e with
-    | .low32 x => .low32 (truncateExprAtDepth (maxDepth - 1) x)
-    | .uext32 x => .uext32 (truncateExprAtDepth (maxDepth - 1) x)
-    | .sext8to32 x => .sext8to32 (truncateExprAtDepth (maxDepth - 1) x)
-    | .sext32to64 x => .sext32to64 (truncateExprAtDepth (maxDepth - 1) x)
-    | .sub32 a b => .sub32 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
-    | .shl32 a b => .shl32 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
-    | .add64 a b => .add64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
-    | .sub64 a b => .sub64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
-    | .xor64 a b => .xor64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
-    | .and64 a b => .and64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
-    | .or64 a b => .or64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
-    | .shl64 a b => .shl64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
-    | .shr64 a b => .shr64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
-    | .load w m a => .load w (truncateMemAtDepth (maxDepth - 1) m) (truncateExprAtDepth (maxDepth - 1) a)
-    | .const _ => e
-    | .reg _ => e
+/-- Simplify load-after-store patterns in a SymExpr. -/
+partial def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymExpr Reg
+  | .const v => .const v
+  | .reg r => .reg r
+  | .low32 x => .low32 (simplifyLoadStoreExpr x)
+  | .uext32 x => .uext32 (simplifyLoadStoreExpr x)
+  | .sext8to32 x => .sext8to32 (simplifyLoadStoreExpr x)
+  | .sext32to64 x => .sext32to64 (simplifyLoadStoreExpr x)
+  | .sub32 a b => .sub32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .shl32 a b => .shl32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .add64 a b => .add64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .sub64 a b => .sub64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .xor64 a b => .xor64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .and64 a b => .and64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .or64 a b => .or64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .shl64 a b => .shl64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .shr64 a b => .shr64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .load w mem addr =>
+    let addr' := simplifyLoadStoreExpr addr
+    let mem' := simplifyLoadStoreMem mem
+    resolveLoad w mem' addr'
 
-partial def truncateMemAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
-    (maxDepth : Nat) : SymMem Reg → SymMem Reg
+/-- Simplify store chains in a SymMem. -/
+partial def simplifyLoadStoreMem {Reg : Type} [DecidableEq Reg] : SymMem Reg → SymMem Reg
   | .base => .base
   | .store w mem addr val =>
-    if maxDepth == 0 then .base
-    else .store w (truncateMemAtDepth (maxDepth - 1) mem)
-                  (truncateExprAtDepth (maxDepth - 1) addr)
-                  (truncateExprAtDepth (maxDepth - 1) val)
+    .store w (simplifyLoadStoreMem mem)
+            (simplifyLoadStoreExpr addr)
+            (simplifyLoadStoreExpr val)
 end
 
-partial def truncatePCAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
-    (maxDepth : Nat) : SymPC Reg → SymPC Reg
-  | .true => .true
-  | .eq a b => .eq (truncateExprAtDepth maxDepth a) (truncateExprAtDepth maxDepth b)
-  | .lt a b => .lt (truncateExprAtDepth maxDepth a) (truncateExprAtDepth maxDepth b)
-  | .le a b => .le (truncateExprAtDepth maxDepth a) (truncateExprAtDepth maxDepth b)
-  | .and φ ψ => .and (truncatePCAtDepth maxDepth φ) (truncatePCAtDepth maxDepth ψ)
-  | .not φ => .not (truncatePCAtDepth maxDepth φ)
+/-- Resolve a load from a (simplified) memory term.
+    Walks the store chain looking for a matching address. -/
+partial def resolveLoad {Reg : Type} [DecidableEq Reg]
+    (loadWidth : Width) (mem : SymMem Reg) (loadAddr : SymExpr Reg) : SymExpr Reg :=
+  match mem with
+  | .base => .load loadWidth .base loadAddr
+  | .store storeWidth innerMem storeAddr storeVal =>
+    if loadWidth == storeWidth && loadAddr == storeAddr then
+      storeVal  -- MATCH: load reads what was just stored
+    else
+      match (storeAddr, loadAddr) with
+      | (.const a, .const b) =>
+        if a != b then
+          resolveLoad loadWidth innerMem loadAddr  -- different constant addrs, skip store
+        else
+          .load loadWidth mem loadAddr  -- same const but different width, keep as-is
+      | _ => .load loadWidth mem loadAddr  -- can't determine, keep as-is
 
-/-- Project a branch onto the closed register set, zeroing non-projected
-    registers and truncating all expressions to bounded depth.
-    This is applied after composition to prevent expression-size blowup. -/
-def projectBranch {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
-    [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
+/-- Simplify load-after-store patterns in a SymPC. -/
+partial def simplifyLoadStorePC {Reg : Type} [DecidableEq Reg] : SymPC Reg → SymPC Reg
+  | .true => .true
+  | .eq a b => .eq (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .lt a b => .lt (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .le a b => .le (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .and φ ψ => .and (simplifyLoadStorePC φ) (simplifyLoadStorePC ψ)
+  | .not φ => .not (simplifyLoadStorePC φ)
+
+/-- Full simplification: load-after-store + constant folding on a branch.
+    Returns `none` if the PC is unsatisfiable after simplification. -/
+def simplifyBranchFull {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (b : Branch (SymSub Reg) (SymPC Reg)) : Option (Branch (SymSub Reg) (SymPC Reg)) :=
+  -- First apply load-after-store to sub and PC
+  let simplifiedSub : SymSub Reg := {
+    regs := fun r => simplifyLoadStoreExpr (b.sub.regs r)
+    mem := simplifyLoadStoreMem b.sub.mem
+  }
+  let simplifiedPC := simplifyLoadStorePC b.pc
+  -- Then apply constant folding
+  match SymPC.simplifyConst simplifiedPC with
+  | none => none
+  | some pc' => some ⟨simplifiedSub, pc'⟩
+
+/-- Zero out non-projected registers (memory savings, safe when projection is closed). -/
+def zeroNonProjected {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
     (projectedRegs : Std.HashSet Reg) (ip_reg : Reg)
-    (needsMem : Bool) (exprDepth : Nat)
     (b : Branch (SymSub Reg) (SymPC Reg)) : Branch (SymSub Reg) (SymPC Reg) :=
   let projSub : SymSub Reg := {
     regs := fun r =>
-      if r == ip_reg then b.sub.regs r  -- keep rip as-is (needed for routing)
-      else if projectedRegs.contains r then
-        truncateExprAtDepth exprDepth (b.sub.regs r)
-      else .const 0  -- zero out non-projected registers
-    mem := if needsMem then truncateMemAtDepth exprDepth b.sub.mem else .base
+      if r == ip_reg then b.sub.regs r
+      else if projectedRegs.contains r then b.sub.regs r
+      else .const 0
+    mem := b.sub.mem  -- keep memory (needed for loads)
   }
-  ⟨projSub, truncatePCAtDepth exprDepth b.pc⟩
+  ⟨projSub, b.pc⟩
 
 /-! ## Simplified Composition
 
@@ -1008,52 +1035,56 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       h := mixHash h (hash (sub.regs r))
     if closedNeedsMem then h := mixHash h (hash sub.mem)
     return h
-  let dedupSubHash (sub : SymSub Reg) : UInt64 := projHashOf sub
-  let initSig := computePCSignature closure initBranch.pc
-  let initSigKey : SigDedupKey := ⟨dedupSubHash initBranch.sub, initSig⟩
-  sigSeen := sigSeen.insert initSigKey
-  -- Build initial frontier: skip + all initial frontier seeds (projected)
+  -- Convergence dedup uses projHashOf ONLY (not syntactic PC signature).
+  -- Two branches with the same projected sub behave identically in future
+  -- iterations (by closedness), so the PC signature is redundant.
+  -- All distinct branches still go into `current` for the final summary.
+  let mut projSeen : Std.HashSet UInt64 := {}
+  projSeen := projSeen.insert (projHashOf initBranch.sub)
+  -- Build initial frontier: skip + simplified initial frontier seeds
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   for b in initialFrontier do
-    let pb := projectBranch closedRegs ip_reg closedNeedsMem 4 b
-    let sig := computePCSignature closure pb.pc
-    let key : SigDedupKey := ⟨dedupSubHash pb.sub, sig⟩
-    unless sigSeen.contains key do
-      sigSeen := sigSeen.insert key
-      frontier := frontier.push pb
-  -- Seed projected initial frontier into current set
+    -- Apply load-after-store + const simplification, then zero non-projected regs
+    match simplifyBranchFull b with
+    | none => pure ()  -- unsatisfiable after simplification, skip
+    | some sb =>
+      let zb := zeroNonProjected closedRegs ip_reg sb
+      let key := projHashOf zb.sub
+      unless projSeen.contains key do
+        projSeen := projSeen.insert key
+        frontier := frontier.push zb
+  -- Seed initial frontier into current set
   for b in frontier do
     current := current.insert b
   log s!"    initial frontier: {frontier.size} branches (skip + {initialFrontier.size} call-expanded)"
-  -- Expression depth limit for truncation after composition.
-  -- Depth 4 preserves `load(mem, add64(reg, const))` patterns (depth 3)
-  -- while bounding growth from repeated composition.
-  let exprDepthLimit : Nat := 4
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     -- Pure composition: no summary interception, body has no call branches
     let (composed, pairsComposed, skipped, dropped) :=
       composeBranchArrayIndexed ip_reg bodyArr frontier
-    -- Project + truncate composed branches to bounded depth
-    let projected := composed.map (projectBranch closedRegs ip_reg closedNeedsMem exprDepthLimit)
+    -- Simplify: load-after-store + constant folding + zero non-projected
+    let mut simplified : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    let mut droppedSimplify : Nat := 0
+    for b in composed do
+      match simplifyBranchFull b with
+      | none => droppedSimplify := droppedSimplify + 1
+      | some sb => simplified := simplified.push (zeroNonProjected closedRegs ip_reg sb)
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
-    let mut sigCollapsed : Nat := 0
-    for b in projected do
+    let mut projCollapsed : Nat := 0
+    for b in simplified do
       if current.contains b then
         dupes := dupes + 1
       else
-        let sig := computePCSignature closure b.pc
-        let key : SigDedupKey := ⟨dedupSubHash b.sub, sig⟩
-        if sigSeen.contains key then
-          sigCollapsed := sigCollapsed + 1
+        current := current.insert b  -- ALL distinct branches kept for summary
+        let key := projHashOf b.sub
+        if projSeen.contains key then
+          projCollapsed := projCollapsed + 1
         else
-          sigSeen := sigSeen.insert key
-          newBranches := newBranches.push b
-    for b in newBranches do
-      current := current.insert b
+          projSeen := projSeen.insert key
+          newBranches := newBranches.push b  -- only new proj classes go to frontier
     let t_end ← IO.monoMsNow
-    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} {t_end - t_start}ms"
+    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} |proj_classes|={projSeen.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} proj_collapsed={projCollapsed} {t_end - t_start}ms"
     if newBranches.size == 0 then
       -- Collect all branches as array for the summary
       let summaryArr := current.toArray
