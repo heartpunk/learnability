@@ -158,8 +158,52 @@ def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq 
   let skipped := totalPairs - composed_count
   return (result, composed_count, skipped, dropped)
 
+/-- Rip-indexed composition with inline dedup.
+    Combines compose + simplify + HashSet dedup in a single pass.
+    No intermediate array allocated.
+    Returns (newBranches, updatedCurrent, pairsComposed, skipped, dropped, dupes). -/
+def composeAndDedup {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [BEq Reg]
+    (ip_reg : Reg) (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg))) :
+    Array (Branch (SymSub Reg) (SymPC Reg)) × Std.HashSet (Branch (SymSub Reg) (SymPC Reg))
+      × Nat × Nat × Nat × Nat := Id.run do
+  let isa := vexSummaryISA Reg
+  -- Build frontier index
+  let mut frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
+  let mut frontierNoRip : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  for f in frontierArr do
+    match extractRipGuard ip_reg f.pc with
+    | some addr =>
+      let arr := frontierByRip.getD addr #[]
+      frontierByRip := frontierByRip.insert addr (arr.push f)
+    | none => frontierNoRip := frontierNoRip.push f
+  -- Compose, simplify, and dedup in one pass
+  let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut cur := current
+  let mut dropped : Nat := 0
+  let mut dupes : Nat := 0
+  let mut composed_count : Nat := 0
+  let totalPairs := bodyArr.size * frontierArr.size
+  for b in bodyArr do
+    let compatible := match extractRipTarget ip_reg b.sub with
+      | some target => (frontierByRip.getD target #[]) ++ frontierNoRip
+      | none => frontierArr
+    for f in compatible do
+      composed_count := composed_count + 1
+      let composed := b.compose isa f
+      match simplifyBranch composed with
+      | none => dropped := dropped + 1
+      | some b' =>
+        if cur.contains b' then
+          dupes := dupes + 1
+        else
+          newBranches := newBranches.push b'
+          cur := cur.insert b'
+  let skipped := totalPairs - composed_count
+  return (newBranches, cur, composed_count, skipped, dropped, dupes)
+
 /-- Fast incremental stabilization using HashSet for O(1) membership.
-    Uses rip-indexed composition to skip incompatible body-frontier pairs. -/
+    Uses rip-indexed composition with inline dedup — no intermediate arrays. -/
 def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
@@ -175,16 +219,11 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       h.putStrLn msg
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
-    let (composed, pairsComposed, skipped, dropped) :=
-      composeBranchArrayIndexed ip_reg bodyArr frontier
-    let t_compose ← IO.monoMsNow
-    let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-    for b in composed do
-      if !current.contains b then
-        newBranches := newBranches.push b
-        current := current.insert b
-    let t_dedup ← IO.monoMsNow
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |composed|={composed.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} compose={t_compose - t_start}ms dedup={t_dedup - t_compose}ms"
+    let (newBranches, current', pairsComposed, skipped, dropped, dupes) :=
+      composeAndDedup ip_reg bodyArr frontier current
+    current := current'
+    let t_end ← IO.monoMsNow
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} time={t_end - t_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
