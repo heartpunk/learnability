@@ -72,135 +72,132 @@ def composeBranchFinsetsSimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     | none => ∅
     | some b' => {b'})
 
-/-! ## Branch Subsumption Pruning (Semantic)
+/-! ## Branch Subsumption Pruning (SMT-based)
 
 A branch B1 is *subsumed* by B2 if they have the same substitution and B1's
 path condition semantically implies B2.pc — every concrete state satisfying
 B1.pc also satisfies B2.pc. B1 is then redundant (B2 covers a superset of
 states with the same effect).
 
-We use concrete evaluation on critical boundary values: for each register that
-appears in the PCs, we test with all constants that appear in comparisons ± 1,
-plus 0 and max. This is complete for piecewise-constant predicates (which our
-tokenizer PCs are — they compare registers against fixed constants). -/
+We use z3 (QF_BV theory) for exact semantic implication checking:
+  stronger → weaker  ⟺  (stronger ∧ ¬weaker) is UNSAT
+Queries are batched into a single z3 invocation per sub-hash group using
+push/pop for efficiency. -/
 
 /-- Collect the top-level conjuncts of a PC into a list. -/
 partial def SymPC.conjuncts {Reg : Type} : SymPC Reg → List (SymPC Reg)
   | .and φ ψ => SymPC.conjuncts φ ++ SymPC.conjuncts ψ
   | pc => [pc]
 
-/-- Collect all registers appearing in a SymExpr. -/
-partial def SymExpr.collectRegs {Reg : Type} [BEq Reg] [Hashable Reg]
-    : SymExpr Reg → Std.HashSet Reg → Std.HashSet Reg
+instance : ToString Amd64Reg where
+  toString
+    | .rax => "rax" | .rcx => "rcx" | .rdx => "rdx" | .rsi => "rsi"
+    | .rbp => "rbp" | .rsp => "rsp" | .rdi => "rdi" | .rip => "rip"
+    | .cc_op => "cc_op" | .cc_dep1 => "cc_dep1" | .cc_dep2 => "cc_dep2" | .cc_ndep => "cc_ndep"
+
+/-- SMT-LIB2 width suffix for memory operations. -/
+def Width.toSMTWidth : Width → String
+  | .w8 => "8" | .w16 => "16" | .w32 => "32" | .w64 => "64"
+
+/-- Encode a SymExpr as an SMT-LIB2 bitvector expression (64-bit). -/
+mutual
+partial def SymExpr.toSMTLib {Reg : Type} [ToString Reg] : SymExpr Reg → String
+  | .const v => s!"(_ bv{v.toNat} 64)"
+  | .reg r => s!"reg_{toString r}"
+  | .low32 e => s!"((_ zero_extend 32) ((_ extract 31 0) {SymExpr.toSMTLib e}))"
+  | .uext32 e => s!"((_ zero_extend 32) ((_ extract 31 0) {SymExpr.toSMTLib e}))"
+  | .sext8to32 e => s!"((_ zero_extend 32) ((_ sign_extend 24) ((_ extract 7 0) {SymExpr.toSMTLib e})))"
+  | .sext32to64 e => s!"((_ sign_extend 32) ((_ extract 31 0) {SymExpr.toSMTLib e}))"
+  | .sub32 l r => s!"((_ zero_extend 32) (bvsub ((_ extract 31 0) {SymExpr.toSMTLib l}) ((_ extract 31 0) {SymExpr.toSMTLib r})))"
+  | .shl32 l r => s!"((_ zero_extend 32) (bvshl ((_ extract 31 0) {SymExpr.toSMTLib l}) ((_ extract 31 0) {SymExpr.toSMTLib r})))"
+  | .add64 l r => s!"(bvadd {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .sub64 l r => s!"(bvsub {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .xor64 l r => s!"(bvxor {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .and64 l r => s!"(bvand {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .or64 l r => s!"(bvor {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .shl64 l r => s!"(bvshl {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .shr64 l r => s!"(bvlshr {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .load w m addr => s!"(load_{w.toSMTWidth} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr})"
+
+/-- Encode a SymMem as an SMT-LIB2 expression (uninterpreted sort). -/
+partial def SymMem.toSMTLib {Reg : Type} [ToString Reg] : SymMem Reg → String
+  | .base => "base_mem"
+  | .store w m addr val =>
+    s!"(store_{w.toSMTWidth} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr} {SymExpr.toSMTLib val})"
+end
+
+/-- Encode a SymPC as an SMT-LIB2 boolean formula.
+    Uses unsigned comparison (bvult/bvule) matching evalSymPC semantics. -/
+partial def SymPC.toSMTLib {Reg : Type} [ToString Reg] : SymPC Reg → String
+  | .true => "true"
+  | .eq l r => s!"(= {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .lt l r => s!"(bvult {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .le l r => s!"(bvule {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .and φ ψ => s!"(and {SymPC.toSMTLib φ} {SymPC.toSMTLib ψ})"
+  | .not φ => s!"(not {SymPC.toSMTLib φ})"
+
+/-- Collect all register names appearing in a SymPC (for variable declarations). -/
+partial def SymExpr.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
+    : SymExpr Reg → Std.HashSet String → Std.HashSet String
   | .const _, s => s
-  | .reg r, s => s.insert r
-  | .low32 e, s => SymExpr.collectRegs e s
-  | .uext32 e, s => SymExpr.collectRegs e s
-  | .sext8to32 e, s => SymExpr.collectRegs e s
-  | .sext32to64 e, s => SymExpr.collectRegs e s
-  | .sub32 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
-  | .shl32 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
-  | .add64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
-  | .sub64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
-  | .xor64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
-  | .and64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
-  | .or64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
-  | .shl64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
-  | .shr64 l r, s => SymExpr.collectRegs r (SymExpr.collectRegs l s)
-  | .load _ _ addr, s => SymExpr.collectRegs addr s
+  | .reg r, s => s.insert s!"reg_{toString r}"
+  | .low32 e, s => SymExpr.collectRegNames e s
+  | .uext32 e, s => SymExpr.collectRegNames e s
+  | .sext8to32 e, s => SymExpr.collectRegNames e s
+  | .sext32to64 e, s => SymExpr.collectRegNames e s
+  | .sub32 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .shl32 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .add64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .sub64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .xor64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .and64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .or64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .shl64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .shr64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .load _ _ addr, s => SymExpr.collectRegNames addr s
 
-/-- Collect all constants appearing in a SymExpr. -/
-partial def SymExpr.collectConsts {Reg : Type}
-    : SymExpr Reg → Std.HashSet UInt64 → Std.HashSet UInt64
-  | .const v, s => s.insert v
-  | .reg _, s => s
-  | .low32 e, s => SymExpr.collectConsts e s
-  | .uext32 e, s => SymExpr.collectConsts e s
-  | .sext8to32 e, s => SymExpr.collectConsts e s
-  | .sext32to64 e, s => SymExpr.collectConsts e s
-  | .sub32 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
-  | .shl32 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
-  | .add64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
-  | .sub64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
-  | .xor64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
-  | .and64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
-  | .or64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
-  | .shl64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
-  | .shr64 l r, s => SymExpr.collectConsts r (SymExpr.collectConsts l s)
-  | .load _ _ addr, s => SymExpr.collectConsts addr s
+partial def SymPC.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
+    : SymPC Reg → Std.HashSet String → Std.HashSet String
+  | .true, s => s
+  | .eq l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .lt l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .le l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .and φ ψ, s => SymPC.collectRegNames ψ (SymPC.collectRegNames φ s)
+  | .not φ, s => SymPC.collectRegNames φ s
 
-/-- Collect registers and constants from a SymPC. -/
-partial def SymPC.collectRegsConsts {Reg : Type} [BEq Reg] [Hashable Reg]
-    : SymPC Reg → Std.HashSet Reg → Std.HashSet UInt64
-    → Std.HashSet Reg × Std.HashSet UInt64
-  | .true, rs, cs => (rs, cs)
-  | .eq l r, rs, cs => (SymExpr.collectRegs r (SymExpr.collectRegs l rs), SymExpr.collectConsts r (SymExpr.collectConsts l cs))
-  | .lt l r, rs, cs => (SymExpr.collectRegs r (SymExpr.collectRegs l rs), SymExpr.collectConsts r (SymExpr.collectConsts l cs))
-  | .le l r, rs, cs => (SymExpr.collectRegs r (SymExpr.collectRegs l rs), SymExpr.collectConsts r (SymExpr.collectConsts l cs))
-  | .and φ ψ, rs, cs =>
-    let (rs', cs') := SymPC.collectRegsConsts φ rs cs
-    SymPC.collectRegsConsts ψ rs' cs'
-  | .not φ, rs, cs => SymPC.collectRegsConsts φ rs cs
+/-- Check if a SymPC mentions any memory loads (which need uninterpreted function decls). -/
+mutual
+partial def SymExpr.hasLoad {Reg : Type} : SymExpr Reg → Bool
+  | .load _ _ _ => true
+  | .const _ | .reg _ => false
+  | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => SymExpr.hasLoad e
+  | .sub32 l r | .shl32 l r | .add64 l r | .sub64 l r | .xor64 l r
+  | .and64 l r | .or64 l r | .shl64 l r | .shr64 l r => SymExpr.hasLoad l || SymExpr.hasLoad r
 
-/-- Generate critical test values from constants: each constant, ± 1, plus 0. -/
-def criticalValues (consts : Std.HashSet UInt64) : Array UInt64 := Id.run do
-  let mut vals : Std.HashSet UInt64 := {}
-  vals := vals.insert 0
-  for c in consts do
-    vals := vals.insert c
-    vals := vals.insert (c - 1)
-    vals := vals.insert (c + 1)
-  return vals.toArray
+partial def SymMem.hasLoad {Reg : Type} : SymMem Reg → Bool
+  | .base => false
+  | .store _ m addr val => SymMem.hasLoad m || SymExpr.hasLoad addr || SymExpr.hasLoad val
+end
 
-/-- Generate all assignments of `vals` to `regs` (Cartesian product).
-    Returns array of (Reg → UInt64) functions.
-    Caps at `maxPoints` to avoid combinatorial explosion. -/
-def generateTestPoints {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (regs : Array Reg) (vals : Array UInt64) (baseEnv : Reg → UInt64)
-    (maxPoints : Nat := 10000) :
-    Array (ConcreteState Reg) := Id.run do
-  if regs.size == 0 then
-    return #[⟨baseEnv, ByteMem.empty⟩]
-  -- Build assignments iteratively
-  let mut envs : Array (Reg → UInt64) := #[baseEnv]
-  for reg in regs do
-    let mut nextEnvs : Array (Reg → UInt64) := #[]
-    for env in envs do
-      for v in vals do
-        if nextEnvs.size >= maxPoints then break
-        nextEnvs := nextEnvs.push (fun r => if r == reg then v else env r)
-      if nextEnvs.size >= maxPoints then break
-    envs := nextEnvs
-  return envs.map (fun e => ⟨e, ByteMem.empty⟩)
+partial def SymPC.hasLoad {Reg : Type} : SymPC Reg → Bool
+  | .true => false
+  | .eq l r | .lt l r | .le l r => SymExpr.hasLoad l || SymExpr.hasLoad r
+  | .and φ ψ => SymPC.hasLoad φ || SymPC.hasLoad ψ
+  | .not φ => SymPC.hasLoad φ
 
-/-- Semantic implication check: does `stronger` imply `weaker`?
-    Evaluates both PCs on critical boundary values. If `stronger` is true at
-    any point where `weaker` is false, returns false (not implied).
-    Sound for piecewise-constant PCs over the tested constants. -/
-def SymPC.semanticImplies {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    [BEq Reg] [Hashable Reg]
-    (stronger weaker : SymPC Reg) (baseEnv : Reg → UInt64) : Bool := Id.run do
-  if stronger == weaker then return true
-  -- Collect registers and constants from both PCs
-  let (regs1, consts1) := SymPC.collectRegsConsts stronger {} {}
-  let (regs2, consts2) := SymPC.collectRegsConsts weaker regs1 consts1
-  let allRegs := regs2.toArray
-  let allConsts := consts2
-  let vals := criticalValues allConsts
-  -- Generate test points and check implication
-  let points := generateTestPoints allRegs vals baseEnv
-  for state in points do
-    if evalSymPC state stronger && !(evalSymPC state weaker) then
-      return false  -- Found a counterexample
-  return true
-
-/-- Check if branch `b1` is subsumed by branch `b2`:
-    same substitution, and b1's PC semantically implies b2's PC.
-    If so, b1 is redundant (b2 covers a superset of states with same effect). -/
-def branchSubsumedBy {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    [BEq Reg] [Hashable Reg]
-    (b1 b2 : Branch (SymSub Reg) (SymPC Reg)) (baseEnv : Reg → UInt64) : Bool :=
-  b1.sub == b2.sub && b1.pc != b2.pc && SymPC.semanticImplies b1.pc b2.pc baseEnv
+/-- Build the SMT-LIB2 preamble: logic, register declarations, and memory
+    declarations if any PCs involve loads. -/
+def smtPreamble (regNames : Std.HashSet String) (needsMem : Bool) : String := Id.run do
+  let mut s := "(set-logic QF_UFBV)\n"
+  for name in regNames do
+    s := s ++ s!"(declare-const {name} (_ BitVec 64))\n"
+  if needsMem then
+    s := s ++ "(declare-sort Mem 0)\n"
+    s := s ++ "(declare-const base_mem Mem)\n"
+    for w in ["8", "16", "32", "64"] do
+      s := s ++ s!"(declare-fun load_{w} (Mem (_ BitVec 64)) (_ BitVec 64))\n"
+      s := s ++ s!"(declare-fun store_{w} (Mem (_ BitVec 64) (_ BitVec 64)) Mem)\n"
+  return s
 
 /-! ## PC-Signature Equivalence Class Dedup
 
@@ -481,7 +478,7 @@ def composeAndDedupParallel {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashab
 /-- Fast incremental stabilization using HashSet for O(1) membership.
     Single-threaded rip-indexed composition with inline dedup.
     Includes PC-signature equivalence class dedup and subsumption pruning. -/
-def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
+def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg] [ToString Reg]
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
   let isa := vexSummaryISA Reg
@@ -526,31 +523,63 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
         else
           sigSeen := sigSeen.insert key
           newBranches := newBranches.push b
-    -- Semantic subsumption: prune new branches that are subsumed by existing ones
+    -- Semantic subsumption via z3: batch check new branches against existing
     let t_prune_start ← IO.monoMsNow
-    let baseEnv : Reg → UInt64 := fun _ => 0
     let mut prunedCount : Nat := 0
-    let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-    -- For each new branch, check if any EXISTING branch with same sub subsumes it
-    -- (i.e., existing has a weaker PC — covers more states with same effect)
+    -- Build (stronger_pc, weaker_pc) pairs and track which new branch each belongs to
+    let mut pcPairs : Array (SymPC Reg × SymPC Reg) := #[]
+    let mut queryBranchIdx : Array Nat := #[]
+    let mut branchIdx : Nat := 0
     for bi in newBranches do
-      let mut subsumed := false
       let h := hash bi.sub
       let existingGroup := allBranchesBySub.getD h #[]
       for bj in existingGroup do
-        if bi.pc != bj.pc && SymPC.semanticImplies bi.pc bj.pc baseEnv then
-          subsumed := true
-          break
-      -- Also check within new branches
-      if !subsumed then
-        for bj in survivingNew do
-          if bi.sub == bj.sub && bi.pc != bj.pc && SymPC.semanticImplies bi.pc bj.pc baseEnv then
-            subsumed := true
-            break
-      if subsumed then
+        if bi.pc != bj.pc then
+          pcPairs := pcPairs.push (bi.pc, bj.pc)
+          queryBranchIdx := queryBranchIdx.push branchIdx
+      branchIdx := branchIdx + 1
+    -- Call z3 with all queries at once
+    let mut subsumedSet : Std.HashSet Nat := {}
+    if pcPairs.size > 0 then
+      -- Collect register names and check for memory ops
+      let mut regNames : Std.HashSet String := {}
+      let mut needsMem := false
+      for (stronger, weaker) in pcPairs do
+        regNames := SymPC.collectRegNames stronger regNames
+        regNames := SymPC.collectRegNames weaker regNames
+        if SymPC.hasLoad stronger || SymPC.hasLoad weaker then needsMem := true
+      -- Generate SMT-LIB2 script
+      let mut script := smtPreamble regNames needsMem
+      for (stronger, weaker) in pcPairs do
+        script := script ++ "(push)\n"
+        script := script ++ s!"(assert (and {SymPC.toSMTLib stronger} (not {SymPC.toSMTLib weaker})))\n"
+        script := script ++ "(check-sat)\n"
+        script := script ++ "(pop)\n"
+      script := script ++ "(exit)\n"
+      -- Write and invoke z3
+      let tmpFile : System.FilePath := ".lake/smt_subsumption.smt2"
+      IO.FS.writeFile tmpFile script
+      let result ← IO.Process.output {
+        cmd := "z3"
+        args := #[tmpFile.toString]
+      }
+      -- Parse results
+      let lines := result.stdout.splitOn "\n" |>.filter (· != "")
+      for i in [:pcPairs.size] do
+        if h : i < lines.length then
+          if lines[i] == "unsat" then
+            if h2 : i < queryBranchIdx.size then
+              subsumedSet := subsumedSet.insert queryBranchIdx[i]
+      log s!"    z3: {pcPairs.size} queries, {lines.length} results, {subsumedSet.size} subsumed"
+    -- Filter new branches
+    let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    branchIdx := 0
+    for bi in newBranches do
+      if subsumedSet.contains branchIdx then
         prunedCount := prunedCount + 1
       else
         survivingNew := survivingNew.push bi
+      branchIdx := branchIdx + 1
     newBranches := survivingNew
     -- Update tracking structures with surviving new branches
     for b in newBranches do
