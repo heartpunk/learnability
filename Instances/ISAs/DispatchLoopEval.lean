@@ -210,12 +210,9 @@ partial def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
           resolveLoadFrom loadWidth innerMem loadAddr  -- different constant addrs, skip store
         else
           .load loadWidth mem loadAddr  -- same const but different width, keep as-is
-      -- Non-matching non-constant addresses: skip store if syntactically different
-      | _ =>
-        if storeAddr != loadAddr then
-          resolveLoadFrom loadWidth innerMem loadAddr
-        else
-          .load loadWidth mem loadAddr
+      -- Non-constant addresses that don't match: can't determine statically,
+      -- keep as-is (conservative/sound — may leave loads unresolved)
+      | _ => .load loadWidth mem loadAddr
 
 /-- Simplify store chains in a SymMem. -/
 partial def simplifyLoadStoreMem {Reg : Type} [DecidableEq Reg] : SymMem Reg → SymMem Reg
