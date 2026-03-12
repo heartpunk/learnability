@@ -118,7 +118,61 @@ partial def exprSummary {Reg : Type} [ToString Reg] : SymExpr Reg → Nat → St
 end
 
 mutual
-/-- Simplify load-after-store patterns in a SymExpr. -/
+/-- Fold nested add64/sub64 with constants.
+    Normalizes stack arithmetic so load/store addresses match.
+    e.g. add64(add64(x, C(8)), C(8)) → add64(x, C(16))
+         sub64(sub64(x, C(8)), C(16)) → sub64(x, C(24))
+         sub64(add64(x, C(16)), C(8)) → add64(x, C(8)) -/
+partial def foldAdd64 {Reg : Type} [DecidableEq Reg]
+    (a b : SymExpr Reg) : SymExpr Reg :=
+  match a, b with
+  -- const + const
+  | .const x, .const y => .const (x + y)
+  -- add(x, c1) + c2 → add(x, c1+c2)
+  | .add64 x (.const c1), .const c2 =>
+    let c := c1 + c2
+    if c == 0 then x else .add64 x (.const c)
+  -- c1 + add(x, c2) → add(x, c1+c2)
+  | .const c1, .add64 x (.const c2) =>
+    let c := c1 + c2
+    if c == 0 then x else .add64 x (.const c)
+  -- sub(x, c1) + c2 → if c2 ≥ c1: add(x, c2-c1), else sub(x, c1-c2)
+  | .sub64 x (.const c1), .const c2 =>
+    if c2 == c1 then x
+    else if c2 > c1 then .add64 x (.const (c2 - c1))
+    else .sub64 x (.const (c1 - c2))
+  -- c1 + sub(x, c2) → same
+  | .const c1, .sub64 x (.const c2) =>
+    if c1 == c2 then x
+    else if c1 > c2 then .add64 x (.const (c1 - c2))
+    else .sub64 x (.const (c2 - c1))
+  -- x + 0 → x
+  | x, .const 0 => x
+  -- 0 + x → x
+  | .const 0, x => x
+  -- c + x → add(x, c) (normalize constant to right)
+  | .const c, x => .add64 x (.const c)
+  | _, _ => .add64 a b
+
+partial def foldSub64 {Reg : Type} [DecidableEq Reg]
+    (a b : SymExpr Reg) : SymExpr Reg :=
+  match a, b with
+  -- const - const
+  | .const x, .const y => .const (x - y)
+  -- sub(x, c1) - c2 → sub(x, c1+c2)
+  | .sub64 x (.const c1), .const c2 =>
+    let c := c1 + c2
+    if c == 0 then x else .sub64 x (.const c)
+  -- add(x, c1) - c2 → if c1 ≥ c2: add(x, c1-c2), else sub(x, c2-c1)
+  | .add64 x (.const c1), .const c2 =>
+    if c1 == c2 then x
+    else if c1 > c2 then .add64 x (.const (c1 - c2))
+    else .sub64 x (.const (c2 - c1))
+  -- x - 0 → x
+  | x, .const 0 => x
+  | _, _ => .sub64 a b
+
+/-- Simplify: load-after-store resolution + arithmetic constant folding. -/
 partial def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymExpr Reg
   | .const v => .const v
   | .reg r => .reg r
@@ -128,8 +182,8 @@ partial def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg �
   | .sext32to64 x => .sext32to64 (simplifyLoadStoreExpr x)
   | .sub32 a b => .sub32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .shl32 a b => .shl32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
-  | .add64 a b => .add64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
-  | .sub64 a b => .sub64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .add64 a b => foldAdd64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .sub64 a b => foldSub64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .xor64 a b => .xor64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .and64 a b => .and64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .or64 a b => .or64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
@@ -156,7 +210,12 @@ partial def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
           resolveLoadFrom loadWidth innerMem loadAddr  -- different constant addrs, skip store
         else
           .load loadWidth mem loadAddr  -- same const but different width, keep as-is
-      | _ => .load loadWidth mem loadAddr  -- can't determine, keep as-is
+      -- Non-matching non-constant addresses: skip store if syntactically different
+      | _ =>
+        if storeAddr != loadAddr then
+          resolveLoadFrom loadWidth innerMem loadAddr
+        else
+          .load loadWidth mem loadAddr
 
 /-- Simplify store chains in a SymMem. -/
 partial def simplifyLoadStoreMem {Reg : Type} [DecidableEq Reg] : SymMem Reg → SymMem Reg
@@ -1270,7 +1329,7 @@ def stratifiedFixpoint
       log s!"    {fname}: split body {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, {branchesAdded} branches, {droppedExp} dropped)"
       -- Step 2: Run stabilization on non-call body, seeding call results as initial frontier
       let oldSummary := summaries.getD func.entryAddr #[]
-      match ← computeFunctionStabilization ip_reg nonCallBody {} 8 log (initialFrontier := callResults) with
+      match ← computeFunctionStabilization ip_reg nonCallBody {} 30 log (initialFrontier := callResults) with
       | some (k, newSummary) =>
         let t1 ← IO.monoMsNow
         if newSummary.size != oldSummary.size then
