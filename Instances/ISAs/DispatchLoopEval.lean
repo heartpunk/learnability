@@ -69,49 +69,47 @@ representations that:
    constants, so genuinely different states remain distinguished) -/
 
 mutual
-partial def SymExpr.truncateAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
+partial def truncateExprAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
     (maxDepth : Nat) : SymExpr Reg → SymExpr Reg
   | e@(.const _) => e
   | e@(.reg _) => e
-  | e => if maxDepth == 0 then .const (hash e).val else
+  | e => if maxDepth == 0 then .const (hash e) else
     match e with
-    | .low32 x => .low32 (x.truncateAtDepth (maxDepth - 1))
-    | .uext32 x => .uext32 (x.truncateAtDepth (maxDepth - 1))
-    | .sext8to32 x => .sext8to32 (x.truncateAtDepth (maxDepth - 1))
-    | .sext32to64 x => .sext32to64 (x.truncateAtDepth (maxDepth - 1))
-    | .sub32 a b => .sub32 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
-    | .shl32 a b => .shl32 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
-    | .add64 a b => .add64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
-    | .sub64 a b => .sub64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
-    | .xor64 a b => .xor64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
-    | .and64 a b => .and64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
-    | .or64 a b => .or64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
-    | .shl64 a b => .shl64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
-    | .shr64 a b => .shr64 (a.truncateAtDepth (maxDepth - 1)) (b.truncateAtDepth (maxDepth - 1))
-    | .load w m a => .load w (m.truncateAtDepth (maxDepth - 1)) (a.truncateAtDepth (maxDepth - 1))
-    | .const _ => e  -- already handled above
-    | .reg _ => e  -- already handled above
+    | .low32 x => .low32 (truncateExprAtDepth (maxDepth - 1) x)
+    | .uext32 x => .uext32 (truncateExprAtDepth (maxDepth - 1) x)
+    | .sext8to32 x => .sext8to32 (truncateExprAtDepth (maxDepth - 1) x)
+    | .sext32to64 x => .sext32to64 (truncateExprAtDepth (maxDepth - 1) x)
+    | .sub32 a b => .sub32 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
+    | .shl32 a b => .shl32 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
+    | .add64 a b => .add64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
+    | .sub64 a b => .sub64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
+    | .xor64 a b => .xor64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
+    | .and64 a b => .and64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
+    | .or64 a b => .or64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
+    | .shl64 a b => .shl64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
+    | .shr64 a b => .shr64 (truncateExprAtDepth (maxDepth - 1) a) (truncateExprAtDepth (maxDepth - 1) b)
+    | .load w m a => .load w (truncateMemAtDepth (maxDepth - 1) m) (truncateExprAtDepth (maxDepth - 1) a)
+    | .const _ => e
+    | .reg _ => e
 
-partial def SymMem.truncateAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
+partial def truncateMemAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
     (maxDepth : Nat) : SymMem Reg → SymMem Reg
   | .base => .base
-  | m@(.store _ _ _ _) => if maxDepth == 0 then .base else
-    match m with
-    | .store w mem addr val =>
-      .store w (mem.truncateAtDepth (maxDepth - 1))
-             (SymExpr.truncateAtDepth (maxDepth - 1) addr)
-             (SymExpr.truncateAtDepth (maxDepth - 1) val)
-    | .base => .base  -- already handled
+  | .store w mem addr val =>
+    if maxDepth == 0 then .base
+    else .store w (truncateMemAtDepth (maxDepth - 1) mem)
+                  (truncateExprAtDepth (maxDepth - 1) addr)
+                  (truncateExprAtDepth (maxDepth - 1) val)
 end
 
-partial def SymPC.truncateAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
+partial def truncatePCAtDepth {Reg : Type} [Hashable Reg] [Hashable (SymExpr Reg)] [Hashable (SymMem Reg)]
     (maxDepth : Nat) : SymPC Reg → SymPC Reg
   | .true => .true
-  | .eq a b => .eq (a.truncateAtDepth maxDepth) (b.truncateAtDepth maxDepth)
-  | .lt a b => .lt (a.truncateAtDepth maxDepth) (b.truncateAtDepth maxDepth)
-  | .le a b => .le (a.truncateAtDepth maxDepth) (b.truncateAtDepth maxDepth)
-  | .and φ ψ => .and (SymPC.truncateAtDepth maxDepth φ) (SymPC.truncateAtDepth maxDepth ψ)
-  | .not φ => .not (SymPC.truncateAtDepth maxDepth φ)
+  | .eq a b => .eq (truncateExprAtDepth maxDepth a) (truncateExprAtDepth maxDepth b)
+  | .lt a b => .lt (truncateExprAtDepth maxDepth a) (truncateExprAtDepth maxDepth b)
+  | .le a b => .le (truncateExprAtDepth maxDepth a) (truncateExprAtDepth maxDepth b)
+  | .and φ ψ => .and (truncatePCAtDepth maxDepth φ) (truncatePCAtDepth maxDepth ψ)
+  | .not φ => .not (truncatePCAtDepth maxDepth φ)
 
 /-- Project a branch onto the closed register set, zeroing non-projected
     registers and truncating all expressions to bounded depth.
@@ -125,11 +123,11 @@ def projectBranch {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
     regs := fun r =>
       if r == ip_reg then b.sub.regs r  -- keep rip as-is (needed for routing)
       else if projectedRegs.contains r then
-        (b.sub.regs r).truncateAtDepth exprDepth
+        truncateExprAtDepth exprDepth (b.sub.regs r)
       else .const 0  -- zero out non-projected registers
-    mem := if needsMem then b.sub.mem.truncateAtDepth exprDepth else .base
+    mem := if needsMem then truncateMemAtDepth exprDepth b.sub.mem else .base
   }
-  ⟨projSub, b.pc.truncateAtDepth exprDepth⟩
+  ⟨projSub, truncatePCAtDepth exprDepth b.pc⟩
 
 /-! ## Simplified Composition
 
