@@ -531,7 +531,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   -- A new branch is only added if its signature class hasn't been seen before.
   let mut sigSeen : Std.HashSet SigDedupKey := {}
   let initSig := computePCSignature closure initBranch.pc
-  sigSeen := sigSeen.insert ⟨hash initBranch.sub, initSig⟩
+  -- initSigKey inserted after closedness check determines dedupSubHash
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   -- allBranchesBySub: sub hash → array of branches, for efficient subsumption check
   let mut allBranchesBySub : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
@@ -550,6 +550,45 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     if SymPC.hasLoad pc then dataPCsHaveLoads := true
   let dataPCRegsArr := dataPCRegs.toArray
   log s!"  data PC regs: [{", ".intercalate (dataPCRegsArr.toList.map toString)}] ({dataPCRegsArr.size} regs, loads={dataPCsHaveLoads})"
+  -- Closedness check: for each body branch, check that the sub's expressions
+  -- for projected registers only reference projected registers (+ memory if loads present).
+  -- If closed, projection-based dedup is exact. If not, fall back to full sub hash.
+  let mut projectionClosed := true
+  let mut closednessViolations : Array (String × String) := #[]
+  for b in bodyArr do
+    for r in dataPCRegsArr do
+      let expr := b.sub.regs r
+      let exprRegs := SymExpr.collectRegsHS expr {}
+      for er in exprRegs do
+        unless dataPCRegs.contains er || er == ip_reg do
+          projectionClosed := false
+          closednessViolations := closednessViolations.push (toString r, toString er)
+    -- If data PCs have loads, check that memory expressions also only reference projected regs
+    if dataPCsHaveLoads then
+      let memRegs := SymMem.collectRegsHS b.sub.mem {}
+      for mr in memRegs do
+        unless dataPCRegs.contains mr || mr == ip_reg do
+          projectionClosed := false
+          closednessViolations := closednessViolations.push ("mem", toString mr)
+  let useProjection := projectionClosed
+  if useProjection then
+    log s!"  projection CLOSED — using projection-based dedup (exact)"
+  else
+    log s!"  projection NOT closed — falling back to full sub hash"
+    for (target, dep) in closednessViolations.toList.take 10 do
+      log s!"    violation: body sub for {target} references non-projected reg {dep}"
+  -- Helper: compute projection hash for a sub
+  let projHashOf (sub : SymSub Reg) : UInt64 := Id.run do
+    let mut h : UInt64 := 0
+    for r in dataPCRegsArr do
+      h := mixHash h (hash (sub.regs r))
+    if dataPCsHaveLoads then h := mixHash h (hash sub.mem)
+    return h
+  -- Helper: compute dedup key hash (projection if closed, full sub otherwise)
+  let dedupSubHash (sub : SymSub Reg) : UInt64 :=
+    if useProjection then projHashOf sub else hash sub
+  let initSigKey : SigDedupKey := ⟨dedupSubHash initBranch.sub, initSig⟩
+  sigSeen := sigSeen.insert initSigKey
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     let (composed, pairsComposed, skipped, dropped) :=
@@ -562,9 +601,9 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       if current.contains b then
         dupes := dupes + 1
       else
-        -- Check signature-class dedup
+        -- Check signature-class dedup (uses projection hash if closed)
         let sig := computePCSignature closure b.pc
-        let key : SigDedupKey := ⟨hash b.sub, sig⟩
+        let key : SigDedupKey := ⟨dedupSubHash b.sub, sig⟩
         if sigSeen.contains key then
           sigCollapsed := sigCollapsed + 1
         else
