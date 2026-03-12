@@ -27,6 +27,7 @@
               pkgs.jujutsu
               pkgs.uv
               pkgs.jq
+              pkgs.z3
             ];
             env = {
               UV_NO_MANAGED_PYTHON = "1";
