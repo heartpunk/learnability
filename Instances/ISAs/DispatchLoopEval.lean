@@ -94,10 +94,9 @@ def composeBranchArraySimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 
 /-- Fast incremental stabilization using HashSet for O(1) membership. -/
 def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
-    (bodyDenot : Finset (Branch (SymSub Reg) (SymPC Reg)))
+    (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
   let isa := vexSummaryISA Reg
-  let bodyArr := bodyDenot.val.toList.toArray
   let initBranch := Branch.skip isa
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
   current := current.insert initBranch
@@ -230,8 +229,12 @@ def parseBlocksWithAddresses (blockStrs : List String) :
         let t0 ← IO.monoMsNow
         let body := flatBodyDenot Amd64Reg.rip pairs
         let t1 ← IO.monoMsNow
-        log s!"  N={n}: |bodyDenot|={body.card}, starting stabilization..."
-        match ← computeStabilizationHS body 200 logPath with
+        -- Convert Finset to Array in IO (Finset.toList is noncomputable)
+        let mut bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+        for b in body do
+          bodyArr := bodyArr.push b
+        log s!"  N={n}: |bodyDenot|={bodyArr.size}, starting stabilization..."
+        match ← computeStabilizationHS bodyArr 200 logPath with
         | some (k, card) =>
           let t2 ← IO.monoMsNow
           log s!"{n}, {body.card}, {k}, {card}, {t1 - t0}, {t2 - t1}"
