@@ -1142,23 +1142,29 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       h := mixHash h (hash (sub.regs r))
     if closedNeedsMem then h := mixHash h (hash sub.mem)
     return h
-  -- Convergence dedup uses projHashOf ONLY (not syntactic PC signature).
-  -- Two branches with the same projected sub behave identically in future
-  -- iterations (by closedness), so the PC signature is redundant.
+  -- Convergence dedup uses PC signature: which data guard PCs the branch satisfies.
+  -- After simplification, branches at different call depths have the same resolved
+  -- guard PCs (same token comparisons), so their signatures match even though
+  -- rbp/rsp differ. This is the correct convergence criterion from the theory:
+  -- K ≤ 2^|closure| bounds the number of distinct PC signature classes.
   -- All distinct branches still go into `current` for the final summary.
-  let mut projSeen : Std.HashSet UInt64 := {}
-  projSeen := projSeen.insert (projHashOf initBranch.sub)
+  -- Convergence key: PC signature only. Two branches that satisfy the same
+  -- set of data guard PCs will produce the same guard PC outcomes in future
+  -- iterations, regardless of rbp/rsp/mem differences (call depth).
+  let convKey (b : Branch (SymSub Reg) (SymPC Reg)) : UInt64 :=
+    hashPCSignature (computePCSignature closure b.pc)
+  let mut convSeen : Std.HashSet UInt64 := {}
+  convSeen := convSeen.insert (convKey initBranch)
   -- Build initial frontier: skip + simplified initial frontier seeds
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   for b in initialFrontier do
-    -- Apply load-after-store + const simplification, then zero non-projected regs
     match simplifyBranchFull b with
-    | none => pure ()  -- unsatisfiable after simplification, skip
+    | none => pure ()
     | some sb =>
       let zb := zeroNonProjected closedRegs ip_reg sb
-      let key := projHashOf zb.sub
-      unless projSeen.contains key do
-        projSeen := projSeen.insert key
+      let key := convKey zb
+      unless convSeen.contains key do
+        convSeen := convSeen.insert key
         frontier := frontier.push zb
   -- Seed initial frontier into current set
   for b in frontier do
@@ -1184,14 +1190,14 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
         dupes := dupes + 1
       else
         current := current.insert b  -- ALL distinct branches kept for summary
-        let key := projHashOf b.sub
-        if projSeen.contains key then
+        let key := convKey b
+        if convSeen.contains key then
           projCollapsed := projCollapsed + 1
         else
-          projSeen := projSeen.insert key
-          newBranches := newBranches.push b  -- only new proj classes go to frontier
+          convSeen := convSeen.insert key
+          newBranches := newBranches.push b  -- only new conv classes go to frontier
     let t_end ← IO.monoMsNow
-    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} |proj_classes|={projSeen.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} proj_collapsed={projCollapsed} {t_end - t_start}ms"
+    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} |conv_classes|={convSeen.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} conv_collapsed={projCollapsed} {t_end - t_start}ms"
     -- Diagnostic: dump expression details for first few iterations
     if k ≤ 4 && newBranches.size > 0 then
       -- Aggregate stats across all new branches
