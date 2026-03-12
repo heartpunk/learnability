@@ -120,28 +120,20 @@ def branchSubsumedBy {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 def pruneBranches {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
     (branches : Array (Branch (SymSub Reg) (SymPC Reg))) :
     Array (Branch (SymSub Reg) (SymPC Reg)) × Nat := Id.run do
-  -- Group branches by sub hash for efficient comparison
-  let mut groups : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
-  for b in branches do
-    let h := hash b.sub
-    let arr := groups.getD h #[]
-    groups := groups.insert h (arr.push b)
-  -- Within each group, prune subsumed branches
+  -- For each branch, check if any other branch in the array subsumes it.
+  -- branchSubsumedBy checks sub equality first, so mismatched subs are fast rejects.
   let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
   let mut pruned : Nat := 0
-  for (_, group) in groups.toArray do
-    -- For each branch, check if any other branch in the group subsumes it
-    for b_i in group do
-      let mut subsumed := false
-      for b_j in group do
-        -- b_i is subsumed by b_j if they differ and b_i's PC implies b_j's PC
-        if branchSubsumedBy b_i b_j then
-          subsumed := true
-          break
-      if subsumed then
-        pruned := pruned + 1
-      else
-        result := result.push b_i
+  for bi in branches do
+    let mut subsumed := false
+    for bj in branches do
+      if branchSubsumedBy bi bj then
+        subsumed := true
+        break
+    if subsumed then
+      pruned := pruned + 1
+    else
+      result := result.push bi
   return (result, pruned)
 
 /-! ## PC-Signature Equivalence Class Dedup
@@ -439,6 +431,8 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   let initSig := computePCSignature closure initBranch.pc
   sigSeen := sigSeen.insert ⟨hash initBranch.sub, initSig⟩
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
+  -- allBranches tracks the full accumulated set as an array for subsumption pruning
+  let mut allBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   let log (msg : String) : IO Unit := do
     IO.println msg
     if let some path := logFile then
@@ -466,8 +460,31 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
           sigSeen := sigSeen.insert key
           newBranches := newBranches.push b
           current := current.insert b
+    -- Add new branches to full array for subsumption pruning
+    for b in newBranches do
+      allBranches := allBranches.push b
+    let preSize := allBranches.size
+    -- Prune subsumed branches from the full accumulated set
+    let t_prune_start ← IO.monoMsNow
+    let (prunedArr, prunedCount) := pruneBranches allBranches
+    allBranches := prunedArr
+    -- Rebuild current HashSet from pruned array if anything was pruned
+    if prunedCount > 0 then
+      current := {}
+      for b in allBranches do
+        current := current.insert b
+      -- Rebuild frontier: only keep new branches that survived pruning
+      let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+      for b in newBranches do
+        if current.contains b then
+          survivingNew := survivingNew.push b
+      newBranches := survivingNew
     let t_end ← IO.monoMsNow
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} |sig_classes|={sigSeen.size} time={t_end - t_start}ms"
+    -- Count distinct subs in frontier (diagnostic: how many "paths"?)
+    let mut frontierSubs : Std.HashSet UInt64 := {}
+    for b in newBranches do
+      frontierSubs := frontierSubs.insert (hash b.sub)
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} |distinct_subs|={frontierSubs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} pruned={prunedCount} time={t_end - t_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
@@ -581,13 +598,13 @@ def dispatchLoopEvalMain : IO Unit := do
     IO.println msg
     let h ← IO.FS.Handle.mk logPath .append
     h.putStrLn msg
-  log "=== Dispatch Loop Stabilization: next_sym (PC-signature dedup) ==="
+  log "=== Dispatch Loop Stabilization: next_sym (sig-dedup + subsumption pruning) ==="
   match parseBlocksWithAddresses nextSymBlocks with
   | .error e => log s!"PARSE ERROR: {e}"
   | .ok allPairs =>
     log s!"Total blocks available: {allPairs.length}"
     log "N, |bodyDenot|, K, |S_final|, bodyDenot_ms, stabilization_ms"
-    for n in [60] do
+    for n in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55] do
       if n > allPairs.length then
         log s!"{n}, ---, SKIP (only {allPairs.length} blocks), ---, ---, ---"
       else
