@@ -793,6 +793,247 @@ def parseBlocksWithAddresses (blockStrs : List String) :
     let block ← parseIRSB text
     return (ip, block)
 
+/-! ## Stratified Fixpoint — Per-Function Summaries
+
+Instead of treating all blocks as one flat dispatch loop, compute fixpoints
+bottom-up along the call graph:
+1. Leaf functions (next_sym) first — no outgoing calls to other parser functions
+2. NT functions (term, sum, test, expr, paren_expr, statement) — call next_sym
+   and each other via mutual recursion
+
+At each composition step, when a frontier branch's rip target matches another
+function's entry address, compose with that function's current summary instead
+of its individual blocks. This prevents cross-function path explosion. -/
+
+/-- A function in the stratified fixpoint. -/
+structure FunctionSpec where
+  name : String
+  entryAddr : UInt64
+  blocks : List String  -- raw IRSB strings
+  deriving Inhabited
+
+/-- Compose body branches with frontier, but when a body branch's rip target
+    matches a function entry, substitute that function's summary branches
+    instead of continuing through individual blocks.
+
+    For a body branch B with rip target = function F's entry:
+    - Compose B with each branch in F's summary
+    - The summary branch has rip = return address (wherever F returns to)
+    - Result: caller's pre-call work + F's full behavior + return to caller
+
+    Returns (result, pairsComposed, skipped, dropped, summaryHits). -/
+def composeBranchArrayStratified {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+    (ip_reg : Reg)
+    (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg)))) :
+    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat × Nat × Nat × Nat := Id.run do
+  let isa := vexSummaryISA Reg
+  -- Build frontier index by rip guard
+  let mut frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
+  let mut frontierNoRip : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  for f in frontierArr do
+    match extractRipGuard ip_reg f.pc with
+    | some addr =>
+      let arr := frontierByRip.getD addr #[]
+      frontierByRip := frontierByRip.insert addr (arr.push f)
+    | none => frontierNoRip := frontierNoRip.push f
+  -- Compose using index + summary substitution
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut dropped : Nat := 0
+  let mut composed_count : Nat := 0
+  let mut summaryHits : Nat := 0
+  let totalPairs := bodyArr.size * frontierArr.size
+  for b in bodyArr do
+    match extractRipTarget ip_reg b.sub with
+    | some target =>
+      -- Check if this target is a function entry with a summary
+      match summaries.get? target with
+      | some summaryBranches =>
+        -- Summary substitution: compose this body branch with callee's summary
+        summaryHits := summaryHits + 1
+        for sb in summaryBranches do
+          composed_count := composed_count + 1
+          let composed := b.compose isa sb
+          match simplifyBranch composed with
+          | none => dropped := dropped + 1
+          | some b' => result := result.push b'
+      | none =>
+        -- Normal rip-indexed composition
+        let compatible := (frontierByRip.getD target #[]) ++ frontierNoRip
+        for f in compatible do
+          composed_count := composed_count + 1
+          let composed := b.compose isa f
+          match simplifyBranch composed with
+          | none => dropped := dropped + 1
+          | some b' => result := result.push b'
+    | none =>
+      -- Can't determine target, fall back to all frontier branches
+      for f in frontierArr do
+        composed_count := composed_count + 1
+        let composed := b.compose isa f
+        match simplifyBranch composed with
+        | none => dropped := dropped + 1
+        | some b' => result := result.push b'
+  let skipped := totalPairs - composed_count
+  return (result, composed_count, skipped, dropped, summaryHits)
+
+/-- Per-function stabilization using summary substitution.
+    Like computeStabilizationHS but composes with function summaries
+    when a branch's rip target matches a function entry. -/
+def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg] [ToString Reg]
+    (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
+    (maxIter : Nat) (log : String → IO Unit) : IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)))) := do
+  let isa := vexSummaryISA Reg
+  let initBranch := Branch.skip isa
+  let (closure, ripCount, dataCount) := extractClosure ip_reg bodyArr (dataOnly := true)
+  let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
+  current := current.insert initBranch
+  let mut sigSeen : Std.HashSet SigDedupKey := {}
+  -- Compute closed projection (same as computeStabilizationHS)
+  let mut dataPCRegs : Std.HashSet Reg := {}
+  let mut dataPCsHaveLoads := false
+  for pc in closure do
+    dataPCRegs := SymPC.collectRegsHS pc dataPCRegs
+    if SymPC.hasLoad pc then dataPCsHaveLoads := true
+  let mut closedRegs := dataPCRegs
+  let mut closedNeedsMem := dataPCsHaveLoads
+  let mut changed := true
+  let mut closureRounds : Nat := 0
+  while changed do
+    changed := false
+    closureRounds := closureRounds + 1
+    for b in bodyArr do
+      let currentRegsArr := closedRegs.toArray
+      for r in currentRegsArr do
+        let exprRegs := SymExpr.collectRegsHS (b.sub.regs r) {}
+        for er in exprRegs do
+          unless closedRegs.contains er || er == ip_reg do
+            closedRegs := closedRegs.insert er
+            changed := true
+      if closedNeedsMem then
+        let memRegs := SymMem.collectRegsHS b.sub.mem {}
+        for mr in memRegs do
+          unless closedRegs.contains mr || mr == ip_reg do
+            closedRegs := closedRegs.insert mr
+            changed := true
+      unless closedNeedsMem do
+        for r in currentRegsArr do
+          if SymExpr.hasLoad (b.sub.regs r) then
+            closedNeedsMem := true
+            changed := true
+  let closedRegsArr := closedRegs.toArray
+  log s!"    closure: rip={ripCount} data={dataCount} proj=[{", ".intercalate (closedRegsArr.toList.map toString)}] ({closedRegsArr.size} regs, rounds={closureRounds})"
+  let projHashOf (sub : SymSub Reg) : UInt64 := Id.run do
+    let mut h : UInt64 := 0
+    for r in closedRegsArr do
+      h := mixHash h (hash (sub.regs r))
+    if closedNeedsMem then h := mixHash h (hash sub.mem)
+    return h
+  let dedupSubHash (sub : SymSub Reg) : UInt64 := projHashOf sub
+  let initSig := computePCSignature closure initBranch.pc
+  let initSigKey : SigDedupKey := ⟨dedupSubHash initBranch.sub, initSig⟩
+  sigSeen := sigSeen.insert initSigKey
+  let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
+  for k in List.range maxIter do
+    let t_start ← IO.monoMsNow
+    let (composed, pairsComposed, skipped, dropped, summaryHits) :=
+      composeBranchArrayStratified ip_reg bodyArr frontier summaries
+    let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    let mut dupes : Nat := 0
+    let mut sigCollapsed : Nat := 0
+    for b in composed do
+      if current.contains b then
+        dupes := dupes + 1
+      else
+        let sig := computePCSignature closure b.pc
+        let key : SigDedupKey := ⟨dedupSubHash b.sub, sig⟩
+        if sigSeen.contains key then
+          sigCollapsed := sigCollapsed + 1
+        else
+          sigSeen := sigSeen.insert key
+          newBranches := newBranches.push b
+    for b in newBranches do
+      current := current.insert b
+    let t_end ← IO.monoMsNow
+    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} summary_hits={summaryHits} {t_end - t_start}ms"
+    if newBranches.size == 0 then
+      -- Collect all branches as array for the summary
+      let summaryArr := current.toArray
+      return some (k, summaryArr)
+    frontier := newBranches
+  return none
+
+/-- Run stratified fixpoint across all parser functions.
+    Returns summaries for each function. -/
+def stratifiedFixpoint
+    (functions : Array FunctionSpec)
+    (log : String → IO Unit) : IO Unit := do
+  let ip_reg := Amd64Reg.rip
+  -- Parse all function blocks
+  let mut funcBlocks : Array (String × Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := #[]
+  for func in functions do
+    match parseBlocksWithAddresses func.blocks with
+    | .error e =>
+      log s!"  PARSE ERROR for {func.name}: {e}"
+      return
+    | .ok pairs =>
+      let body := flatBodyDenot ip_reg pairs
+      let bodyArr := finsetToArray body
+      funcBlocks := funcBlocks.push (func.name, bodyArr)
+      log s!"  {func.name} @ 0x{String.mk (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
+  -- Build entry address → function index map
+  let mut entryToIdx : Std.HashMap UInt64 Nat := {}
+  for i in [:functions.size] do
+    entryToIdx := entryToIdx.insert functions[i]!.entryAddr i
+  -- Phase 1: Compute leaf function (next_sym) fixpoint — no summaries needed
+  let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  log s!"\n--- Phase 1: Leaf function (next_sym) ---"
+  let t0 ← IO.monoMsNow
+  let (nextSymName, nextSymBody) := funcBlocks[0]!
+  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log with
+  | some (k, summaryArr) =>
+    let t1 ← IO.monoMsNow
+    summaries := summaries.insert functions[0]!.entryAddr summaryArr
+    log s!"  {nextSymName}: converged at K={k}, {summaryArr.size} summary branches, {t1 - t0}ms"
+  | none =>
+    log s!"  {nextSymName}: DID NOT CONVERGE"
+    return
+  -- Phase 2: Iterate NT function summaries to fixpoint
+  log s!"\n--- Phase 2: NT functions (mutual recursion) ---"
+  -- Initialize NT summaries as empty
+  for i in [1:functions.size] do
+    summaries := summaries.insert functions[i]!.entryAddr #[]
+  let mut outerRound : Nat := 0
+  let mut outerChanged := true
+  while outerChanged do
+    outerChanged := false
+    outerRound := outerRound + 1
+    log s!"\n  === Outer round {outerRound} ==="
+    for i in [1:functions.size] do
+      let func := functions[i]!
+      let (fname, bodyArr) := funcBlocks[i]!
+      let t0 ← IO.monoMsNow
+      let oldSummary := summaries.getD func.entryAddr #[]
+      match ← computeFunctionStabilization ip_reg bodyArr summaries 200 log with
+      | some (k, newSummary) =>
+        let t1 ← IO.monoMsNow
+        if newSummary.size != oldSummary.size then
+          outerChanged := true
+          summaries := summaries.insert func.entryAddr newSummary
+          log s!"  {fname}: K={k}, {newSummary.size} branches (was {oldSummary.size}), {t1 - t0}ms [CHANGED]"
+        else
+          log s!"  {fname}: K={k}, {newSummary.size} branches (stable), {t1 - t0}ms"
+      | none =>
+        log s!"  {fname}: DID NOT CONVERGE"
+        return
+  log s!"\n=== Stratified fixpoint complete after {outerRound} outer rounds ==="
+  -- Print final summary sizes
+  for i in [:functions.size] do
+    let func := functions[i]!
+    let summary := summaries.getD func.entryAddr #[]
+    log s!"  {func.name}: {summary.size} branches"
+
 /-! ## Run stabilization on next_sym -/
 
 /-- Main entry point for dispatch loop evaluation.
@@ -804,26 +1045,15 @@ def dispatchLoopEvalMain : IO Unit := do
     IO.println msg
     let h ← IO.FS.Handle.mk logPath .append
     h.putStrLn msg
-  log "=== Dispatch Loop Stabilization: next_sym (sig-dedup + subsumption pruning) ==="
-  match parseBlocksWithAddresses nextSymBlocks with
-  | .error e => log s!"PARSE ERROR: {e}"
-  | .ok allPairs =>
-    log s!"Total blocks available: {allPairs.length}"
-    log "N, |bodyDenot|, K, |S_final|, bodyDenot_ms, stabilization_ms"
-    for n in [55, 60] do
-      if n > allPairs.length then
-        log s!"{n}, ---, SKIP (only {allPairs.length} blocks), ---, ---, ---"
-      else
-        let pairs := allPairs.take n
-        let t0 ← IO.monoMsNow
-        let body := flatBodyDenot Amd64Reg.rip pairs
-        let t1 ← IO.monoMsNow
-        let bodyArr := finsetToArray body
-        log s!"  N={n}: |bodyDenot|={bodyArr.size}, starting stabilization..."
-        match ← computeStabilizationHS Amd64Reg.rip bodyArr 200 logPath with
-        | some (k, card) =>
-          let t2 ← IO.monoMsNow
-          log s!"{n}, {body.card}, {k}, {card}, {t1 - t0}, {t2 - t1}"
-        | none =>
-          let t2 ← IO.monoMsNow
-          log s!"{n}, {body.card}, DNF, DNF, {t1 - t0}, {t2 - t1}"
+  -- Stratified fixpoint: per-function summaries
+  log "=== Stratified Dispatch Loop Stabilization ==="
+  let functions : Array FunctionSpec := #[
+    ⟨"next_sym",    0x40006f, nextSymBlocks⟩,
+    ⟨"term",        0x400427, termBlocks⟩,
+    ⟨"sum",         0x4004be, sumBlocks⟩,
+    ⟨"test",        0x400551, testBlocks⟩,
+    ⟨"expr",        0x4005bd, exprBlocks⟩,
+    ⟨"paren_expr",  0x40064d, paren_exprBlocks⟩,
+    ⟨"statement",   0x4006b1, statementBlocks⟩
+  ]
+  stratifiedFixpoint functions log
