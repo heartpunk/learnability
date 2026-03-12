@@ -549,44 +549,49 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     dataPCRegs := SymPC.collectRegsHS pc dataPCRegs
     if SymPC.hasLoad pc then dataPCsHaveLoads := true
   let dataPCRegsArr := dataPCRegs.toArray
-  log s!"  data PC regs: [{", ".intercalate (dataPCRegsArr.toList.map toString)}] ({dataPCRegsArr.size} regs, loads={dataPCsHaveLoads})"
-  -- Closedness check: for each body branch, check that the sub's expressions
-  -- for projected registers only reference projected registers (+ memory if loads present).
-  -- If closed, projection-based dedup is exact. If not, fall back to full sub hash.
-  let mut projectionClosed := true
-  let mut closednessViolations : Array (String × String) := #[]
-  for b in bodyArr do
-    for r in dataPCRegsArr do
-      let expr := b.sub.regs r
-      let exprRegs := SymExpr.collectRegsHS expr {}
-      for er in exprRegs do
-        unless dataPCRegs.contains er || er == ip_reg do
-          projectionClosed := false
-          closednessViolations := closednessViolations.push (toString r, toString er)
-    -- If data PCs have loads, check that memory expressions also only reference projected regs
-    if dataPCsHaveLoads then
-      let memRegs := SymMem.collectRegsHS b.sub.mem {}
-      for mr in memRegs do
-        unless dataPCRegs.contains mr || mr == ip_reg do
-          projectionClosed := false
-          closednessViolations := closednessViolations.push ("mem", toString mr)
-  let useProjection := projectionClosed
-  if useProjection then
-    log s!"  projection CLOSED — using projection-based dedup (exact)"
-  else
-    log s!"  projection NOT closed — falling back to full sub hash"
-    for (target, dep) in closednessViolations.toList.take 10 do
-      log s!"    violation: body sub for {target} references non-projected reg {dep}"
-  -- Helper: compute projection hash for a sub
+  log s!"  data PC regs (direct): [{", ".intercalate (dataPCRegsArr.toList.map toString)}] ({dataPCRegsArr.size} regs, loads={dataPCsHaveLoads})"
+  -- Compute transitive closure of register dependency: if a projected register's
+  -- body expression references reg R, R must also be projected (since R's value
+  -- affects future projected values). Iterate until fixpoint.
+  let mut closedRegs := dataPCRegs
+  let mut closedNeedsMem := dataPCsHaveLoads
+  let mut changed := true
+  let mut closureRounds : Nat := 0
+  while changed do
+    changed := false
+    closureRounds := closureRounds + 1
+    for b in bodyArr do
+      -- Check what each projected register's expression depends on
+      let currentRegsArr := closedRegs.toArray
+      for r in currentRegsArr do
+        let exprRegs := SymExpr.collectRegsHS (b.sub.regs r) {}
+        for er in exprRegs do
+          unless closedRegs.contains er || er == ip_reg do
+            closedRegs := closedRegs.insert er
+            changed := true
+      -- If we need memory, check what the mem expression depends on
+      if closedNeedsMem then
+        let memRegs := SymMem.collectRegsHS b.sub.mem {}
+        for mr in memRegs do
+          unless closedRegs.contains mr || mr == ip_reg do
+            closedRegs := closedRegs.insert mr
+            changed := true
+      -- Check if any projected register's expression involves loads (adds mem dependency)
+      unless closedNeedsMem do
+        for r in currentRegsArr do
+          if SymExpr.hasLoad (b.sub.regs r) then
+            closedNeedsMem := true
+            changed := true
+  let closedRegsArr := closedRegs.toArray
+  log s!"  closed projection: [{", ".intercalate (closedRegsArr.toList.map toString)}] ({closedRegsArr.size} regs, loads={closedNeedsMem}, rounds={closureRounds})"
+  -- Helper: compute projection hash using the closed register set
   let projHashOf (sub : SymSub Reg) : UInt64 := Id.run do
     let mut h : UInt64 := 0
-    for r in dataPCRegsArr do
+    for r in closedRegsArr do
       h := mixHash h (hash (sub.regs r))
-    if dataPCsHaveLoads then h := mixHash h (hash sub.mem)
+    if closedNeedsMem then h := mixHash h (hash sub.mem)
     return h
-  -- Helper: compute dedup key hash (projection if closed, full sub otherwise)
-  let dedupSubHash (sub : SymSub Reg) : UInt64 :=
-    if useProjection then projHashOf sub else hash sub
+  let dedupSubHash (sub : SymSub Reg) : UInt64 := projHashOf sub
   let initSigKey : SigDedupKey := ⟨dedupSubHash initBranch.sub, initSig⟩
   sigSeen := sigSeen.insert initSigKey
   for k in List.range maxIter do
@@ -682,12 +687,8 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       frontierSubs := frontierSubs.insert (hash b.sub)
       let noRipSub : SymSub Reg := { b.sub with regs := fun r => if r == ip_reg then .const 0 else b.sub.regs r }
       frontierSubsNoRip := frontierSubsNoRip.insert (hash noRipSub)
-      -- Project sub onto only data-PC registers (widening equivalence class)
-      let mut projHash : UInt64 := 0
-      for r in dataPCRegsArr do
-        projHash := mixHash projHash (hash (b.sub.regs r))
-      if dataPCsHaveLoads then projHash := mixHash projHash (hash b.sub.mem)
-      projectedSubs := projectedSubs.insert projHash
+      -- Project sub onto closed projection registers
+      projectedSubs := projectedSubs.insert (projHashOf b.sub)
     log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} |distinct_subs|={frontierSubs.size} |no_rip|={frontierSubsNoRip.size} |proj|={projectedSubs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} pruned={prunedCount} compose={t_prune_start - t_start}ms prune={t_end - t_prune_start}ms total={t_end - t_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
