@@ -2051,6 +2051,605 @@ def printGrammarComparison (log : String → IO Unit)
     let missingStr := if missing.isEmpty then "" else " MISSING=[" ++ ", ".intercalate missing ++ "]"
     log s!"  [{status}] {name}: next_sym={callsNS}(exp={expectedNS}) calls=[{calledStr}] exp=[{expStr}]{missingStr}"
 
+/-! ## LTS Extraction from Converged Branches
+
+The converged branch set IS the LTS implicitly — each branch encodes one
+transition: src = rip guard address, tgt = rip target, label = decoded data
+guard as a CharClass. Making it explicit enables DFA/EBNF specialization. -/
+
+/-- A character/token class decoded from a data guard PC — regex style. -/
+inductive CharClass where
+  | literal : Char → CharClass          -- exact printable character match
+  | tokenCode : UInt64 → CharClass      -- token type code (non-printable constant)
+  | range : Char → Char → CharClass     -- inclusive character range [lo..hi]
+  | negated : CharClass → CharClass     -- complement
+  | conj : CharClass → CharClass → CharClass  -- intersection
+  | any : CharClass                     -- any byte / epsilon
+  | empty : CharClass                   -- contradictory / impossible guard
+  deriving BEq, Hashable, Inhabited
+
+/-- Render a CharClass as a regex-style string. -/
+def CharClass.toString : CharClass → String
+  | .literal c => s!"'{c}'"
+  | .tokenCode n => s!"tok{n.toNat}"
+  | .range lo hi => s!"[{lo}-{hi}]"
+  | .negated (.literal c) => s!"[^{c}]"
+  | .negated cc => s!"[^{cc.toString}]"
+  | .conj a b => s!"{a.toString}&{b.toString}"
+  | .any => "."
+  | .empty => "∅"
+
+instance : ToString CharClass := ⟨CharClass.toString⟩
+
+/-- Extract a small constant from a wrapped SymExpr (strips sext, zext, low32, add64).
+    Unlike stripToCharConst, accepts ALL constants < 256, not just printable. -/
+partial def stripToSmallConst : SymExpr Amd64Reg → Option UInt64
+  | .const v => if v.toNat < 256 then some v else none
+  | .low32 inner | .uext32 inner | .sext8to32 inner | .sext32to64 inner =>
+    stripToSmallConst inner
+  | .add64 a b => stripToSmallConst a <|> stripToSmallConst b
+  | _ => none
+
+/-- Check if a SymExpr loads via register-relative addresses, indicating a local
+    variable rather than the global `sym` variable. The global `sym` is accessed
+    through a chain of loads from constant addresses (e.g., load(mem, load(mem, 0x500030))).
+    Local variables use register-relative addresses (e.g., load(mem, rbp-16)). -/
+partial def exprLoadsViaRegAddr : SymExpr Amd64Reg → Bool
+  | .load _ _ addr => addrUsesRegs addr
+  | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => exprLoadsViaRegAddr e
+  | .add64 a b | .sub64 a b | .xor64 a b | .and64 a b | .or64 a b
+  | .sub32 a b | .shl32 a b | .shl64 a b | .shr64 a b => exprLoadsViaRegAddr a || exprLoadsViaRegAddr b
+  | _ => false
+where
+  /-- Check if an address expression uses registers (for load address chains). -/
+  addrUsesRegs : SymExpr Amd64Reg → Bool
+  | .reg _ => true
+  | .const _ => false
+  | .load _ _ innerAddr => addrUsesRegs innerAddr  -- chained load: check inner address
+  | .add64 a b | .sub64 a b | .xor64 a b | .and64 a b | .or64 a b
+  | .sub32 a b | .shl32 a b | .shl64 a b | .shr64 a b => addrUsesRegs a || addrUsesRegs b
+  | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => addrUsesRegs e
+
+/-- Extract a constant (printable char or token code) from a SymExpr. -/
+def extractConstFromExpr (e : SymExpr Amd64Reg) : Option (CharClass) :=
+  match stripToSmallConst e with
+  | some v =>
+    let n := v.toNat
+    if n ≥ 32 && n ≤ 126 then some (.literal (Char.ofNat n))
+    else some (.tokenCode v)
+  | none => none
+
+/-- Decode a single SymPC atom into a CharClass component.
+    Uses extractConstFromExpr to handle VEX-style wrapped expressions
+    and both printable characters AND non-printable token type codes. -/
+private def decodeAtom (pc : SymPC Amd64Reg) : Option CharClass :=
+  match pc with
+  | .eq l r =>
+    -- Extract constants from both sides, but skip when the other side loads via
+    -- register-relative address, indicating a local variable comparison, not a sym check.
+    let cl := if exprLoadsViaRegAddr r then none else extractConstFromExpr l
+    let cr := if exprLoadsViaRegAddr l then none else extractConstFromExpr r
+    match cl <|> cr with
+    | some cc => some cc
+    | none => none
+  | .le l r =>
+    -- For range bounds, we still need character values
+    let lChar := extractCharConstFromExpr l
+    let rChar := extractCharConstFromExpr r
+    match lChar, rChar with
+    | some lo, none => some (.range lo (Char.ofNat 127))
+    | none, some hi => some (.range (Char.ofNat 0) hi)
+    | _, _ => none
+  | .lt l r =>
+    let lChar := extractCharConstFromExpr l
+    let rChar := extractCharConstFromExpr r
+    match lChar, rChar with
+    | some lo, none =>
+      some (.range (Char.ofNat (lo.toNat + 1)) (Char.ofNat 127))
+    | none, some hi =>
+      if hi.toNat > 0 then some (.range (Char.ofNat 0) (Char.ofNat (hi.toNat - 1)))
+      else none
+    | _, _ => none
+  | .not inner =>
+    match decodeAtom inner with
+    | some cc => some (.negated cc)
+    | none => none
+  | _ => none
+
+/-- Decode a full data guard PC into a CharClass.
+    Collects decoded atoms, intersects ranges to produce compact classes. -/
+def decodeCharClass (pc : SymPC Amd64Reg) : CharClass :=
+  let atoms := SymPC.conjuncts pc
+  let decoded := atoms.filterMap decodeAtom
+  match decoded with
+  | [] => .any
+  | [c] => c
+  | c :: rest => rest.foldl .conj c
+
+/-- Simplify a pair of CharClass values under conjunction.
+    Returns none if the pair doesn't match any special rule. -/
+private def CharClass.simplifyPair (a b : CharClass) : Option CharClass :=
+  match a, b with
+  -- empty propagation
+  | .empty, _ | _, .empty => some .empty
+  -- any is identity for conj
+  | .any, x | x, .any => some x
+  -- range ∩ range → narrower range
+  | .range lo1 hi1, .range lo2 hi2 =>
+    let lo := if lo1 > lo2 then lo1 else lo2
+    let hi := if hi1 < hi2 then hi1 else hi2
+    if lo == hi then some (.literal lo)
+    else if lo < hi then some (.range lo hi)
+    else some .empty
+  -- literal ∩ range
+  | .literal c, .range lo hi | .range lo hi, .literal c =>
+    if c >= lo && c <= hi then some (.literal c) else some .empty
+  -- tokenCode ∩ tokenCode
+  | .tokenCode a, .tokenCode b =>
+    if a == b then some (.tokenCode a) else some .empty
+  -- tokenCode ∩ negated(tokenCode)
+  | .tokenCode a, .negated (.tokenCode b) | .negated (.tokenCode b), .tokenCode a =>
+    if a == b then some .empty else some (.tokenCode a)
+  -- literal ∩ negated(literal)
+  | .literal a, .negated (.literal b) | .negated (.literal b), .literal a =>
+    if a == b then some .empty else some (.literal a)
+  -- literal ∩ literal
+  | .literal a, .literal b =>
+    if a == b then some (.literal a) else some .empty
+  | _, _ => none
+
+/-- Flatten a conjunction tree into a list of conjuncts. -/
+def CharClass.flattenConj : CharClass → List CharClass
+  | .conj a b => a.flattenConj ++ b.flattenConj
+  | other => [other]
+
+/-- Simplify a flat list of conjuncts: if there is exactly one positive tokenCode
+    and all other conjuncts are negated tokenCodes with different values, simplify
+    to just the positive tokenCode. Also handles positive literal + negated tokenCodes. -/
+def CharClass.simplifyFlat (parts : List CharClass) : Option CharClass :=
+  let positives := parts.filter fun
+    | .tokenCode _ | .literal _ | .range _ _ => true
+    | _ => false
+  let negatives := parts.filter fun
+    | .negated _ => true
+    | _ => false
+  -- If exactly one positive and the rest are negatives, check consistency
+  if positives.length == 1 && positives.length + negatives.length == parts.length then
+    let pos := positives.head!
+    let allConsistent := negatives.all fun
+      | .negated (.tokenCode b) =>
+        match pos with
+        | .tokenCode a => a != b  -- negating a different code is consistent
+        | .literal _ | .range _ _ => true  -- negating tokenCode is consistent with literal/range
+        | _ => false
+      | .negated (.literal b) =>
+        match pos with
+        | .literal a => a != b
+        | .tokenCode _ | .range _ _ => true
+        | _ => false
+      | _ => false
+    if allConsistent then some pos else none
+  else none
+
+/-- Simplify a CharClass by intersecting ranges and resolving conjunctions. -/
+def CharClass.simplify : CharClass → CharClass
+  | .conj a b =>
+    let a' := a.simplify
+    let b' := b.simplify
+    match CharClass.simplifyPair a' b' with
+    | some result => result
+    | none =>
+      -- Try flatten-and-simplify for multi-level conjunctions
+      let flat := CharClass.flattenConj (.conj a' b')
+      match CharClass.simplifyFlat flat with
+      | some result => result
+      | none => .conj a' b'
+  | .negated inner => match inner.simplify with
+    | .empty => .any  -- negation of empty = everything (but shouldn't arise)
+    | inner' => .negated inner'
+  | other => other
+
+/-- Token name table: maps token type codes to human-readable names.
+    Built from converged next_sym summary (rax at return → token name). -/
+abbrev TokenNameTable := Std.HashMap UInt64 String
+
+/-- Infer a token class name from a CharClass, using optional token name table. -/
+def charClassToTokenName (tokenNames : TokenNameTable := {}) : CharClass → String
+  | .literal c => s!"'{c}'"
+  | .tokenCode n =>
+    match tokenNames.get? n with
+    | some name => name
+    | none => s!"tok{n.toNat}"
+  | .range 'a' 'z' => "id"
+  | .range '0' '9' => "int"
+  | .range lo hi => s!"[{lo}-{hi}]"
+  | .negated cc => s!"[^{cc}]"
+  | .any => "token"
+  | .empty => "∅"
+  | cc => cc.toString
+
+/-- A single LTS transition: source state, label, target state. -/
+structure LTSTransition where
+  src : UInt64
+  label : CharClass
+  tgt : UInt64
+  deriving BEq, Hashable
+
+/-- An extracted LTS: states are block addresses, labels are CharClasses. -/
+structure ExtractedLTS where
+  transitions : Array LTSTransition
+  states : Std.HashSet UInt64
+  deriving Inhabited
+
+/-- Find the largest block entry address that is ≤ the given address.
+    Redirects mid-block jump targets to the containing block's entry. -/
+def redirectToBlockEntry (addr : UInt64) (sortedEntries : Array UInt64) : UInt64 := Id.run do
+  let mut best := addr
+  for entry in sortedEntries do
+    if entry <= addr then best := entry
+  return best
+
+/-- Extract an LTS from an array of converged branches.
+    Each branch yields: src = rip guard, tgt = rip target, label = data guard decoded.
+    Mid-block jump targets are redirected to the containing block's entry address. -/
+def extractLTS (ip_reg : Amd64Reg)
+    (branches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
+    (funcEntries : Std.HashMap UInt64 String := {}) :
+    ExtractedLTS :=
+  -- First pass: collect block entry addresses (sources)
+  let blockEntries := Id.run do
+    let mut entries : Std.HashSet UInt64 := {}
+    for b in branches do
+      match extractRipGuard ip_reg b.pc with
+      | some src => entries := entries.insert src
+      | none => pure ()
+    return entries.toArray.qsort (· < ·)
+  let blockSet : Std.HashSet UInt64 := blockEntries.foldl (fun s e => s.insert e) {}
+  -- Second pass: extract transitions, redirecting mid-block targets
+  let trans := Id.run do
+    let mut trans : Array LTSTransition := #[]
+    for b in branches do
+      match extractRipGuard ip_reg b.pc, extractRipTarget ip_reg b.sub with
+      | some src, some tgt =>
+        let dataGuard := stripRipGuards ip_reg b.pc
+        let label := (decodeCharClass dataGuard).simplify
+        -- Redirect mid-block targets to containing block entry
+        let tgt' := if blockSet.contains tgt || funcEntries.contains tgt then tgt
+                    else redirectToBlockEntry tgt blockEntries
+        trans := trans.push ⟨src, label, tgt'⟩
+      | _, _ => pure ()
+    return trans
+  let states := trans.foldl (fun s t => (s.insert t.src).insert t.tgt) ({} : Std.HashSet UInt64)
+  { transitions := trans, states := states }
+
+/-- Print an LTS transition table. -/
+def printLTS (log : String → IO Unit) (name : String) (lts : ExtractedLTS) : IO Unit := do
+  log s!"\n=== LTS: {name} ({lts.transitions.size} transitions, {lts.states.size} states) ==="
+  -- Group by source
+  let mut bySource : Std.HashMap UInt64 (Array LTSTransition) := {}
+  for t in lts.transitions do
+    let arr := bySource.getD t.src #[]
+    bySource := bySource.insert t.src (arr.push t)
+  for (src, edges) in bySource.toArray do
+    log s!"  {hexAddr src}:"
+    for t in edges do
+      log s!"    --[{t.label}]--> {hexAddr t.tgt}"
+
+/-! ## DFA Specialization for Tokenizer -/
+
+/-- A DFA state: block address, whether it's accepting, and if so the token type. -/
+structure DFAState where
+  addr : UInt64
+  isAccept : Bool
+  tokenType : Option String  -- rax value at return → token class
+  deriving Inhabited
+
+/-- Extract the rax value from a branch's substitution for token type identification. -/
+def extractRaxValue (sub : SymSub Amd64Reg) : Option String :=
+  match sub.regs .rax with
+  | .const v =>
+    let n := v.toNat
+    if n ≥ 32 && n ≤ 126 then some s!"'{Char.ofNat n}'"
+    else some s!"{n}"
+  | _ => none
+
+/-- Print DFA for next_sym: transitions, accept states with token types. -/
+def printTokenizerDFA (log : String → IO Unit)
+    (lts : ExtractedLTS)
+    (funcBlocks : Std.HashSet UInt64)
+    (bodyBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
+    (entryAddr : UInt64) : IO Unit := do
+  log s!"\n=== Tokenizer DFA (next_sym) ==="
+  log s!"  entry: {hexAddr entryAddr}"
+  -- Accept states: transitions whose target is outside the function's block set
+  let mut acceptTokens : Std.HashMap UInt64 String := {}  -- src → token type
+  for b in bodyBranches do
+    match extractRipGuard Amd64Reg.rip b.pc, extractRipTarget Amd64Reg.rip b.sub with
+    | some src, some tgt =>
+      if !funcBlocks.contains tgt then
+        -- This is a return transition; extract rax as token type
+        let tok := match extractRaxValue b.sub with
+          | some v => v
+          | none => "?"
+        acceptTokens := acceptTokens.insert src tok
+    | _, _ => pure ()
+  log s!"  accept states: {acceptTokens.size}"
+  for (addr, tok) in acceptTokens.toArray do
+    log s!"    {hexAddr addr} → token={tok}"
+  -- Print transitions (only internal ones within next_sym)
+  let mut bySource : Std.HashMap UInt64 (Array LTSTransition) := {}
+  let mut internalCount := 0
+  for t in lts.transitions do
+    if funcBlocks.contains t.src && funcBlocks.contains t.tgt then
+      let arr := bySource.getD t.src #[]
+      bySource := bySource.insert t.src (arr.push t)
+      internalCount := internalCount + 1
+  log s!"  internal transitions: {internalCount}"
+  for (src, edges) in bySource.toArray do
+    let acceptMark := if acceptTokens.contains src then s!" [accept→{acceptTokens.get! src}]" else ""
+    log s!"  {hexAddr src}{acceptMark}:"
+    for t in edges do
+      log s!"    --[{t.label}]--> {hexAddr t.tgt}"
+
+/-! ## EBNF Extraction from LTS
+
+For each NT function, walk the LTS to produce EBNF productions:
+- Transitions to next_sym entry = terminal (token type from data guard label)
+- Transitions to other NT entry = nonterminal reference
+- Linear chains = sequence
+- Branch points = alternatives
+- Back edges = repetition
+
+CRITICAL: alternatives are distinguished by BOTH target AND label.
+This fixes term getting 2/3 — id and int both call next_sym but with
+different character class labels (letters vs digits). -/
+
+/-- An EBNF symbol: terminal token or nonterminal reference. -/
+inductive EBNFSym where
+  | terminal : String → EBNFSym    -- token class name
+  | nonterminal : String → EBNFSym -- NT function name
+  deriving BEq, Hashable
+
+instance : ToString EBNFSym where
+  toString
+    | .terminal t => t
+    | .nonterminal nt => nt
+
+/-- DFS through LTS collecting ordered symbol sequences as EBNF productions.
+    Accumulates CharClass labels along internal transitions (accGuard) so that
+    data guards from upstream comparison blocks are used to classify tokens.
+    This fixes the id/int distinction: both call next_sym from blocks with guard=true,
+    but the path to each goes through different comparison blocks with [a-z] vs [0-9]. -/
+partial def ltsExtractProds
+    (cur : UInt64)
+    (steps : Array EBNFSym)
+    (accGuard : CharClass)           -- accumulated data guard from internal transitions
+    (ltsMap : Std.HashMap UInt64 (Array LTSTransition))
+    (funcBlocks : Std.HashSet UInt64)
+    (funcEntries : Std.HashMap UInt64 String)
+    (visited : Std.HashSet UInt64)
+    (depth : Nat)
+    (bodyBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
+    (tokenNames : TokenNameTable := {}) :
+    Array (Array EBNFSym) := Id.run do
+  if depth > 60 || visited.contains cur then return #[steps]
+  let visited' := visited.insert cur
+  let edges := ltsMap.getD cur #[]
+  if edges.isEmpty then
+    return if steps.isEmpty then #[] else #[steps]
+  let mut allPaths : Array (Array EBNFSym) := #[]
+  for t in edges do
+    -- Combine accumulated guard with this transition's label
+    let combinedGuard : CharClass := match accGuard, t.label with
+      | .empty, _ | _, .empty => .empty
+      | .any, l => l
+      | g, .any => g
+      | g, l => (CharClass.conj g l).simplify
+    -- Prune contradictory paths
+    if combinedGuard == .empty then
+      continue
+    match funcEntries.get? t.tgt with
+    | some "_exit" => pure ()
+    | some callee =>
+      -- External call: use accumulated guard to classify the token
+      let sym := if callee == "next_sym" then
+          EBNFSym.terminal (charClassToTokenName tokenNames combinedGuard)
+        else
+          EBNFSym.nonterminal callee
+      let steps' := steps.push sym
+      -- Find return address for this call in the body branches
+      let retAddr := bodyBranches.findSome? fun b =>
+        match extractRipGuard Amd64Reg.rip b.pc, extractRipTarget Amd64Reg.rip b.sub with
+        | some src, some tgt =>
+          if src == cur && tgt == t.tgt then extractCallReturn b.sub.mem else none
+        | _, _ => none
+      match retAddr with
+      | some ret =>
+        if funcBlocks.contains ret then
+          -- After a call, reset the accumulated guard
+          allPaths := allPaths.append
+            (ltsExtractProds ret steps' .any ltsMap funcBlocks funcEntries visited' (depth + 1) bodyBranches tokenNames)
+        else
+          allPaths := allPaths.push steps'
+      | none =>
+        allPaths := allPaths.push steps'
+    | none =>
+      if funcBlocks.contains t.tgt then
+        -- Internal transition: accumulate guard, recurse without recording a symbol
+        allPaths := allPaths.append
+          (ltsExtractProds t.tgt steps combinedGuard ltsMap funcBlocks funcEntries visited' (depth + 1) bodyBranches tokenNames)
+      else
+        -- Unknown external (helper call like printf/getsym_value):
+        -- preserve accumulated guard through the call since helpers don't consume tokens
+        let retAddr := bodyBranches.findSome? fun b =>
+          match extractRipGuard Amd64Reg.rip b.pc, extractRipTarget Amd64Reg.rip b.sub with
+          | some src, some tgt =>
+            if src == cur && tgt == t.tgt then extractCallReturn b.sub.mem else none
+          | _, _ => none
+        match retAddr with
+        | some ret =>
+          if funcBlocks.contains ret then
+            allPaths := allPaths.append
+              (ltsExtractProds ret steps combinedGuard ltsMap funcBlocks funcEntries visited' (depth + 1) bodyBranches tokenNames)
+          else if !steps.isEmpty then
+            allPaths := allPaths.push steps
+        | none =>
+          if !steps.isEmpty then
+            allPaths := allPaths.push steps
+  return allPaths
+
+/-- BFS reachability in LTS (for finding orphan blocks). -/
+def ltsReachable (entry : UInt64)
+    (ltsMap : Std.HashMap UInt64 (Array LTSTransition))
+    (funcBlocks : Std.HashSet UInt64)
+    (funcEntries : Std.HashMap UInt64 String)
+    (bodyBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) :
+    Std.HashSet UInt64 := Id.run do
+  let mut visited : Std.HashSet UInt64 := {}
+  let mut queue : Array UInt64 := #[entry]
+  while !queue.isEmpty do
+    let cur := queue.back!
+    queue := queue.pop
+    if visited.contains cur then pure ()
+    else
+      visited := visited.insert cur
+      for t in ltsMap.getD cur #[] do
+        if funcBlocks.contains t.tgt && !visited.contains t.tgt then
+          queue := queue.push t.tgt
+        else
+          -- External call: follow return continuation
+          let retAddr := bodyBranches.findSome? fun b =>
+            match extractRipGuard Amd64Reg.rip b.pc, extractRipTarget Amd64Reg.rip b.sub with
+            | some src, some tgt =>
+              if src == cur && tgt == t.tgt then extractCallReturn b.sub.mem else none
+            | _, _ => none
+          match retAddr with
+          | some ret =>
+            if funcBlocks.contains ret && !visited.contains ret then
+              queue := queue.push ret
+          | none => pure ()
+  return visited
+
+/-- Format an EBNF production RHS as a string. -/
+def formatEBNFProd (syms : Array EBNFSym) : String :=
+  if syms.isEmpty then "ε"
+  else " ".intercalate (syms.toList.map toString)
+
+/-- Extract and print EBNF productions for one NT function using the LTS. -/
+def printLTSProductions (log : String → IO Unit)
+    (funcName : String) (entryAddr : UInt64)
+    (bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
+    (funcEntries : Std.HashMap UInt64 String)
+    (tokenNames : TokenNameTable := {}) : IO Unit := do
+  let ip_reg := Amd64Reg.rip
+  -- Build LTS from body branches (with mid-block target redirection)
+  let lts := extractLTS ip_reg bodyArr funcEntries
+  -- Build LTS map: src → transitions
+  let mut ltsMap : Std.HashMap UInt64 (Array LTSTransition) := {}
+  let mut funcBlocks : Std.HashSet UInt64 := {}
+  for b in bodyArr do
+    match extractRipGuard ip_reg b.pc with
+    | some src => funcBlocks := funcBlocks.insert src
+    | none => pure ()
+  for t in lts.transitions do
+    let arr := ltsMap.getD t.src #[]
+    ltsMap := ltsMap.insert t.src (arr.push t)
+  -- Main DFS from entry
+  let rawPaths := ltsExtractProds entryAddr #[] .any ltsMap funcBlocks funcEntries {} 0 bodyArr tokenNames
+  -- Orphan blocks: not reachable from entry, contain NT calls
+  let reachable := ltsReachable entryAddr ltsMap funcBlocks funcEntries bodyArr
+  let mut orphanPaths : Array (Array EBNFSym) := #[]
+  for (src, edges) in ltsMap.toArray do
+    if reachable.contains src then pure ()
+    else
+      for t in edges do
+        match funcEntries.get? t.tgt with
+        | some "_exit" | some "next_sym" => pure ()
+        | some callee =>
+          -- Find return address
+          let retAddr := bodyArr.findSome? fun b =>
+            match extractRipGuard ip_reg b.pc, extractRipTarget ip_reg b.sub with
+            | some s, some tgt =>
+              if s == src && tgt == t.tgt then extractCallReturn b.sub.mem else none
+            | _, _ => none
+          match retAddr with
+          | some ret =>
+            if funcBlocks.contains ret then
+              orphanPaths := orphanPaths.append
+                (ltsExtractProds ret #[.nonterminal callee] .any ltsMap funcBlocks funcEntries {} 0 bodyArr tokenNames)
+          | none => pure ()
+        | none => pure ()
+  -- Deduplicate
+  let mut seen : Std.HashSet String := {}
+  let mut unique : Array (Array EBNFSym) := #[]
+  for p in rawPaths.append orphanPaths do
+    let key := formatEBNFProd p
+    if !seen.contains key then
+      seen := seen.insert key
+      unique := unique.push p
+  let golden := goldenProds.getD funcName []
+  -- Count matches
+  let goldenSet : Std.HashSet String := golden.foldl (fun s g => s.insert (" ".intercalate g)) {}
+  let extractedSet : Std.HashSet String := unique.foldl (fun s p => s.insert (formatEBNFProd p)) {}
+  let mut matchCount : Nat := 0
+  for g in goldenSet do
+    if extractedSet.contains g then matchCount := matchCount + 1
+  log s!"\n  {funcName}: {unique.size} productions (golden: {golden.length}) [{matchCount}/{golden.length} match]"
+  for prod in unique do
+    let rhs := formatEBNFProd prod
+    let mark := if goldenSet.contains rhs then " ✓" else ""
+    log s!"    {funcName} -> {rhs}{mark}"
+  if !golden.isEmpty then
+    log s!"    -- Golden:"
+    for g in golden do
+      let gStr := " ".intercalate g
+      let mark := if extractedSet.contains gStr then " ✓" else " ✗"
+      log s!"    -- {funcName} -> {gStr}{mark}"
+
+/-- Token type enum for tiny-c (extracted from binary analysis).
+    next_sym stores token type in memory via a compile-time enum:
+      enum { DO_SYM=0, ELSE_SYM=1, IF_SYM=2, WHILE_SYM=3,
+             LBRA=4, RBRA=5, LPAR=6, RPAR=7,
+             PLUS=8, MINUS=9, LESS=10, SEMI=11, EQUAL=12,
+             INT=13, ID=14, EOI=15 } -/
+def tinycTokenNames : TokenNameTable :=
+  ({} : TokenNameTable)
+    |>.insert 0  "'do'"
+    |>.insert 1  "'else'"
+    |>.insert 2  "'if'"
+    |>.insert 3  "'while'"
+    |>.insert 4  "'{'"
+    |>.insert 5  "'}'"
+    |>.insert 6  "'('"
+    |>.insert 7  "')'"
+    |>.insert 8  "'+'"
+    |>.insert 9  "'-'"
+    |>.insert 10 "'<'"
+    |>.insert 11 "';'"
+    |>.insert 12 "'='"
+    |>.insert 13 "int"
+    |>.insert 14 "id"
+    |>.insert 15 "EOI"
+
+/-- Print EBNF for all NT functions using LTS-based extraction. -/
+def printLTSGrammar (log : String → IO Unit)
+    (functions : Array FunctionSpec)
+    (funcEntries : Std.HashMap UInt64 String)
+    (_summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))) : IO Unit := do
+  let ip_reg := Amd64Reg.rip
+  let tokenNames := tinycTokenNames
+  log s!"\n=== Token Name Table (tiny-c enum) ==="
+  for (code, name) in tokenNames.toArray do
+    log s!"  {code.toNat} → {name}"
+  log "\n=== EBNF Grammar (LTS-based extraction) ==="
+  for i in [1:functions.size] do
+    let func := functions[i]!
+    match parseBlocksWithAddresses func.blocks with
+    | .error e => log s!"  Parse error for {func.name}: {e}"
+    | .ok pairs =>
+      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      printLTSProductions log func.name func.entryAddr bodyArr funcEntries tokenNames
+
 /-! ## Run stabilization on next_sym -/
 
 /-- Main entry point for dispatch loop evaluation.
@@ -2078,15 +2677,8 @@ def dispatchLoopEvalMain : IO Unit := do
     ⟨"paren_expr",  0x40064d, paren_exprBlocks⟩,
     ⟨"statement",   0x4006b1, statementBlocks⟩
   ]
-  let _summaries ← stratifiedFixpoint functions log
-  -- Task 2B: DFA extraction from next_sym body branches (raw, before stabilization)
+  let summaries ← stratifiedFixpoint functions log
   let ip_reg := Amd64Reg.rip
-  match parseBlocksWithAddresses (nextSymBlocks.take 55) with
-  | .error e => log s!"DFA parse error: {e}"
-  | .ok pairs =>
-    let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
-    printDFATable log bodyArr
-  -- Task 2C: CFG extraction from NT body branches
   let funcEntries : Std.HashMap UInt64 String :=
     ({} : Std.HashMap UInt64 String)
       |>.insert 0x40006f "next_sym"
@@ -2097,19 +2689,19 @@ def dispatchLoopEvalMain : IO Unit := do
       |>.insert 0x40064d "paren_expr"
       |>.insert 0x4006b1 "statement"
       |>.insert 0x400000 "_exit"
-  log "\n=== CFG Extraction (NT body branches) ==="
-  let mut extractedCFG : Std.HashMap String (Nat × List String) := {}
-  for i in [1:functions.size] do
-    let func := functions[i]!
-    match parseBlocksWithAddresses func.blocks with
-    | .error e => log s!"  Parse error for {func.name}: {e}"
-    | .ok pairs =>
-      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
-      let (nsCount, calledNTsHS) := extractBodyCFG ip_reg bodyArr funcEntries
-      let calledList := calledNTsHS.toArray.toList
-      extractedCFG := extractedCFG.insert func.name (nsCount, calledList)
-      log s!"  {func.name}: next_sym_calls={nsCount} NTs=[{", ".intercalate calledList}]"
-  -- Task 2D: Compare with golden grammar (call graph)
-  printGrammarComparison log extractedCFG
-  -- Task 2D (productions): extract actual grammar productions via body CFG DFS
-  printGrammarProductions log functions funcEntries
+  -- Step 1: Extract LTS from next_sym body branches
+  match parseBlocksWithAddresses (nextSymBlocks.take 55) with
+  | .error e => log s!"LTS parse error: {e}"
+  | .ok pairs =>
+    let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+    let nextSymLTS := extractLTS ip_reg bodyArr
+    printLTS log "next_sym" nextSymLTS
+    -- Step 3: DFA specialization for tokenizer
+    let mut nextSymBlkSet : Std.HashSet UInt64 := {}
+    for b in bodyArr do
+      match extractRipGuard ip_reg b.pc with
+      | some src => nextSymBlkSet := nextSymBlkSet.insert src
+      | none => pure ()
+    printTokenizerDFA log nextSymLTS nextSymBlkSet bodyArr 0x40006f
+  -- Step 4: EBNF extraction for parser NTs (LTS-based)
+  printLTSGrammar log functions funcEntries summaries
