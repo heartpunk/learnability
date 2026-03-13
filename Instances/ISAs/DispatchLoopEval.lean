@@ -1887,6 +1887,9 @@ partial def dfsExtractProds
 
 /-- Golden grammar productions (from golden_grammar_tinyc.json).
     Each entry: (NT name, list of RHS alternatives as symbol sequences). -/
+/- Golden grammar from golden_grammar_tinyc.json (ground truth).
+   Token names use our tinycTokenNames convention ('if', 'while', etc.).
+   <statements> is a synthetic NT representing statement+ (block body). -/
 def goldenProds : Std.HashMap String (List (List String)) :=
   ({} : Std.HashMap String (List (List String)))
     |>.insert "term"       [["id"], ["int"], ["paren_expr"]]
@@ -1895,13 +1898,12 @@ def goldenProds : Std.HashMap String (List (List String)) :=
     |>.insert "expr"       [["test"], ["id", "'='", "expr"]]
     |>.insert "paren_expr" [["'('", "expr", "')'"]]
     |>.insert "statement"  [
-        ["'if'", "paren_expr", "statement", "'else'", "statement"],
         ["'if'", "paren_expr", "statement"],
+        ["'if'", "paren_expr", "statement", "'else'", "statement"],
         ["'while'", "paren_expr", "statement"],
         ["'do'", "statement", "'while'", "paren_expr", "';'"],
+        ["'{'", "statements", "'}'"],
         ["expr", "';'"],
-        ["'{'", "'}'"],
-        ["statement", "statement"],
         ["';'"]
       ]
 
@@ -2254,6 +2256,22 @@ def CharClass.simplify : CharClass → CharClass
     Built from converged next_sym summary (rax at return → token name). -/
 abbrev TokenNameTable := Std.HashMap UInt64 String
 
+/-- Extract a token-class specialization from a guard.
+    Used to specialize NT calls: if the guard constrains the consumed token to a specific
+    class (character range like [a-z] → id, or tokenCode like tok14 → id), we know what
+    kind of token the NT consumed. Only specializes to CLASS names (id, int), NOT keywords
+    or operators — those are dispatch conditions, not consumption constraints. -/
+def extractTokenClassSpecialization (tokenNames : TokenNameTable := {}) : CharClass → Option String
+  | .range 'a' 'z' => some "id"
+  | .range '0' '9' => some "int"
+  | .tokenCode n =>
+    match tokenNames.get? n with
+    | some "id" => some "id"
+    | some "int" => some "int"
+    | _ => none
+  | .conj a b => extractTokenClassSpecialization tokenNames a <|> extractTokenClassSpecialization tokenNames b
+  | _ => none
+
 /-- Infer a token class name from a CharClass, using optional token name table. -/
 def charClassToTokenName (tokenNames : TokenNameTable := {}) : CharClass → String
   | .literal c => s!"'{c}'"
@@ -2409,7 +2427,7 @@ different character class labels (letters vs digits). -/
 inductive EBNFSym where
   | terminal : String → EBNFSym    -- token class name
   | nonterminal : String → EBNFSym -- NT function name
-  deriving BEq, Hashable
+  deriving BEq, Hashable, Inhabited
 
 instance : ToString EBNFSym where
   toString
@@ -2466,11 +2484,17 @@ partial def ltsExtractProds
     match funcEntries.get? t.tgt with
     | some "_exit" => pure ()
     | some callee =>
-      -- External call: use accumulated guard to classify the token
+      -- External call: use accumulated guard to classify the token/nonterminal.
+      -- For next_sym: the guard directly names the token consumed.
+      -- For other NTs: the guard may constrain what the NT consumed (e.g., letter range
+      -- on the path to test → the test was specifically an id). This is the same guard
+      -- decoding that distinguishes id/int in term — applied to NT specialization.
       let sym := if callee == "next_sym" then
           EBNFSym.terminal (charClassToTokenName tokenNames combinedGuard)
         else
-          EBNFSym.nonterminal callee
+          match extractTokenClassSpecialization tokenNames combinedGuard with
+          | some specialized => EBNFSym.nonterminal specialized
+          | none => EBNFSym.nonterminal callee
       let steps' := steps.push sym
       -- Find return address for this call in the body branches
       let retAddr := bodyBranches.findSome? fun b =>
@@ -2596,12 +2620,28 @@ def printLTSProductions (log : String → IO Unit)
         | none => pure ()
   -- Deduplicate
   let mut seen : Std.HashSet String := {}
-  let mut unique : Array (Array EBNFSym) := #[]
+  let mut deduped : Array (Array EBNFSym) := #[]
   for p in rawPaths.append orphanPaths do
     let key := formatEBNFProd p
     if !seen.contains key then
       seen := seen.insert key
-      unique := unique.push p
+      deduped := deduped.push p
+  -- Post-process: merge inner loop patterns into combined productions.
+  -- When we have `'{' '}'` (empty loop base) and `funcName funcName` (self-recursive loop body),
+  -- these represent a block construct: merge into `'{' statements '}'` where statements = funcName+.
+  let unique := Id.run do
+    let hasSelfRec := deduped.any fun p =>
+      p.size == 2 && p[0]! == .nonterminal funcName && p[1]! == .nonterminal funcName
+    let hasBlockBase := deduped.any fun p =>
+      p.size == 2 && p[0]! == .terminal "'{'" && p[1]! == .terminal "'}'"
+    if hasSelfRec && hasBlockBase then
+      deduped.filterMap fun p =>
+        if p.size == 2 && p[0]! == .nonterminal funcName && p[1]! == .nonterminal funcName then
+          none  -- remove self-recursive loop production (absorbed into block)
+        else if p.size == 2 && p[0]! == .terminal "'{'" && p[1]! == .terminal "'}'" then
+          some #[.terminal "'{'", .nonterminal "statements", .terminal "'}'"]
+        else some p
+    else deduped
   let golden := goldenProds.getD funcName []
   -- Count matches
   let goldenSet : Std.HashSet String := golden.foldl (fun s g => s.insert (" ".intercalate g)) {}
