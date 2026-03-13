@@ -520,6 +520,90 @@ def smtPreamble (regNames : Std.HashSet String) (needsMem : Bool) : String := Id
       s := s ++ s!"(declare-fun store_{w} (Mem (_ BitVec 64) (_ BitVec 64)) Mem)\n"
   return s
 
+/-! ## Z3 Query Cache (Green-style)
+
+Green (Visser et al. 2012) caches solver results by canonicalizing and hashing
+the query formula.  On cache hit, the solver call is skipped entirely.
+
+Pipeline: CANONIZE → HASH → CACHE LOOKUP → (miss?) Z3 → STORE
+
+The cache maps: hash(canonicalizePC(assertion)) → Bool (true = UNSAT).
+Implication queries (A → B) are represented as (A ∧ ¬B): UNSAT means A implies B.
+Equivalence queries (A ↔ B) are decomposed into two implication queries. -/
+
+/-- Z3 query cache: hash of canonicalized assertion formula → UNSAT result. -/
+abbrev Z3Cache := Std.HashMap UInt64 Bool
+
+/-- Cache key for an implication query "does A imply B?",
+    i.e. is (A ∧ ¬B) UNSAT?  Canonicalizes the combined formula
+    so semantically identical queries hash the same. -/
+def z3ImplCacheKey {Reg : Type} [Hashable Reg] (a b : SymPC Reg) : UInt64 :=
+  hash (canonicalizePC (.and a (.not b)))
+
+/-- Run a batch of z3 implication queries with caching.
+    Each query (A, B) checks: is (A ∧ ¬B) UNSAT? (i.e. does A → B?)
+    Returns: (results array aligned with input, cache hits count).
+    Updates the cache ref with new results. -/
+def z3CheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
+    (cache : IO.Ref Z3Cache)
+    (pairs : Array (SymPC Reg × SymPC Reg))
+    (tmpFile : System.FilePath := ".lake/smt_cached.smt2") :
+    IO (Array Bool × Nat) := do
+  if pairs.size == 0 then return (#[], 0)
+  let c ← cache.get
+  -- Phase 1: check cache, collect misses.
+  -- missOrigIdx[j] = index into `pairs`; missPairs[j] = the (A,B) pair.
+  let mut results : Array (Option Bool) := Array.replicate pairs.size none
+  let mut missOrigIdx : Array Nat := #[]
+  let mut missPairs : Array (SymPC Reg × SymPC Reg) := #[]
+  let mut hits : Nat := 0
+  let mut pairIdx : Nat := 0
+  for (a, b) in pairs do
+    let key := z3ImplCacheKey a b
+    match c.get? key with
+    | some v => results := results.set! pairIdx (some v); hits := hits + 1
+    | none =>
+      missOrigIdx := missOrigIdx.push pairIdx
+      missPairs := missPairs.push (a, b)
+    pairIdx := pairIdx + 1
+  -- Phase 2: batch z3 for cache misses
+  if missPairs.size > 0 then
+    let chunkSize := 1000
+    let mut allMissResults : Array Bool := #[]
+    let mut chunkStart := 0
+    while chunkStart < missPairs.size do
+      let chunkEnd := min (chunkStart + chunkSize) missPairs.size
+      let chunk := missPairs.extract chunkStart chunkEnd
+      let mut regNames : Std.HashSet String := {}
+      let mut needsMem := false
+      for (a, b) in chunk do
+        regNames := SymPC.collectRegNames a regNames
+        regNames := SymPC.collectRegNames b regNames
+        if SymPC.hasLoad a || SymPC.hasLoad b then needsMem := true
+      let mut script := smtPreamble regNames needsMem
+      for (a, b) in chunk do
+        script := script ++ "(push)\n"
+        script := script ++ s!"(assert (and {SymPC.toSMTLib a} (not {SymPC.toSMTLib b})))\n"
+        script := script ++ "(check-sat)\n"
+        script := script ++ "(pop)\n"
+      script := script ++ "(exit)\n"
+      IO.FS.writeFile tmpFile script
+      let z3Out ← IO.Process.output { cmd := "z3", args := #[tmpFile.toString] }
+      allMissResults := allMissResults ++ parseZ3Results z3Out.stdout
+      chunkStart := chunkEnd
+    -- Store results in cache and in output array
+    let mut c' ← cache.get
+    let mut missIdx : Nat := 0
+    for (a, b) in missPairs do
+      let isUnsat := if h : missIdx < allMissResults.size then allMissResults[missIdx] else false
+      if h2 : missIdx < missOrigIdx.size then
+        results := results.set! missOrigIdx[missIdx] (some isUnsat)
+      c' := c'.insert (z3ImplCacheKey a b) isUnsat
+      missIdx := missIdx + 1
+    cache.set c'
+  -- Phase 3: unwrap
+  return (results.map (fun r => r.getD false), hits)
+
 /-! ## PC-Signature Equivalence Class Dedup
 
 Two branches with the same substitution and the same PC signature (which guard PCs
@@ -913,48 +997,17 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
           pcPairs := pcPairs.push (bi.pc, bj.pc)
           queryBranchIdx := queryBranchIdx.push branchIdx
       branchIdx := branchIdx + 1
-    -- Call z3 with all queries at once
+    -- Call z3 with caching (Green-style)
     let mut subsumedSet : Std.HashSet Nat := {}
     if pcPairs.size > 0 then
-      -- Collect register names and check for memory ops
-      let mut regNames : Std.HashSet String := {}
-      let mut needsMem := false
-      for (stronger, weaker) in pcPairs do
-        regNames := SymPC.collectRegNames stronger regNames
-        regNames := SymPC.collectRegNames weaker regNames
-        if SymPC.hasLoad stronger || SymPC.hasLoad weaker then needsMem := true
-      -- Chunk z3 calls to ≤1000 pairs each to bound peak memory
-      let subsChunkSize := 1000
-      let mut subsTotalSatUnsat := 0
-      let mut subsChunkStart := 0
-      while subsChunkStart < pcPairs.size do
-        let subsChunkEnd := min (subsChunkStart + subsChunkSize) pcPairs.size
-        let pairChunk := pcPairs.extract subsChunkStart subsChunkEnd
-        let idxChunk  := queryBranchIdx.extract subsChunkStart subsChunkEnd
-        let mut chunkRegNames : Std.HashSet String := {}
-        let mut chunkNeedsMem := false
-        for (stronger, weaker) in pairChunk do
-          chunkRegNames := SymPC.collectRegNames stronger chunkRegNames
-          chunkRegNames := SymPC.collectRegNames weaker chunkRegNames
-          if SymPC.hasLoad stronger || SymPC.hasLoad weaker then chunkNeedsMem := true
-        let mut chunkScript := smtPreamble chunkRegNames chunkNeedsMem
-        for (stronger, weaker) in pairChunk do
-          chunkScript := chunkScript ++ "(push)\n"
-          chunkScript := chunkScript ++ s!"(assert (and {SymPC.toSMTLib stronger} (not {SymPC.toSMTLib weaker})))\n"
-          chunkScript := chunkScript ++ "(check-sat)\n"
-          chunkScript := chunkScript ++ "(pop)\n"
-        chunkScript := chunkScript ++ "(exit)\n"
-        let tmpFile : System.FilePath := ".lake/smt_subsumption.smt2"
-        IO.FS.writeFile tmpFile chunkScript
-        let result ← IO.Process.output { cmd := "z3", args := #[tmpFile.toString] }
-        let satUnsat := parseZ3Results result.stdout
-        subsTotalSatUnsat := subsTotalSatUnsat + satUnsat.size
-        for i in [:idxChunk.size] do
-          if h : i < satUnsat.size then
-            if satUnsat[i] then
-              subsumedSet := subsumedSet.insert idxChunk[i]!
-        subsChunkStart := subsChunkEnd
-      log s!"    z3: {pcPairs.size} queries, {subsTotalSatUnsat} results, {subsumedSet.size} subsumed"
+      let subsCache ← IO.mkRef ({} : Z3Cache)
+      let (subsResults, subsHits) ← z3CheckImplCached subsCache pcPairs ".lake/smt_subsumption.smt2"
+      for i in [:subsResults.size] do
+        if h : i < subsResults.size then
+          if subsResults[i] then
+            if h2 : i < queryBranchIdx.size then
+              subsumedSet := subsumedSet.insert queryBranchIdx[i]
+      log s!"    z3: {pcPairs.size} queries, cache_hits={subsHits}, {subsumedSet.size} subsumed"
     -- Filter new branches
     let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     branchIdx := 0
@@ -1178,6 +1231,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
     (maxIter : Nat) (log : String → IO Unit)
+    (z3cache : IO.Ref Z3Cache)
     (initialFrontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]) :
     IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)))) := do
   let isa := vexSummaryISA Reg
@@ -1302,6 +1356,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       -- Semantic path: only if there are unmatched candidates and closure is non-empty
       let mut candSemSigsArr : Array (Option (Array Bool)) := Array.replicate semCands.size none
       let mut totalZ3Queries := 0
+      let mut totalZ3CacheHits := 0
       let mut semMatched : Std.HashSet Nat := {}
       if z3CandIdxs.size > 0 && closure.size > 0 then
         let n := closure.size
@@ -1327,36 +1382,14 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
           batchIsRep    := batchIsRep.push false
           batchRepIdxs  := batchRepIdxs.push 0  -- dummy
           batchCandIdxs := batchCandIdxs.push ci
-        -- Batch z3: for each pc in batchPCs, n queries (one per closure PC).
-        -- Chunk so each z3 call covers at most pcsPerChunk PCs.
-        let pcsPerChunk := max 1 (1000 / n)
-        let mut allSemResults : Array Bool := #[]
-        let mut pcChunkStart := 0
-        while pcChunkStart < batchPCs.size do
-          let pcChunkEnd := min (pcChunkStart + pcsPerChunk) batchPCs.size
-          let pcChunk := batchPCs.extract pcChunkStart pcChunkEnd
-          let mut regNames : Std.HashSet String := {}
-          let mut needsMem := false
-          for pc in pcChunk do
-            regNames := SymPC.collectRegNames pc regNames
-            if SymPC.hasLoad pc then needsMem := true
+        -- Batch z3 with caching: for each pc in batchPCs, n queries (one per closure PC).
+        let mut convPairs : Array (SymPC Reg × SymPC Reg) := #[]
+        for pc in batchPCs do
           for phi in closure do
-            regNames := SymPC.collectRegNames phi regNames
-            if SymPC.hasLoad phi then needsMem := true
-          let mut script := smtPreamble regNames needsMem
-          for pc in pcChunk do
-            for phi in closure do
-              script := script ++ "(push)\n"
-              script := script ++ s!"(assert (and {SymPC.toSMTLib pc} (not {SymPC.toSMTLib phi})))\n"
-              script := script ++ "(check-sat)\n"
-              script := script ++ "(pop)\n"
-          script := script ++ "(exit)\n"
-          let tmpFile : System.FilePath := ".lake/smt_semsig.smt2"
-          IO.FS.writeFile tmpFile script
-          let z3Out ← IO.Process.output { cmd := "z3", args := #[tmpFile.toString] }
-          allSemResults := allSemResults ++ parseZ3Results z3Out.stdout
-          pcChunkStart := pcChunkEnd
-        totalZ3Queries := batchPCs.size * n
+            convPairs := convPairs.push (pc, phi)
+        let (allSemResults, convHits) ← z3CheckImplCached z3cache convPairs ".lake/smt_semsig.smt2"
+        totalZ3Queries := convPairs.size
+        totalZ3CacheHits := convHits
         -- Assign sem sigs: allSemResults[si*n .. (si+1)*n] for batchPCs[si]
         let mut updatedRepSemSigs := convRepSemSigs
         let mut si := 0
@@ -1381,7 +1414,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
                   semMatched := semMatched.insert ci
                   matched := true
               ri := ri + 1
-      log s!"    z3 conv: {totalZ3Queries}q → syn-collapsed={synMatched.size} sem-collapsed={semMatched.size}"
+      log s!"    z3 conv: {totalZ3Queries}q (hits={totalZ3CacheHits} misses={totalZ3Queries - totalZ3CacheHits}) → syn-collapsed={synMatched.size} sem-collapsed={semMatched.size}"
       -- Classify: collapse or promote to new equivalence class
       for ci in [:semCands.size] do
         if synMatched.contains ci || semMatched.contains ci then
@@ -1463,47 +1496,31 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
                 needsZ3Pairs := needsZ3Pairs + 1
             globalIdx := globalIdx + 1
         log s!"    [closedness] trivial={trivClosedPairs}/{globalIdx} z3_candidates={needsZ3Pairs}"
-        -- Run z3 semantic check for non-trivial lifted PCs
+        -- Run z3 semantic equivalence check via cached implication pairs.
+        -- Equivalence (A ↔ B) = (A→B) ∧ (B→A): decompose into two implication queries.
         let mut closednessViolations : Nat := 0
         if closedQueryPairs.size > 0 then
-          -- Chunk z3 calls to ≤1000 pairs each
-          let closedChunkSize := 1000
+          -- Build forward (cp→rp) and reverse (rp→cp) implication pairs
+          let mut fwdPairs : Array (SymPC Reg × SymPC Reg) := #[]
+          let mut revPairs : Array (SymPC Reg × SymPC Reg) := #[]
+          for (cp, rp) in closedQueryPairs do
+            fwdPairs := fwdPairs.push (cp, rp)
+            revPairs := revPairs.push (rp, cp)
+          let (fwdResults, fwdHits) ← z3CheckImplCached z3cache fwdPairs ".lake/smt_closedness.smt2"
+          let (revResults, revHits) ← z3CheckImplCached z3cache revPairs ".lake/smt_closedness.smt2"
+          -- A pair is equivalent iff both forward AND reverse implications hold
           let mut closedByZ3 : Std.HashSet Nat := {}
-          let mut clChunkStart := 0
-          let mut clTotalSatUnsat := 0
-          while clChunkStart < closedQueryPairs.size do
-            let clChunkEnd := min (clChunkStart + closedChunkSize) closedQueryPairs.size
-            let clPairChunk := closedQueryPairs.extract clChunkStart clChunkEnd
-            let mut clRegNames : Std.HashSet String := {}
-            let mut clNeedsMem2 := false
-            for (cp, rp) in clPairChunk do
-              clRegNames := SymPC.collectRegNames cp clRegNames
-              clRegNames := SymPC.collectRegNames rp clRegNames
-              if SymPC.hasLoad cp || SymPC.hasLoad rp then clNeedsMem2 := true
-            let mut clScript := smtPreamble clRegNames clNeedsMem2
-            for (cp, rp) in clPairChunk do
-              clScript := clScript ++ "(push)\n"
-              clScript := clScript ++ s!"(assert (or (and {SymPC.toSMTLib cp} (not {SymPC.toSMTLib rp})) (and {SymPC.toSMTLib rp} (not {SymPC.toSMTLib cp}))))\n"
-              clScript := clScript ++ "(check-sat)\n"
-              clScript := clScript ++ "(pop)\n"
-            clScript := clScript ++ "(exit)\n"
-            let clTmpFile : System.FilePath := ".lake/smt_closedness.smt2"
-            IO.FS.writeFile clTmpFile clScript
-            let clZ3 ← IO.Process.output { cmd := "z3", args := #[clTmpFile.toString] }
-            let clSatUnsat := parseZ3Results clZ3.stdout
-            clTotalSatUnsat := clTotalSatUnsat + clSatUnsat.size
-            let clChunkLen := clChunkEnd - clChunkStart
-            for i in [:clChunkLen] do
-              if h : i < clSatUnsat.size then
-                if clSatUnsat[i] then
-                  let pairIdx := clChunkStart + i
-                  closedByZ3 := closedByZ3.insert closedQueryLiftedIdx[pairIdx]!
-            clChunkStart := clChunkEnd
+          for i in [:closedQueryPairs.size] do
+            if h1 : i < fwdResults.size then
+              if h2 : i < revResults.size then
+                if fwdResults[i] && revResults[i] then
+                  closedByZ3 := closedByZ3.insert closedQueryLiftedIdx[i]!
           -- Violations: lifted PCs not closed by z3
           for gIdx in liftedNeedingCheck do
             unless closedByZ3.contains gIdx do
               closednessViolations := closednessViolations + 1
-          log s!"    [closedness] z3: {closedQueryPairs.size} queries, {closedByZ3.size} closed, {closednessViolations} violations"
+          let clTotalQueries := closedQueryPairs.size * 2
+          log s!"    [closedness] z3: {clTotalQueries} queries (hits={fwdHits + revHits} misses={clTotalQueries - fwdHits - revHits}), {closedByZ3.size} closed, {closednessViolations} violations"
         let isClosed := closednessViolations == 0
         log s!"    [closedness] closure closed: {if isClosed then "YES" else "NO"}, violations={closednessViolations}"
       return some (k, summaryArr)
@@ -1573,13 +1590,15 @@ def stratifiedFixpoint
       log s!"  {func.name} @ 0x{String.mk (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
   -- Phase 1: Compute leaf function (next_sym) fixpoint — no summaries needed
   let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  -- Green-style z3 query cache: shared across all function stabilizations
+  let z3cache ← IO.mkRef ({} : Z3Cache)
   log s!"\n--- Phase 1: Leaf function (next_sym) ---"
   let t0 ← IO.monoMsNow
   let (nextSymName, nextSymBody) := funcBlocks[0]!
   -- Use computeFunctionStabilization directly (returns branch array as summary).
   -- Don't double-run with computeStabilizationHS — that keeps two copies of deeply-nested
   -- symbolic branches alive simultaneously, causing OOM.
-  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log with
+  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log z3cache with
   | some (k, summaryArr) =>
     let t1 ← IO.monoMsNow
     summaries := summaries.insert functions[0]!.entryAddr summaryArr
@@ -1613,7 +1632,7 @@ def stratifiedFixpoint
       log s!"    {fname}: split body {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, {branchesAdded} branches, {droppedExp} dropped)"
       -- Step 2: Run stabilization on non-call body, seeding call results as initial frontier
       let oldSummary := summaries.getD func.entryAddr #[]
-      match ← computeFunctionStabilization ip_reg nonCallBody {} 30 log (initialFrontier := callResults) with
+      match ← computeFunctionStabilization ip_reg nonCallBody {} 30 log z3cache (initialFrontier := callResults) with
       | some (k, newSummary) =>
         let t1 ← IO.monoMsNow
         if newSummary.size != oldSummary.size then
@@ -1630,6 +1649,10 @@ def stratifiedFixpoint
     let func := functions[i]!
     let summary := summaries.getD func.entryAddr #[]
     log s!"  {func.name}: {summary.size} branches"
+  -- Z3 cache summary
+  let cacheContents ← z3cache.get
+  log s!"\n=== Z3 Cache Summary ==="
+  log s!"  cache entries: {cacheContents.size}"
   return summaries
 
 /-! ## DFA & CFG Extraction -/
