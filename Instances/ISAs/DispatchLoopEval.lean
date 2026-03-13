@@ -1887,9 +1887,6 @@ partial def dfsExtractProds
 
 /-- Golden grammar productions (from golden_grammar_tinyc.json).
     Each entry: (NT name, list of RHS alternatives as symbol sequences). -/
-/- Golden grammar from golden_grammar_tinyc.json (ground truth).
-   Token names use our tinycTokenNames convention ('if', 'while', etc.).
-   <statements> is a synthetic NT representing statement+ (block body). -/
 def goldenProds : Std.HashMap String (List (List String)) :=
   ({} : Std.HashMap String (List (List String)))
     |>.insert "term"       [["id"], ["int"], ["paren_expr"]]
@@ -1906,6 +1903,7 @@ def goldenProds : Std.HashMap String (List (List String)) :=
         ["expr", "';'"],
         ["';'"]
       ]
+    |>.insert "statements" [["statement"], ["statement", "statements"]]
 
 /-- BFS to find all blocks reachable from entry, following:
     - internal transitions (tgt in blocks)
@@ -2256,22 +2254,6 @@ def CharClass.simplify : CharClass → CharClass
     Built from converged next_sym summary (rax at return → token name). -/
 abbrev TokenNameTable := Std.HashMap UInt64 String
 
-/-- Extract a token-class specialization from a guard.
-    Used to specialize NT calls: if the guard constrains the consumed token to a specific
-    class (character range like [a-z] → id, or tokenCode like tok14 → id), we know what
-    kind of token the NT consumed. Only specializes to CLASS names (id, int), NOT keywords
-    or operators — those are dispatch conditions, not consumption constraints. -/
-def extractTokenClassSpecialization (tokenNames : TokenNameTable := {}) : CharClass → Option String
-  | .range 'a' 'z' => some "id"
-  | .range '0' '9' => some "int"
-  | .tokenCode n =>
-    match tokenNames.get? n with
-    | some "id" => some "id"
-    | some "int" => some "int"
-    | _ => none
-  | .conj a b => extractTokenClassSpecialization tokenNames a <|> extractTokenClassSpecialization tokenNames b
-  | _ => none
-
 /-- Infer a token class name from a CharClass, using optional token name table. -/
 def charClassToTokenName (tokenNames : TokenNameTable := {}) : CharClass → String
   | .literal c => s!"'{c}'"
@@ -2279,8 +2261,6 @@ def charClassToTokenName (tokenNames : TokenNameTable := {}) : CharClass → Str
     match tokenNames.get? n with
     | some name => name
     | none => s!"tok{n.toNat}"
-  | .range 'a' 'z' => "id"
-  | .range '0' '9' => "int"
   | .range lo hi => s!"[{lo}-{hi}]"
   | .negated cc => s!"[^{cc}]"
   | .any => "token"
@@ -2424,38 +2404,46 @@ This fixes term getting 2/3 — id and int both call next_sym but with
 different character class labels (letters vs digits). -/
 
 /-- An EBNF symbol: terminal token or nonterminal reference. -/
-inductive EBNFSym where
-  | terminal : String → EBNFSym    -- token class name
-  | nonterminal : String → EBNFSym -- NT function name
+inductive GrammarSym where
+  | terminal : CharClass → GrammarSym     -- raw guard, rendered via charClassToTokenName
+  | nonterminal : String → GrammarSym     -- function name or synthetic loop NT
   deriving BEq, Hashable, Inhabited
 
-instance : ToString EBNFSym where
-  toString
-    | .terminal t => t
-    | .nonterminal nt => nt
+def GrammarSym.isTerminal : GrammarSym → Bool
+  | .terminal _ => true
+  | .nonterminal _ => false
 
-/-- DFS through LTS collecting ordered symbol sequences as EBNF productions.
+/-- Check if a CharClass is a single positive tokenCode. -/
+def CharClass.isPositiveTokenCode : CharClass → Option UInt64
+  | .tokenCode n => some n
+  | _ => none
+
+/-- DFS result: either completed productions, or a loop detected back to a target node. -/
+inductive DFSResult where
+  | productions : Array (Array GrammarSym) → DFSResult
+  | loopDetected : UInt64 → Array GrammarSym → DFSResult  -- target, loop body
+
+/-- DFS through LTS collecting ordered symbol sequences as grammar productions.
     Accumulates CharClass labels along internal transitions (accGuard) so that
-    data guards from upstream comparison blocks are used to classify tokens.
-    This fixes the id/int distinction: both call next_sym from blocks with guard=true,
-    but the path to each goes through different comparison blocks with [a-z] vs [0-9].
-    Loop recognition: when a back-edge is detected (visiting a node already in `visited`),
-    the loop body (steps accumulated since the back-edge target was first visited) is
-    extracted and a left-recursive production is created: `funcName loopBody`. -/
+    data guards from upstream comparison blocks classify tokens (e.g., id vs int).
+    Loop recognition: back-edge detection via nodeStepIdx produces left-recursive
+    productions: `funcName ++ steps[idx:]` (e.g., sum '+' term).
+    Guard-based NT specialization: when calling an NT with accumulated guard that
+    simplifies to a single positive tokenCode, emit terminal instead of nonterminal. -/
 partial def ltsExtractProds
     (cur : UInt64)
-    (steps : Array EBNFSym)
-    (accGuard : CharClass)           -- accumulated data guard from internal transitions
+    (steps : Array GrammarSym)
+    (accGuard : CharClass)
     (ltsMap : Std.HashMap UInt64 (Array LTSTransition))
     (funcBlocks : Std.HashSet UInt64)
     (funcEntries : Std.HashMap UInt64 String)
     (visited : Std.HashSet UInt64)
-    (nodeStepIdx : Std.HashMap UInt64 Nat)  -- node → step count at first visit (for loop detection)
-    (funcName : String)                      -- current function name (for self-referential productions)
+    (nodeStepIdx : Std.HashMap UInt64 Nat)
+    (funcName : String)
     (depth : Nat)
     (bodyBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
     (tokenNames : TokenNameTable := {}) :
-    Array (Array EBNFSym) := Id.run do
+    Array (Array GrammarSym) := Id.run do
   if depth > 60 then return #[steps]
   if visited.contains cur then
     -- Back-edge detected: create left-recursive production
@@ -2470,33 +2458,27 @@ partial def ltsExtractProds
   let edges := ltsMap.getD cur #[]
   if edges.isEmpty then
     return if steps.isEmpty then #[] else #[steps]
-  let mut allPaths : Array (Array EBNFSym) := #[]
+  let mut allPaths : Array (Array GrammarSym) := #[]
   for t in edges do
-    -- Combine accumulated guard with this transition's label
     let combinedGuard : CharClass := match accGuard, t.label with
       | .empty, _ | _, .empty => .empty
       | .any, l => l
       | g, .any => g
       | g, l => (CharClass.conj g l).simplify
-    -- Prune contradictory paths
     if combinedGuard == .empty then
       continue
     match funcEntries.get? t.tgt with
     | some "_exit" => pure ()
     | some callee =>
-      -- External call: use accumulated guard to classify the token/nonterminal.
-      -- For next_sym: the guard directly names the token consumed.
-      -- For other NTs: the guard may constrain what the NT consumed (e.g., letter range
-      -- on the path to test → the test was specifically an id). This is the same guard
-      -- decoding that distinguishes id/int in term — applied to NT specialization.
+      -- External call: classify using accumulated guard
       let sym := if callee == "next_sym" then
-          EBNFSym.terminal (charClassToTokenName tokenNames combinedGuard)
+          GrammarSym.terminal combinedGuard
         else
-          match extractTokenClassSpecialization tokenNames combinedGuard with
-          | some specialized => EBNFSym.nonterminal specialized
-          | none => EBNFSym.nonterminal callee
+          -- Decision 1: positive tokenCode guard → emit terminal instead of NT
+          match combinedGuard.isPositiveTokenCode with
+          | some _ => GrammarSym.terminal combinedGuard
+          | none => GrammarSym.nonterminal callee
       let steps' := steps.push sym
-      -- Find return address for this call in the body branches
       let retAddr := bodyBranches.findSome? fun b =>
         match extractRipGuard Amd64Reg.rip b.pc, extractRipTarget Amd64Reg.rip b.sub with
         | some src, some tgt =>
@@ -2505,7 +2487,6 @@ partial def ltsExtractProds
       match retAddr with
       | some ret =>
         if funcBlocks.contains ret then
-          -- After a call, reset the accumulated guard
           allPaths := allPaths.append
             (ltsExtractProds ret steps' .any ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches tokenNames)
         else
@@ -2514,12 +2495,10 @@ partial def ltsExtractProds
         allPaths := allPaths.push steps'
     | none =>
       if funcBlocks.contains t.tgt then
-        -- Internal transition: accumulate guard, recurse without recording a symbol
         allPaths := allPaths.append
           (ltsExtractProds t.tgt steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches tokenNames)
       else
-        -- Unknown external (helper call like printf/getsym_value):
-        -- preserve accumulated guard through the call since helpers don't consume tokens
+        -- Unknown external (helper like printf): preserve guard through call
         let retAddr := bodyBranches.findSome? fun b =>
           match extractRipGuard Amd64Reg.rip b.pc, extractRipTarget Amd64Reg.rip b.sub with
           | some src, some tgt =>
@@ -2556,7 +2535,6 @@ def ltsReachable (entry : UInt64)
         if funcBlocks.contains t.tgt && !visited.contains t.tgt then
           queue := queue.push t.tgt
         else
-          -- External call: follow return continuation
           let retAddr := bodyBranches.findSome? fun b =>
             match extractRipGuard Amd64Reg.rip b.pc, extractRipTarget Amd64Reg.rip b.sub with
             | some src, some tgt =>
@@ -2569,21 +2547,32 @@ def ltsReachable (entry : UInt64)
           | none => pure ()
   return visited
 
-/-- Format an EBNF production RHS as a string. -/
-def formatEBNFProd (syms : Array EBNFSym) : String :=
-  if syms.isEmpty then "ε"
-  else " ".intercalate (syms.toList.map toString)
+/-- Render a GrammarSym as a string using the token name table. -/
+def renderSym (tokenNames : TokenNameTable) : GrammarSym → String
+  | .terminal cc => charClassToTokenName tokenNames cc
+  | .nonterminal name => name
 
-/-- Extract and print EBNF productions for one NT function using the LTS. -/
-def printLTSProductions (log : String → IO Unit)
+/-- Format a production RHS as a space-separated string. -/
+def formatProd (tokenNames : TokenNameTable) (syms : Array GrammarSym) : String :=
+  if syms.isEmpty then "ε"
+  else " ".intercalate (syms.toList.map (renderSym tokenNames))
+
+/-- Extracted grammar for one NT: productions + optional repetition NT. -/
+structure ExtractedNTGrammar where
+  funcName : String
+  prods : Array (Array GrammarSym)
+  repNTName : Option String                          -- e.g., "statement_rep"
+  repNTProds : Array (Array GrammarSym)              -- e.g., [statement], [statement, statement_rep]
+
+/-- Extract grammar productions for one NT function.
+    Returns productions + optional factored repetition NT. -/
+def extractNTGrammar
     (funcName : String) (entryAddr : UInt64)
     (bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
     (funcEntries : Std.HashMap UInt64 String)
-    (tokenNames : TokenNameTable := {}) : IO Unit := do
+    (tokenNames : TokenNameTable := {}) : ExtractedNTGrammar := Id.run do
   let ip_reg := Amd64Reg.rip
-  -- Build LTS from body branches (with mid-block target redirection)
   let lts := extractLTS ip_reg bodyArr funcEntries
-  -- Build LTS map: src → transitions
   let mut ltsMap : Std.HashMap UInt64 (Array LTSTransition) := {}
   let mut funcBlocks : Std.HashSet UInt64 := {}
   for b in bodyArr do
@@ -2597,7 +2586,7 @@ def printLTSProductions (log : String → IO Unit)
   let rawPaths := ltsExtractProds entryAddr #[] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr tokenNames
   -- Orphan blocks: not reachable from entry, contain NT calls
   let reachable := ltsReachable entryAddr ltsMap funcBlocks funcEntries bodyArr
-  let mut orphanPaths : Array (Array EBNFSym) := #[]
+  let mut orphanPaths : Array (Array GrammarSym) := #[]
   for (src, edges) in ltsMap.toArray do
     if reachable.contains src then pure ()
     else
@@ -2605,7 +2594,6 @@ def printLTSProductions (log : String → IO Unit)
         match funcEntries.get? t.tgt with
         | some "_exit" | some "next_sym" => pure ()
         | some callee =>
-          -- Find return address
           let retAddr := bodyArr.findSome? fun b =>
             match extractRipGuard ip_reg b.pc, extractRipTarget ip_reg b.sub with
             | some s, some tgt =>
@@ -2618,48 +2606,37 @@ def printLTSProductions (log : String → IO Unit)
                 (ltsExtractProds ret #[.nonterminal callee] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr tokenNames)
           | none => pure ()
         | none => pure ()
-  -- Deduplicate
+  -- Deduplicate using rendered strings
   let mut seen : Std.HashSet String := {}
-  let mut deduped : Array (Array EBNFSym) := #[]
+  let mut deduped : Array (Array GrammarSym) := #[]
   for p in rawPaths.append orphanPaths do
-    let key := formatEBNFProd p
+    let key := formatProd tokenNames p
     if !seen.contains key then
       seen := seen.insert key
       deduped := deduped.push p
-  -- Post-process: merge inner loop patterns into combined productions.
-  -- When we have `'{' '}'` (empty loop base) and `funcName funcName` (self-recursive loop body),
-  -- these represent a block construct: merge into `'{' statements '}'` where statements = funcName+.
-  let unique := Id.run do
-    let hasSelfRec := deduped.any fun p =>
-      p.size == 2 && p[0]! == .nonterminal funcName && p[1]! == .nonterminal funcName
-    let hasBlockBase := deduped.any fun p =>
-      p.size == 2 && p[0]! == .terminal "'{'" && p[1]! == .terminal "'}'"
-    if hasSelfRec && hasBlockBase then
-      deduped.filterMap fun p =>
-        if p.size == 2 && p[0]! == .nonterminal funcName && p[1]! == .nonterminal funcName then
-          none  -- remove self-recursive loop production (absorbed into block)
-        else if p.size == 2 && p[0]! == .terminal "'{'" && p[1]! == .terminal "'}'" then
-          some #[.terminal "'{'", .nonterminal "statements", .terminal "'}'"]
-        else some p
-    else deduped
-  let golden := goldenProds.getD funcName []
-  -- Count matches
-  let goldenSet : Std.HashSet String := golden.foldl (fun s g => s.insert (" ".intercalate g)) {}
-  let extractedSet : Std.HashSet String := unique.foldl (fun s p => s.insert (formatEBNFProd p)) {}
-  let mut matchCount : Nat := 0
-  for g in goldenSet do
-    if extractedSet.contains g then matchCount := matchCount + 1
-  log s!"\n  {funcName}: {unique.size} productions (golden: {golden.length}) [{matchCount}/{golden.length} match]"
-  for prod in unique do
-    let rhs := formatEBNFProd prod
-    let mark := if goldenSet.contains rhs then " ✓" else ""
-    log s!"    {funcName} -> {rhs}{mark}"
-  if !golden.isEmpty then
-    log s!"    -- Golden:"
-    for g in golden do
-      let gStr := " ".intercalate g
-      let mark := if extractedSet.contains gStr then " ✓" else " ✗"
-      log s!"    -- {funcName} -> {gStr}{mark}"
+  -- Post-process: factor self-repetition into repetition NT.
+  -- Detect pattern: [funcName, funcName] production (self-recursive loop body)
+  -- paired with a two-terminal production [T1, T2] (delimiter frame).
+  -- Merge into: [T1, repNT, T2] with repNT → funcName | funcName repNT.
+  let hasSelfRep := deduped.any fun p =>
+    p.size == 2 && p[0]! == .nonterminal funcName && p[1]! == .nonterminal funcName
+  if hasSelfRep then
+    let repName := funcName ++ "_rep"
+    let repProds : Array (Array GrammarSym) := #[
+      #[.nonterminal funcName],
+      #[.nonterminal funcName, .nonterminal repName]
+    ]
+    let isTwoTerminals (p : Array GrammarSym) : Bool :=
+      p.size == 2 && p[0]!.isTerminal && p[1]!.isTerminal
+    let modified := deduped.filterMap fun p =>
+      if p.size == 2 && p[0]! == .nonterminal funcName && p[1]! == .nonterminal funcName then
+        none
+      else if isTwoTerminals p then
+        some #[p[0]!, .nonterminal repName, p[1]!]
+      else some p
+    return { funcName := funcName, prods := modified, repNTName := some repName, repNTProds := repProds }
+  else
+    return { funcName := funcName, prods := deduped, repNTName := none, repNTProds := #[] }
 
 /-- Token type enum for tiny-c (extracted from binary analysis).
     next_sym stores token type in memory via a compile-time enum:
@@ -2686,7 +2663,138 @@ def tinycTokenNames : TokenNameTable :=
     |>.insert 14 "id"
     |>.insert 15 "EOI"
 
-/-- Print EBNF for all NT functions using LTS-based extraction. -/
+/-- Structural comparison of extracted grammar against golden grammar.
+    Builds terminal and NT mappings, then checks production-level isomorphism. -/
+def structuralGoldenCompare (log : String → IO Unit)
+    (grammars : Array ExtractedNTGrammar)
+    (tokenNames : TokenNameTable) : IO Unit := do
+  -- Collect all known NT names (function NTs + synthetic rep NTs)
+  let mut allNTNames : Std.HashSet String := {}
+  for g in grammars do
+    allNTNames := allNTNames.insert g.funcName
+    match g.repNTName with
+    | some n => allNTNames := allNTNames.insert n
+    | none => pure ()
+  -- Golden NTs: keys of goldenProds
+  let goldenNTNames : Std.HashSet String :=
+    goldenProds.toArray.foldl (fun s (k, _) => s.insert k) {}
+  for n in goldenNTNames do
+    allNTNames := allNTNames.insert n
+  -- Synthetic NTs: golden NTs not in extracted function NTs (e.g., "statements")
+  let funcNTNames : Std.HashSet String :=
+    grammars.foldl (fun s g => s.insert g.funcName) {}
+  let syntheticGoldenNTs := goldenNTNames.toArray.filter fun n => !funcNTNames.contains n
+  -- Map synthetic rep NTs to golden synthetic NTs
+  let repNTs := grammars.filterMap fun g => g.repNTName
+  let mut ntMapping : Std.HashMap String String := {}
+  for i in [:repNTs.size.min syntheticGoldenNTs.size] do
+    ntMapping := ntMapping.insert repNTs[i]! syntheticGoldenNTs[i]!
+  -- Helper: check if a symbol name is a known NT (not a terminal)
+  let isNT (name : String) : Bool := allNTNames.contains name
+  -- Build terminal mapping by scanning UNMATCHED productions only.
+  -- First remove exact matches, then build mappings from remaining pairs.
+  let mut termMapping : Std.HashMap String String := {}
+  let mut prodGoldenPairs : Array (Array (Array GrammarSym) × List (List String)) := #[]
+  for g in grammars do
+    prodGoldenPairs := prodGoldenPairs.push (g.prods, goldenProds.getD g.funcName [])
+    match g.repNTName with
+    | some repName =>
+      let goldenName := ntMapping.getD repName repName
+      prodGoldenPairs := prodGoldenPairs.push (g.repNTProds, goldenProds.getD goldenName [])
+    | none => pure ()
+  for (prods, golden) in prodGoldenPairs do
+    -- Phase 1: remove exact matches from both pools
+    let mut remainGolden : List (List String) := golden
+    let mut unmatchedProds : Array (Array GrammarSym) := #[]
+    for prod in prods do
+      let rendered := prod.toList.map fun sym => match sym with
+        | .terminal cc => charClassToTokenName tokenNames cc
+        | .nonterminal n => ntMapping.getD n n
+      let renderedStr := " ".intercalate rendered
+      let exactMatch := remainGolden.any fun gp => " ".intercalate gp == renderedStr
+      if exactMatch then
+        remainGolden := remainGolden.filter fun gp => " ".intercalate gp != renderedStr
+      else
+        unmatchedProds := unmatchedProds.push prod
+    -- Phase 2: build mappings from unmatched pairs
+    for prod in unmatchedProds do
+      let rendered := prod.toList.map fun sym => match sym with
+        | .terminal cc => charClassToTokenName tokenNames cc
+        | .nonterminal n => ntMapping.getD n n
+      for gProd in remainGolden do
+        if rendered.length == gProd.length then
+          let pairs := rendered.zip gProd
+          let allMatch := pairs.all fun (e, g) =>
+            e == g || (!isNT e && !isNT g)
+          if allMatch then
+            for (e, g) in pairs do
+              if e != g && !isNT e && !isNT g then
+                termMapping := termMapping.insert e g
+  -- Apply both mappings and count matches
+  log "\n=== Structural Grammar Comparison ==="
+  if !termMapping.isEmpty then
+    let termPairs := termMapping.toArray.map fun (e, g) => s!"{e} ↔ {g}"
+    log s!"  Terminal mapping: {", ".intercalate termPairs.toList}"
+  if !ntMapping.isEmpty then
+    let ntPairs := ntMapping.toArray.map fun (e, g) => s!"{e} ↔ {g}"
+    log s!"  NT mapping: {", ".intercalate ntPairs.toList}"
+  let mut totalMatch : Nat := 0
+  let mut totalGolden : Nat := 0
+  let mut totalExtra : Nat := 0
+  for g in grammars do
+    let golden := goldenProds.getD g.funcName []
+    let goldenSet : Std.HashSet String :=
+      golden.foldl (fun s gp => s.insert (" ".intercalate gp)) {}
+    -- Render extracted productions with mappings applied
+    let mut matchCount : Nat := 0
+    let mut extraCount : Nat := 0
+    for prod in g.prods do
+      let rendered := prod.toList.map fun sym => match sym with
+        | .terminal cc =>
+          let raw := charClassToTokenName tokenNames cc
+          termMapping.getD raw raw
+        | .nonterminal n => ntMapping.getD n n
+      let renderedStr := " ".intercalate rendered
+      if goldenSet.contains renderedStr then
+        matchCount := matchCount + 1
+      else
+        extraCount := extraCount + 1
+    -- Also check rep NT productions
+    match g.repNTName with
+    | some repName =>
+      let goldenName := ntMapping.getD repName repName
+      let repGolden := goldenProds.getD goldenName []
+      let repGoldenSet : Std.HashSet String :=
+        repGolden.foldl (fun s gp => s.insert (" ".intercalate gp)) {}
+      let mut repMatch : Nat := 0
+      for prod in g.repNTProds do
+        let rendered := prod.toList.map fun sym => match sym with
+          | .terminal cc =>
+            let raw := charClassToTokenName tokenNames cc
+            termMapping.getD raw raw
+          | .nonterminal n => ntMapping.getD n n
+        let renderedStr := " ".intercalate rendered
+        if repGoldenSet.contains renderedStr then
+          repMatch := repMatch + 1
+      let repTotal := repGolden.length
+      let mark := if repMatch == repTotal && repTotal > 0 then " ✓" else ""
+      log s!"  {repName} ({goldenName}): {repMatch}/{repTotal}{mark}"
+      totalMatch := totalMatch + repMatch
+      totalGolden := totalGolden + repTotal
+    | none => pure ()
+    let mark := if matchCount == golden.length && golden.length > 0 then " ✓" else ""
+    log s!"  {g.funcName}: {matchCount}/{golden.length}{mark}"
+    if extraCount > 0 then
+      log s!"    ({extraCount} extra productions)"
+    totalMatch := totalMatch + matchCount
+    totalGolden := totalGolden + golden.length
+    totalExtra := totalExtra + extraCount
+  let mark := if totalMatch == totalGolden then " ✓" else ""
+  log s!"  Total: {totalMatch}/{totalGolden}{mark}"
+  if totalExtra > 0 then
+    log s!"  ({totalExtra} extra productions total)"
+
+/-- Print EBNF grammar for all NT functions using LTS-based extraction. -/
 def printLTSGrammar (log : String → IO Unit)
     (functions : Array FunctionSpec)
     (funcEntries : Std.HashMap UInt64 String)
@@ -2696,14 +2804,29 @@ def printLTSGrammar (log : String → IO Unit)
   log s!"\n=== Token Name Table (tiny-c enum) ==="
   for (code, name) in tokenNames.toArray do
     log s!"  {code.toNat} → {name}"
-  log "\n=== EBNF Grammar (LTS-based extraction) ==="
+  -- Extract grammar for each NT function
+  let mut grammars : Array ExtractedNTGrammar := #[]
   for i in [1:functions.size] do
     let func := functions[i]!
     match parseBlocksWithAddresses func.blocks with
     | .error e => log s!"  Parse error for {func.name}: {e}"
     | .ok pairs =>
       let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
-      printLTSProductions log func.name func.entryAddr bodyArr funcEntries tokenNames
+      grammars := grammars.push (extractNTGrammar func.name func.entryAddr bodyArr funcEntries tokenNames)
+  -- Print raw extracted grammar
+  log "\n=== EBNF Grammar (LTS-based extraction) ==="
+  for g in grammars do
+    log s!"\n  {g.funcName}:"
+    for prod in g.prods do
+      log s!"    {g.funcName} -> {formatProd tokenNames prod}"
+    match g.repNTName with
+    | some repName =>
+      log s!"    -- Repetition NT: {repName}"
+      for prod in g.repNTProds do
+        log s!"    {repName} -> {formatProd tokenNames prod}"
+    | none => pure ()
+  -- Structural comparison against golden grammar
+  structuralGoldenCompare log grammars tokenNames
 
 /-! ## Run stabilization on next_sym -/
 
