@@ -2390,10 +2390,451 @@ def printTokenizerDFA (log : String → IO Unit)
     for t in edges do
       log s!"    --[{t.label}]--> {hexAddr t.tgt}"
 
+/-! ## Parser Detection — Conservative Constructive Evidence
+
+Given converged function summaries from stratified fixpoint, detect whether
+the binary is a parser and construct a ParserStructure with:
+- Which function is the lexer (token producer)
+- Which functions are nonterminals (token consumers)
+- Derived token names from lexer branch guards
+
+Detection uses IsTokenConfig (World 1, rax proxy): the lexer is the unique
+function that produces diverse rax constants, called by ≥2 consumer functions. -/
+
+/-- How the binary classifies an LTS transition. -/
+inductive TransitionRole where
+  | terminal : TransitionRole              -- consumes a token
+  | nonterminal : String → TransitionRole  -- invokes another classifier
+  | internal : TransitionRole              -- function-internal (not grammar-relevant)
+
+/-- Evidence that a binary classifies regions of a token stream.
+    Construction-method-agnostic: IsTokenConfig, World 2 detection, or
+    manual annotation all produce the same structure. -/
+structure ParserStructure where
+  /-- The region classifiers (nonterminals) -/
+  classifiers : Array FunctionSpec
+  /-- The lexer function name -/
+  lexerName : String
+  /-- The lexer function entry address -/
+  lexerAddr : UInt64
+  /-- Which classifier is the entry point (start symbol) -/
+  entryClassifier : UInt64
+  /-- Token name table for rendering -/
+  tokenNames : TokenNameTable
+
+/-- Evidence for IsTokenConfig conditions (Bool witnesses). -/
+structure TokenConfigEvidence where
+  lexer : FunctionSpec
+  raxValues : Array UInt64
+  consumers : Array FunctionSpec
+  callEdges : Array (UInt64 × UInt64)
+  deriving Inhabited
+
+/-- Extract the raw rax UInt64 from a branch substitution (for producer detection). -/
+def extractRaxValueRaw (sub : SymSub Amd64Reg) : Option UInt64 :=
+  match sub.regs .rax with
+  | .const v => some v
+  | _ => none
+
+/-- Resolve a SymExpr to a constant, substituting known rip value.
+    Handles patterns like add64(reg(rip), const(offset)), const(v), etc. -/
+partial def resolveExprConst (ripVal : Option UInt64) : SymExpr Amd64Reg → Option UInt64
+  | .const v => some v
+  | .reg .rip => ripVal
+  | .add64 a b => do
+    let va ← resolveExprConst ripVal a
+    let vb ← resolveExprConst ripVal b
+    return va + vb
+  | .sub64 a b => do
+    let va ← resolveExprConst ripVal a
+    let vb ← resolveExprConst ripVal b
+    return va - vb
+  | .low32 inner => do
+    let v ← resolveExprConst ripVal inner
+    return v &&& 0xFFFFFFFF
+  | .sext32to64 inner => resolveExprConst ripVal inner
+  | .uext32 inner => resolveExprConst ripVal inner
+  | _ => none
+
+/-- Extract (address, value) pairs from constant stores in a memory chain.
+    Resolves RIP-relative addresses using the known rip value from the branch's PC guard.
+    Returns array of (store_addr, stored_value). -/
+partial def extractConstStores (ripVal : Option UInt64) : SymMem Amd64Reg → Array (UInt64 × UInt64)
+  | .base => #[]
+  | .store _w inner addr val =>
+    let rest := extractConstStores ripVal inner
+    match resolveExprConst ripVal addr, resolveExprConst ripVal val with
+    | some a, some v => rest.push (a, v)
+    | _, _ => rest
+
+/-- Build call graph by scanning raw body branches for rip targets matching function entries.
+    Returns array of (caller_addr, callee_addr) edges. -/
+def buildCallGraph
+    (functions : Array FunctionSpec)
+    (log : String → IO Unit) :
+    IO (Array (UInt64 × UInt64)) := do
+  let ip_reg := Amd64Reg.rip
+  let mut funcEntrySet : Std.HashSet UInt64 := {}
+  for f in functions do
+    funcEntrySet := funcEntrySet.insert f.entryAddr
+  let mut edges : Array (UInt64 × UInt64) := #[]
+  for func in functions do
+    match parseBlocksWithAddresses func.blocks with
+    | .error _ => pure ()
+    | .ok pairs =>
+      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      for b in bodyArr do
+        match extractRipTarget ip_reg b.sub with
+        | some tgt =>
+          if funcEntrySet.contains tgt && tgt != func.entryAddr then
+            let edgeExists := edges.any fun (s, t) => s == func.entryAddr && t == tgt
+            if !edgeExists then
+              edges := edges.push (func.entryAddr, tgt)
+        | none => pure ()
+  log s!"\n=== Parser Detection: Call Graph ({edges.size} edges) ==="
+  for (src, tgt) in edges do
+    let srcName := functions.findSome? fun f => if f.entryAddr == src then some f.name else none
+    let tgtName := functions.findSome? fun f => if f.entryAddr == tgt then some f.name else none
+    log s!"  {srcName.getD (hexAddr src)} → {tgtName.getD (hexAddr tgt)}"
+  return edges
+
+/-- Find producer functions: those that write ≥2 distinct constant values to the SAME
+    memory address on return transitions. This detects the token variable (e.g., `sym`)
+    without requiring rax to carry the return value.
+    Returns array of (function addr, distinct token values, token variable address). -/
+def findProducers
+    (functions : Array FunctionSpec)
+    (_summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
+    (log : String → IO Unit) :
+    IO (Array (UInt64 × Array UInt64)) := do
+  let ip_reg := Amd64Reg.rip
+  let mut producers : Array (UInt64 × Array UInt64) := #[]
+  log s!"\n--- Producer Identification ---"
+  for func in functions do
+    match parseBlocksWithAddresses func.blocks with
+    | .error _ =>
+      log s!"  {func.name}: PARSE ERROR"
+    | .ok pairs =>
+      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      -- Build block set to identify return transitions
+      let mut funcBlocks : Std.HashSet UInt64 := {}
+      for b in bodyArr do
+        match extractRipGuard ip_reg b.pc with
+        | some src => funcBlocks := funcBlocks.insert src
+        | none => pure ()
+      -- Scan ALL body branches for stores of constants to the same address expression.
+      -- The token variable (e.g., sym) is accessed through GOT dereference:
+      --   store(val, load(mem, GOT_addr)) — same address expr, different constant vals.
+      -- Group by (address expression hash) → collect distinct constant values.
+      let mut storesByExprHash : Std.HashMap UInt64 (SymExpr Amd64Reg × Std.HashSet UInt64) := {}
+      for b in bodyArr do
+        match b.sub.mem with
+        | .base => pure ()
+        | _ =>
+          -- Walk store chain, collect (addr_expr, const_value) pairs
+          let mut mem := b.sub.mem
+          let mut done := false
+          while !done do
+            match mem with
+            | .store _w inner addr val =>
+              -- Skip stack stores (addr uses rsp/rbp)
+              let isStack := exprUsesRSP addr
+              match resolveExprConst none val with
+              | some constVal =>
+                if !isStack then
+                  let h := hash addr
+                  let (expr, vals) := storesByExprHash.getD h (addr, {})
+                  storesByExprHash := storesByExprHash.insert h (expr, vals.insert constVal)
+              | none => pure ()
+              mem := inner
+            | .base => done := true
+      -- Find the address expression with the most distinct values
+      let mut bestHash : UInt64 := 0
+      let mut bestCount : Nat := 0
+      let mut bestExpr : Option (SymExpr Amd64Reg) := none
+      for (h, (expr, vals)) in storesByExprHash.toArray do
+        if vals.size > bestCount then
+          bestHash := h
+          bestCount := vals.size
+          bestExpr := some expr
+      -- Also check rax across all branches
+      let mut raxVals : Std.HashSet UInt64 := {}
+      for b in bodyArr do
+        match extractRaxValueRaw b.sub with
+        | some v => raxVals := raxVals.insert v
+        | none => pure ()
+      let (tokenVals, source) :=
+        if bestCount >= raxVals.size && bestCount >= 2 then
+          let (_, vals) := storesByExprHash.getD bestHash (SymExpr.const 0, {})
+          (vals.toArray, s!"mem[{bestExpr.map (exprSummary · 3) |>.getD "?"}]")
+        else if raxVals.size >= 2 then
+          (raxVals.toArray, "rax")
+        else
+          (#[], "none")
+      log s!"  {func.name}: {bodyArr.size} body branches, best_mem={bestCount} vals @ {bestExpr.map (exprSummary · 3) |>.getD "none"}, rax={raxVals.size} distinct"
+      if tokenVals.size >= 2 then
+        producers := producers.push (func.entryAddr, tokenVals)
+        log s!"    → Producer candidate via {source} ({tokenVals.size} distinct values)"
+  return producers
+
+/-- Find consumer functions: those that call the producer in the call graph. -/
+def findConsumers
+    (functions : Array FunctionSpec)
+    (callGraph : Array (UInt64 × UInt64))
+    (producerAddr : UInt64)
+    (log : String → IO Unit) :
+    IO (Array FunctionSpec) := do
+  let mut consumers : Array FunctionSpec := #[]
+  for func in functions do
+    if func.entryAddr == producerAddr then continue
+    let callsProducer := callGraph.any fun (src, tgt) =>
+      src == func.entryAddr && tgt == producerAddr
+    if callsProducer then
+      consumers := consumers.push func
+      log s!"  Consumer: {func.name} @ {hexAddr func.entryAddr}"
+  return consumers
+
+/-- Check IsTokenConfig conditions: unique producer with ≥2 consumers.
+    Returns the token config evidence or an error explaining why detection failed. -/
+def checkTokenConfig
+    (functions : Array FunctionSpec)
+    (producers : Array (UInt64 × Array UInt64))
+    (callGraph : Array (UInt64 × UInt64))
+    (log : String → IO Unit) :
+    IO (Except String TokenConfigEvidence) := do
+  log s!"\n--- IsTokenConfig Check ---"
+  if producers.isEmpty then
+    log "  FAIL: No producer candidates (no function with ≥2 distinct rax values)"
+    return .error "No producer function found"
+  let mut validConfigs : Array TokenConfigEvidence := #[]
+  for (addr, raxVals) in producers do
+    let func := functions.find? fun f => f.entryAddr == addr
+    match func with
+    | some f =>
+      let consumers ← findConsumers functions callGraph addr log
+      if consumers.size >= 2 then
+        log s!"  Producer {f.name}: {consumers.size} consumers — VALID"
+        validConfigs := validConfigs.push {
+          lexer := f
+          raxValues := raxVals
+          consumers := consumers
+          callEdges := callGraph
+        }
+      else
+        log s!"  Producer {f.name}: only {consumers.size} consumers — REJECTED (need ≥2)"
+    | none => pure ()
+  match validConfigs.size with
+  | 0 =>
+    log "  FAIL: No producer with ≥2 consumers"
+    return .error "No producer with ≥2 consumers"
+  | 1 =>
+    log s!"  PASS: Unique producer {validConfigs[0]!.lexer.name} with {validConfigs[0]!.consumers.size} consumers"
+    return .ok validConfigs[0]!
+  | n =>
+    log s!"  FAIL: Ambiguous — {n} producers each with ≥2 consumers"
+    return .error s!"Ambiguous: {n} valid producers"
+
+/-- Find entry point: the NT function not called by any other NT.
+    Falls back to first NT if all are mutually recursive. -/
+def findParserEntryPoint
+    (ntFunctions : Array FunctionSpec)
+    (callGraph : Array (UInt64 × UInt64))
+    (log : String → IO Unit) :
+    IO UInt64 := do
+  let candidates := ntFunctions.filter fun f =>
+    !(callGraph.any fun (src, tgt) =>
+      tgt == f.entryAddr && (ntFunctions.any fun g => g.entryAddr == src))
+  match candidates[0]? with
+  | some f =>
+    log s!"  Entry point: {f.name} (not called by any other NT)"
+    return f.entryAddr
+  | none =>
+    match ntFunctions[0]? with
+    | some f =>
+      log s!"  Entry point: {f.name} (fallback — all NTs mutually recursive)"
+      return f.entryAddr
+    | none => return 0
+
+/-- Classify functions: identify NTs (not lexer, transitively calls lexer).
+    Returns (NTs, helpers). -/
+def classifyParserFunctions
+    (functions : Array FunctionSpec)
+    (callGraph : Array (UInt64 × UInt64))
+    (lexerAddr : UInt64)
+    (log : String → IO Unit) :
+    IO (Array FunctionSpec × Array FunctionSpec) := do
+  log s!"\n--- Function Classification ---"
+  let mut adj : Std.HashMap UInt64 (Array UInt64) := {}
+  for (src, tgt) in callGraph do
+    let arr := adj.getD src #[]
+    adj := adj.insert src (arr.push tgt)
+  let callsLexer (startAddr : UInt64) : Bool := Id.run do
+    let mut visited : Std.HashSet UInt64 := {}
+    let mut queue : Array UInt64 := #[startAddr]
+    while !queue.isEmpty do
+      let cur := queue.back!
+      queue := queue.pop
+      if visited.contains cur then continue
+      visited := visited.insert cur
+      if cur == lexerAddr then return true
+      for tgt in adj.getD cur #[] do
+        if !visited.contains tgt then
+          queue := queue.push tgt
+    return false
+  let mut nts : Array FunctionSpec := #[]
+  let mut helpers : Array FunctionSpec := #[]
+  for func in functions do
+    if func.entryAddr == lexerAddr then
+      log s!"  {func.name}: LEXER"
+    else
+      let transCallsLex := callsLexer func.entryAddr
+      if transCallsLex then
+        nts := nts.push func
+        log s!"  {func.name}: NT (transitively calls lexer)"
+      else
+        helpers := helpers.push func
+        log s!"  {func.name}: HELPER (does not call lexer)"
+  return (nts, helpers)
+
+/-- Derive token names from the lexer's raw body branches.
+    For each summary branch that stores a constant to the token variable,
+    decode the data guard as CharClass. Uses summary branches (post-fixpoint)
+    because multi-block character comparisons are composed into single guards. -/
+def deriveTokenNames
+    (lexerSpec : FunctionSpec)
+    (summaryBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
+    (log : String → IO Unit) :
+    IO TokenNameTable := do
+  let ip_reg := Amd64Reg.rip
+  -- Use SUMMARY branches (post-fixpoint) for token name derivation.
+  -- Summary branches have composed guards that include the full character class
+  -- (multi-block paths are already collapsed).
+  -- Step 1: Find the token variable address expression from summary branches.
+  let mut storesByExprHash : Std.HashMap UInt64 (SymExpr Amd64Reg × Std.HashSet UInt64) := {}
+  for b in summaryBranches do
+    match b.sub.mem with
+    | .base => pure ()
+    | _ =>
+      let mut mem := b.sub.mem
+      let mut done := false
+      while !done do
+        match mem with
+        | .store _w inner addr val =>
+          let isStack := exprUsesRSP addr
+          match resolveExprConst none val with
+          | some constVal =>
+            if !isStack then
+              let h := hash addr
+              let (expr, vals) := storesByExprHash.getD h (addr, {})
+              storesByExprHash := storesByExprHash.insert h (expr, vals.insert constVal)
+          | none => pure ()
+          mem := inner
+        | .base => done := true
+  let mut bestHash : UInt64 := 0
+  let mut bestCount : Nat := 0
+  for (h, (_, vals)) in storesByExprHash.toArray do
+    if vals.size > bestCount then
+      bestHash := h
+      bestCount := vals.size
+  -- Step 2: For each summary branch that stores a constant to the token variable,
+  -- extract the constant and decode the branch's data guard (character class).
+  let mut table : TokenNameTable := {}
+  if bestCount >= 2 then
+    for b in summaryBranches do
+      match b.sub.mem with
+      | .base => pure ()
+      | _ =>
+        let mut mem := b.sub.mem
+        let mut done := false
+        while !done do
+          match mem with
+          | .store _w inner addr val =>
+            let isStack := exprUsesRSP addr
+            if !isStack && hash addr == bestHash then
+              match resolveExprConst none val with
+              | some constVal =>
+                if !table.contains constVal then
+                  let dataGuard := stripRipGuards ip_reg b.pc
+                  let cc := (decodeCharClass dataGuard).simplify
+                  -- Only add to table if we decoded a meaningful character class
+                  -- (.any means we couldn't decode anything — no information)
+                  match cc with
+                  | .any => pure ()
+                  | _ =>
+                    let name := charClassToTokenName {} cc
+                    table := table.insert constVal name
+              | none => pure ()
+            mem := inner
+          | .base => done := true
+  -- Fallback: try body-level rax extraction
+  if table.size == 0 then
+    match parseBlocksWithAddresses lexerSpec.blocks with
+    | .error _ => pure ()
+    | .ok pairs =>
+      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      let mut lexerBlocks : Std.HashSet UInt64 := {}
+      for b in bodyArr do
+        match extractRipGuard ip_reg b.pc with
+        | some src => lexerBlocks := lexerBlocks.insert src
+        | none => pure ()
+      for b in bodyArr do
+        match extractRaxValueRaw b.sub with
+        | some raxVal =>
+          if table.contains raxVal then continue
+          match extractRipTarget ip_reg b.sub with
+          | some tgt =>
+            if !lexerBlocks.contains tgt then
+              let dataGuard := stripRipGuards ip_reg b.pc
+              let cc := (decodeCharClass dataGuard).simplify
+              match cc with
+              | .any => pure ()
+              | _ =>
+                let name := charClassToTokenName {} cc
+                table := table.insert raxVal name
+          | none => pure ()
+        | none => pure ()
+  log s!"\n--- Derived Token Names ({table.size} entries) ---"
+  for (code, name) in table.toArray do
+    log s!"  {code.toNat} → {name}"
+  return table
+
+/-- Detect parser structure from converged function summaries.
+    Uses IsTokenConfig (World 1, rax proxy) to identify lexer and NTs. -/
+def detectParser
+    (functions : Array FunctionSpec)
+    (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
+    (log : String → IO Unit) :
+    IO (Except String ParserStructure) := do
+  log "\n=== Parser Detection ==="
+  let callGraph ← buildCallGraph functions log
+  let producers ← findProducers functions summaries log
+  match ← checkTokenConfig functions producers callGraph log with
+  | .error e =>
+    log s!"  Parser detection FAILED: {e}"
+    return .error e
+  | .ok evidence =>
+    let (nts, _helpers) ← classifyParserFunctions functions callGraph evidence.lexer.entryAddr log
+    let entryAddr ← findParserEntryPoint nts callGraph log
+    let lexerSummary := summaries.getD evidence.lexer.entryAddr #[]
+    let tokenNames ← deriveTokenNames evidence.lexer lexerSummary log
+    let ps : ParserStructure := {
+      classifiers := nts
+      lexerName := evidence.lexer.name
+      lexerAddr := evidence.lexer.entryAddr
+      entryClassifier := entryAddr
+      tokenNames := tokenNames
+    }
+    log s!"\n--- Parser Detection SUCCEEDED ---"
+    log s!"  Lexer: {ps.lexerName} @ {hexAddr ps.lexerAddr}"
+    log s!"  NTs: {nts.toList.map (·.name)}"
+    log s!"  Entry: {hexAddr ps.entryClassifier}"
+    log s!"  Token names: {ps.tokenNames.size} entries"
+    return .ok ps
+
 /-! ## EBNF Extraction from LTS
 
 For each NT function, walk the LTS to produce EBNF productions:
-- Transitions to next_sym entry = terminal (token type from data guard label)
+- Transitions to lexer entry = terminal (token type from data guard label)
 - Transitions to other NT entry = nonterminal reference
 - Linear chains = sequence
 - Branch points = alternatives
@@ -2442,6 +2883,7 @@ partial def ltsExtractProds
     (funcName : String)
     (depth : Nat)
     (bodyBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
+    (lexerName : String := "next_sym")
     (tokenNames : TokenNameTable := {}) :
     Array (Array GrammarSym) := Id.run do
   if depth > 60 then return #[steps]
@@ -2471,7 +2913,7 @@ partial def ltsExtractProds
     | some "_exit" => pure ()
     | some callee =>
       -- External call: classify using accumulated guard
-      let sym := if callee == "next_sym" then
+      let sym := if callee == lexerName then
           GrammarSym.terminal combinedGuard
         else
           -- Decision 1: positive tokenCode guard → emit terminal instead of NT
@@ -2488,7 +2930,7 @@ partial def ltsExtractProds
       | some ret =>
         if funcBlocks.contains ret then
           allPaths := allPaths.append
-            (ltsExtractProds ret steps' .any ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches tokenNames)
+            (ltsExtractProds ret steps' .any ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches lexerName tokenNames)
         else
           allPaths := allPaths.push steps'
       | none =>
@@ -2496,7 +2938,7 @@ partial def ltsExtractProds
     | none =>
       if funcBlocks.contains t.tgt then
         allPaths := allPaths.append
-          (ltsExtractProds t.tgt steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches tokenNames)
+          (ltsExtractProds t.tgt steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches lexerName tokenNames)
       else
         -- Unknown external (helper like printf): preserve guard through call
         let retAddr := bodyBranches.findSome? fun b =>
@@ -2508,7 +2950,7 @@ partial def ltsExtractProds
         | some ret =>
           if funcBlocks.contains ret then
             allPaths := allPaths.append
-              (ltsExtractProds ret steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches tokenNames)
+              (ltsExtractProds ret steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches lexerName tokenNames)
           else if !steps.isEmpty then
             allPaths := allPaths.push steps
         | none =>
@@ -2570,6 +3012,7 @@ def extractNTGrammar
     (funcName : String) (entryAddr : UInt64)
     (bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
     (funcEntries : Std.HashMap UInt64 String)
+    (lexerName : String := "next_sym")
     (tokenNames : TokenNameTable := {}) : ExtractedNTGrammar := Id.run do
   let ip_reg := Amd64Reg.rip
   let lts := extractLTS ip_reg bodyArr funcEntries
@@ -2583,7 +3026,7 @@ def extractNTGrammar
     let arr := ltsMap.getD t.src #[]
     ltsMap := ltsMap.insert t.src (arr.push t)
   -- Main DFS from entry
-  let rawPaths := ltsExtractProds entryAddr #[] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr tokenNames
+  let rawPaths := ltsExtractProds entryAddr #[] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr lexerName tokenNames
   -- Orphan blocks: not reachable from entry, contain NT calls
   let reachable := ltsReachable entryAddr ltsMap funcBlocks funcEntries bodyArr
   let mut orphanPaths : Array (Array GrammarSym) := #[]
@@ -2592,19 +3035,21 @@ def extractNTGrammar
     else
       for t in edges do
         match funcEntries.get? t.tgt with
-        | some "_exit" | some "next_sym" => pure ()
+        | some "_exit" => pure ()
         | some callee =>
-          let retAddr := bodyArr.findSome? fun b =>
-            match extractRipGuard ip_reg b.pc, extractRipTarget ip_reg b.sub with
-            | some s, some tgt =>
-              if s == src && tgt == t.tgt then extractCallReturn b.sub.mem else none
-            | _, _ => none
-          match retAddr with
-          | some ret =>
-            if funcBlocks.contains ret then
-              orphanPaths := orphanPaths.append
-                (ltsExtractProds ret #[.nonterminal callee] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr tokenNames)
-          | none => pure ()
+          if callee == lexerName then pure ()
+          else
+            let retAddr := bodyArr.findSome? fun b =>
+              match extractRipGuard ip_reg b.pc, extractRipTarget ip_reg b.sub with
+              | some s, some tgt =>
+                if s == src && tgt == t.tgt then extractCallReturn b.sub.mem else none
+              | _, _ => none
+            match retAddr with
+            | some ret =>
+              if funcBlocks.contains ret then
+                orphanPaths := orphanPaths.append
+                  (ltsExtractProds ret #[.nonterminal callee] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr lexerName tokenNames)
+            | none => pure ()
         | none => pure ()
   -- Deduplicate using rendered strings
   let mut seen : Std.HashSet String := {}
@@ -2637,31 +3082,6 @@ def extractNTGrammar
     return { funcName := funcName, prods := modified, repNTName := some repName, repNTProds := repProds }
   else
     return { funcName := funcName, prods := deduped, repNTName := none, repNTProds := #[] }
-
-/-- Token type enum for tiny-c (extracted from binary analysis).
-    next_sym stores token type in memory via a compile-time enum:
-      enum { DO_SYM=0, ELSE_SYM=1, IF_SYM=2, WHILE_SYM=3,
-             LBRA=4, RBRA=5, LPAR=6, RPAR=7,
-             PLUS=8, MINUS=9, LESS=10, SEMI=11, EQUAL=12,
-             INT=13, ID=14, EOI=15 } -/
-def tinycTokenNames : TokenNameTable :=
-  ({} : TokenNameTable)
-    |>.insert 0  "'do'"
-    |>.insert 1  "'else'"
-    |>.insert 2  "'if'"
-    |>.insert 3  "'while'"
-    |>.insert 4  "'{'"
-    |>.insert 5  "'}'"
-    |>.insert 6  "'('"
-    |>.insert 7  "')'"
-    |>.insert 8  "'+'"
-    |>.insert 9  "'-'"
-    |>.insert 10 "'<'"
-    |>.insert 11 "';'"
-    |>.insert 12 "'='"
-    |>.insert 13 "int"
-    |>.insert 14 "id"
-    |>.insert 15 "EOI"
 
 /-- Structural comparison of extracted grammar against golden grammar.
     Builds terminal and NT mappings, then checks production-level isomorphism. -/
@@ -2794,25 +3214,31 @@ def structuralGoldenCompare (log : String → IO Unit)
   if totalExtra > 0 then
     log s!"  ({totalExtra} extra productions total)"
 
-/-- Print EBNF grammar for all NT functions using LTS-based extraction. -/
+/-- Print EBNF grammar for all NT functions using LTS-based extraction.
+    Uses ParserStructure for lexer identification and token names when available. -/
 def printLTSGrammar (log : String → IO Unit)
     (functions : Array FunctionSpec)
     (funcEntries : Std.HashMap UInt64 String)
-    (_summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))) : IO Unit := do
+    (_summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
+    (parserStructure : Option ParserStructure := none) : IO Unit := do
   let ip_reg := Amd64Reg.rip
-  let tokenNames := tinycTokenNames
-  log s!"\n=== Token Name Table (tiny-c enum) ==="
+  let (tokenNames, lexerName, lexerAddr) := match parserStructure with
+    | some ps => (ps.tokenNames, ps.lexerName, ps.lexerAddr)
+    | none => (({} : TokenNameTable), "next_sym", (0 : UInt64))
+  log s!"\n=== Token Name Table ({tokenNames.size} entries, derived={parserStructure.isSome}) ==="
   for (code, name) in tokenNames.toArray do
     log s!"  {code.toNat} → {name}"
-  -- Extract grammar for each NT function
+  -- Extract grammar for each NT function (skip the lexer)
   let mut grammars : Array ExtractedNTGrammar := #[]
-  for i in [1:functions.size] do
-    let func := functions[i]!
+  for func in functions do
+    if func.entryAddr == lexerAddr then continue
+    -- Also skip by name for backward compatibility when no ParserStructure
+    if parserStructure.isNone && func.name == "next_sym" then continue
     match parseBlocksWithAddresses func.blocks with
     | .error e => log s!"  Parse error for {func.name}: {e}"
     | .ok pairs =>
       let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
-      grammars := grammars.push (extractNTGrammar func.name func.entryAddr bodyArr funcEntries tokenNames)
+      grammars := grammars.push (extractNTGrammar func.name func.entryAddr bodyArr funcEntries lexerName tokenNames)
   -- Print raw extracted grammar
   log "\n=== EBNF Grammar (LTS-based extraction) ==="
   for g in grammars do
@@ -2881,5 +3307,10 @@ def dispatchLoopEvalMain : IO Unit := do
       | some src => nextSymBlkSet := nextSymBlkSet.insert src
       | none => pure ()
     printTokenizerDFA log nextSymLTS nextSymBlkSet bodyArr 0x40006f
-  -- Step 4: EBNF extraction for parser NTs (LTS-based)
-  printLTSGrammar log functions funcEntries summaries
+  -- Step 4: Parser detection
+  let parserResult ← detectParser functions summaries log
+  let ps := match parserResult with
+    | .ok ps => some ps
+    | .error _ => none
+  -- Step 5: EBNF extraction for parser NTs (LTS-based)
+  printLTSGrammar log functions funcEntries summaries ps
