@@ -1890,17 +1890,18 @@ partial def dfsExtractProds
 def goldenProds : Std.HashMap String (List (List String)) :=
   ({} : Std.HashMap String (List (List String)))
     |>.insert "term"       [["id"], ["int"], ["paren_expr"]]
-    |>.insert "sum"        [["term"], ["term", "'+' term ...loop"]]
+    |>.insert "sum"        [["term"], ["sum", "'+'", "term"], ["sum", "'-'", "term"]]
     |>.insert "test"       [["sum"], ["sum", "'<'", "sum"]]
     |>.insert "expr"       [["test"], ["id", "'='", "expr"]]
     |>.insert "paren_expr" [["'('", "expr", "')'"]]
     |>.insert "statement"  [
-        ["'('", "expr", "')'", "statement"],
-        ["'('", "expr", "')'", "statement", "'else'", "statement"],
-        ["statement", "'while'", "'('", "expr", "')'", "';'"],
+        ["'if'", "paren_expr", "statement", "'else'", "statement"],
+        ["'if'", "paren_expr", "statement"],
+        ["'while'", "paren_expr", "statement"],
+        ["'do'", "statement", "'while'", "paren_expr", "';'"],
         ["expr", "';'"],
-        ["'{'"],
-        ["'}'"],
+        ["'{'", "'}'"],
+        ["statement", "statement"],
         ["';'"]
       ]
 
@@ -2419,7 +2420,10 @@ instance : ToString EBNFSym where
     Accumulates CharClass labels along internal transitions (accGuard) so that
     data guards from upstream comparison blocks are used to classify tokens.
     This fixes the id/int distinction: both call next_sym from blocks with guard=true,
-    but the path to each goes through different comparison blocks with [a-z] vs [0-9]. -/
+    but the path to each goes through different comparison blocks with [a-z] vs [0-9].
+    Loop recognition: when a back-edge is detected (visiting a node already in `visited`),
+    the loop body (steps accumulated since the back-edge target was first visited) is
+    extracted and a left-recursive production is created: `funcName loopBody`. -/
 partial def ltsExtractProds
     (cur : UInt64)
     (steps : Array EBNFSym)
@@ -2428,12 +2432,23 @@ partial def ltsExtractProds
     (funcBlocks : Std.HashSet UInt64)
     (funcEntries : Std.HashMap UInt64 String)
     (visited : Std.HashSet UInt64)
+    (nodeStepIdx : Std.HashMap UInt64 Nat)  -- node → step count at first visit (for loop detection)
+    (funcName : String)                      -- current function name (for self-referential productions)
     (depth : Nat)
     (bodyBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
     (tokenNames : TokenNameTable := {}) :
     Array (Array EBNFSym) := Id.run do
-  if depth > 60 || visited.contains cur then return #[steps]
+  if depth > 60 then return #[steps]
+  if visited.contains cur then
+    -- Back-edge detected: create left-recursive production
+    match nodeStepIdx.get? cur with
+    | some idx =>
+      let loopBody := steps.extract idx steps.size
+      if loopBody.isEmpty then return #[steps]
+      else return #[#[.nonterminal funcName] ++ loopBody]
+    | none => return #[steps]
   let visited' := visited.insert cur
+  let nodeStepIdx' := nodeStepIdx.insert cur steps.size
   let edges := ltsMap.getD cur #[]
   if edges.isEmpty then
     return if steps.isEmpty then #[] else #[steps]
@@ -2468,7 +2483,7 @@ partial def ltsExtractProds
         if funcBlocks.contains ret then
           -- After a call, reset the accumulated guard
           allPaths := allPaths.append
-            (ltsExtractProds ret steps' .any ltsMap funcBlocks funcEntries visited' (depth + 1) bodyBranches tokenNames)
+            (ltsExtractProds ret steps' .any ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches tokenNames)
         else
           allPaths := allPaths.push steps'
       | none =>
@@ -2477,7 +2492,7 @@ partial def ltsExtractProds
       if funcBlocks.contains t.tgt then
         -- Internal transition: accumulate guard, recurse without recording a symbol
         allPaths := allPaths.append
-          (ltsExtractProds t.tgt steps combinedGuard ltsMap funcBlocks funcEntries visited' (depth + 1) bodyBranches tokenNames)
+          (ltsExtractProds t.tgt steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches tokenNames)
       else
         -- Unknown external (helper call like printf/getsym_value):
         -- preserve accumulated guard through the call since helpers don't consume tokens
@@ -2490,7 +2505,7 @@ partial def ltsExtractProds
         | some ret =>
           if funcBlocks.contains ret then
             allPaths := allPaths.append
-              (ltsExtractProds ret steps combinedGuard ltsMap funcBlocks funcEntries visited' (depth + 1) bodyBranches tokenNames)
+              (ltsExtractProds ret steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches tokenNames)
           else if !steps.isEmpty then
             allPaths := allPaths.push steps
         | none =>
@@ -2555,7 +2570,7 @@ def printLTSProductions (log : String → IO Unit)
     let arr := ltsMap.getD t.src #[]
     ltsMap := ltsMap.insert t.src (arr.push t)
   -- Main DFS from entry
-  let rawPaths := ltsExtractProds entryAddr #[] .any ltsMap funcBlocks funcEntries {} 0 bodyArr tokenNames
+  let rawPaths := ltsExtractProds entryAddr #[] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr tokenNames
   -- Orphan blocks: not reachable from entry, contain NT calls
   let reachable := ltsReachable entryAddr ltsMap funcBlocks funcEntries bodyArr
   let mut orphanPaths : Array (Array EBNFSym) := #[]
@@ -2576,7 +2591,7 @@ def printLTSProductions (log : String → IO Unit)
           | some ret =>
             if funcBlocks.contains ret then
               orphanPaths := orphanPaths.append
-                (ltsExtractProds ret #[.nonterminal callee] .any ltsMap funcBlocks funcEntries {} 0 bodyArr tokenNames)
+                (ltsExtractProds ret #[.nonterminal callee] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr tokenNames)
           | none => pure ()
         | none => pure ()
   -- Deduplicate
