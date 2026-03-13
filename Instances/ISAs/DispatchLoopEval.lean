@@ -729,6 +729,345 @@ def extractRipTarget {Reg : Type} (ip_reg : Reg) (sub : SymSub Reg) :
   | .const addr => some addr
   | _ => none
 
+/-- Check if a SymExpr transitively references a specific register.
+    Does NOT recurse into SymMem (only checks expression structure). -/
+partial def exprReferencesReg {Reg : Type} [BEq Reg] (r : Reg) : SymExpr Reg → Bool
+  | .reg r' => r == r'
+  | .const _ => false
+  | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => exprReferencesReg r e
+  | .add64 a b | .sub64 a b | .xor64 a b | .and64 a b | .or64 a b
+  | .shl64 a b | .shr64 a b | .sub32 a b | .shl32 a b =>
+    exprReferencesReg r a || exprReferencesReg r b
+  | .load _ _ addr => exprReferencesReg r addr
+
+/-- Classification of a block's rip target expression. -/
+inductive RipTargetClass where
+  | direct (addr : UInt64)              -- constant target (jump, call, or tail call)
+  | ret                                  -- load from stack area (return instruction)
+  | computed (expr : SymExpr Amd64Reg)  -- register value or complex expression
+  deriving Inhabited
+
+/-- Classify the rip target of a branch's substitution.
+    - direct: rip = const addr (jump, call, or tail call)
+    - ret: rip = load(_, mem, addr) where addr references any stack register
+      (rsp for non-frame-pointer code, rbp for frame-pointer code)
+    - computed: rip = register or complex expression (switch tables, etc.) -/
+def classifyRipTarget (ip_reg : Amd64Reg) (stackRegs : Array Amd64Reg) (sub : SymSub Amd64Reg) : RipTargetClass :=
+  match sub.regs ip_reg with
+  | .const addr => .direct addr
+  | .load _ _ addr =>
+    if stackRegs.any (fun r => exprReferencesReg r addr) then .ret
+    else .computed (sub.regs ip_reg)
+  | expr => .computed expr
+
+/-- Extract a return address from a branch's memory store chain.
+    Walks the store chain (outermost → innermost) looking for a constant value
+    stored to a stack-relative address. For x86-64, a `call` pushes the return
+    address: store(W64, mem, rsp-8, const return_addr). The return address is the
+    continuation block after the call.
+    Returns the first matching constant found. -/
+partial def extractCallReturnAddr {Reg : Type} [BEq Reg]
+    (stackReg : Reg) : SymMem Reg → Option UInt64
+  | .base => none
+  | .store _w innerMem storeAddr storeVal =>
+    match storeVal with
+    | .const retAddr =>
+      if exprReferencesReg stackReg storeAddr then some retAddr
+      else extractCallReturnAddr stackReg innerMem
+    | _ => extractCallReturnAddr stackReg innerMem
+
+/-- Detect whether a branch is a call site (not a tail call or plain jump).
+    A call: rip = const target AND stores a constant return address to the stack.
+    A tail call or plain jump: rip = const target but NO return address pushed.
+    Returns (callee_entry, continuation_address) for calls. -/
+def detectCallSite {Reg : Type} [BEq Reg]
+    (ip_reg stackReg : Reg) (sub : SymSub Reg) : Option (UInt64 × UInt64) :=
+  match sub.regs ip_reg with
+  | .const target =>
+    match extractCallReturnAddr stackReg sub.mem with
+    | some retAddr => some (target, retAddr)
+    | none => none
+  | _ => none
+
+/-- Pretty-print a rip expression for diagnostic logging. -/
+partial def ppRipExpr : SymExpr Amd64Reg → String
+  | .const v => s!"0x{String.mk (Nat.toDigits 16 v.toNat)}"
+  | .reg r => toString r
+  | .load _ _ addr => s!"load(mem, {ppRipExpr addr})"
+  | .add64 a b => s!"({ppRipExpr a}+{ppRipExpr b})"
+  | .sub64 a b => s!"({ppRipExpr a}-{ppRipExpr b})"
+  | _ => "..."
+
+/-- Build CFG successor map from body branches: source rip → target rips.
+    For constant rip targets: adds a direct edge src → tgt.
+    For indirect jumps (non-constant rip): adds edges to all blocks in the
+    same function (intra-function fan-out). This ensures switch/case blocks
+    are reachable from the function entry. Cross-function indirect jumps
+    don't add edges to ALL blocks (which would merge everything into one SCC). -/
+def buildCFGSuccessors {Reg : Type} [BEq Reg]
+    (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (funcBlockAddrs : Std.HashMap UInt64 (Array UInt64) := {}) :
+    Std.HashMap UInt64 (Array UInt64) := Id.run do
+  let mut succs : Std.HashMap UInt64 (Array UInt64) := {}
+  for b in bodyArr do
+    match extractRipGuard ip_reg b.pc with
+    | some src =>
+      match extractRipTarget ip_reg b.sub with
+      | some tgt =>
+        let existing := succs.getD src #[]
+        unless existing.contains tgt do
+          succs := succs.insert src (existing.push tgt)
+      | none =>
+        -- Indirect jump: add edges to all blocks in same function
+        match funcBlockAddrs.get? src with
+        | some siblings =>
+          let mut existing := succs.getD src #[]
+          for tgt in siblings do
+            unless existing.contains tgt || tgt == src do
+              existing := existing.push tgt
+          succs := succs.insert src existing
+        | none => pure ()  -- no function info, treat as exit
+    | none => pure ()
+  return succs
+
+/-- Format a UInt64 as a hex address string. -/
+private def fmtAddr (a : UInt64) : String :=
+  s!"0x{String.mk (Nat.toDigits 16 a.toNat)}"
+
+/-- Compute return edges for the interprocedural CFG.
+    For each return block (rip = load from stack), adds edges to the
+    continuation blocks of all callers of the return block's function.
+
+    Algorithm:
+    1. Scan all branches to find call sites: callee_entry → [continuation_addr]
+    2. Scan all branches to find return blocks: block addr where rip = load(mem, rsp)
+    3. For each return block in function F, add edges to all callers' continuations
+
+    This completes the CFG for standard x86-64 call/ret patterns.
+    Tail calls (rip = const, no stack push) produce no return edges — correct,
+    since the callee returns to the caller's caller, not to us. -/
+def buildReturnEdges
+    (ip_reg : Amd64Reg)
+    (stackRegs : Array Amd64Reg)   -- registers that access the stack area (rsp, rbp)
+    (callStackReg : Amd64Reg)      -- register used by CALL instruction to push return addr (rsp)
+    (bodyArr : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
+    (blockToFunc : Std.HashMap UInt64 UInt64)
+    (log : String → IO Unit) :
+    IO (Std.HashMap UInt64 (Array UInt64)) := do
+  -- Phase 1: Classify all branches and collect call sites
+  let mut callSites : Std.HashMap UInt64 (Array UInt64) := {}  -- callee_entry → [continuation_addrs]
+  let mut callCount : Nat := 0
+  let mut tailCallCount : Nat := 0
+  let mut returnBlockAddrs : Std.HashSet UInt64 := {}
+  let mut computedJumpCount : Nat := 0
+  let mut directJumpCount : Nat := 0
+  for b in bodyArr do
+    match extractRipGuard ip_reg b.pc with
+    | some src =>
+      match classifyRipTarget ip_reg stackRegs b.sub with
+      | .direct _target =>
+        match detectCallSite ip_reg callStackReg b.sub with
+        | some (callee, continuation) =>
+          callCount := callCount + 1
+          let existing := callSites.getD callee #[]
+          unless existing.contains continuation do
+            callSites := callSites.insert callee (existing.push continuation)
+          log s!"    call: {fmtAddr src} → {fmtAddr callee} (ret to {fmtAddr continuation})"
+        | none =>
+          -- No return address pushed: either intra-function jump or tail call
+          let srcFunc := blockToFunc.getD src 0
+          let tgtFunc := blockToFunc.getD _target 0
+          if srcFunc != 0 && tgtFunc != 0 && srcFunc != tgtFunc then
+            tailCallCount := tailCallCount + 1
+            log s!"    tail-call: {fmtAddr src} → {fmtAddr _target}"
+          else
+            directJumpCount := directJumpCount + 1
+      | .ret =>
+        unless returnBlockAddrs.contains src do
+          returnBlockAddrs := returnBlockAddrs.insert src
+          log s!"    return: {fmtAddr src} (rip={ppRipExpr (b.sub.regs ip_reg)})"
+      | .computed expr =>
+        computedJumpCount := computedJumpCount + 1
+        -- Only log unique computed jump sources
+        log s!"    computed: {fmtAddr src} (rip={ppRipExpr expr})"
+    | none => pure ()
+  -- Phase 2: Build return edges
+  -- For functions WITH return blocks: return_block → caller's continuation
+  -- For functions WITHOUT return blocks (external/opaque): call_site → continuation
+  let mut returnEdges : Std.HashMap UInt64 (Array UInt64) := {}
+  let mut retEdgeCount : Nat := 0
+  let mut callContEdgeCount : Nat := 0
+  -- 2a: Functions with detected return blocks get return edges
+  for retAddr in returnBlockAddrs do
+    let funcEntry := blockToFunc.getD retAddr 0
+    if funcEntry != 0 then
+      match callSites.get? funcEntry with
+      | some continuations =>
+        let mut existing := returnEdges.getD retAddr #[]
+        for cont in continuations do
+          unless existing.contains cont do
+            existing := existing.push cont
+            retEdgeCount := retEdgeCount + 1
+            log s!"    ret-edge: {fmtAddr retAddr} → {fmtAddr cont} (return from {fmtAddr funcEntry})"
+        returnEdges := returnEdges.insert retAddr existing
+      | none => pure ()
+  -- 2b: Collect which functions have return blocks
+  let mut funcsWithReturn : Std.HashSet UInt64 := {}
+  for retAddr in returnBlockAddrs do
+    let funcEntry := blockToFunc.getD retAddr 0
+    if funcEntry != 0 then
+      funcsWithReturn := funcsWithReturn.insert funcEntry
+  -- 2c: For calls to functions WITHOUT return blocks (external/opaque functions),
+  -- add call-continuation edges: src → continuation.
+  -- This models the call/return as a pass-through from the caller's perspective.
+  for b in bodyArr do
+    match extractRipGuard ip_reg b.pc with
+    | some src =>
+      match detectCallSite ip_reg callStackReg b.sub with
+      | some (callee, continuation) =>
+        -- Only add call-continuation edge if callee has no return blocks
+        unless funcsWithReturn.contains callee do
+          let existing := returnEdges.getD src #[]
+          unless existing.contains continuation do
+            returnEdges := returnEdges.insert src (existing.push continuation)
+            callContEdgeCount := callContEdgeCount + 1
+            log s!"    call-cont: {fmtAddr src} → {fmtAddr continuation} (opaque call to {fmtAddr callee})"
+      | none => pure ()
+    | none => pure ()
+  log s!"  Classification: {callCount} calls, {tailCallCount} tail-calls, {returnBlockAddrs.size} return blocks, {computedJumpCount} computed jumps, {directJumpCount} intra-function jumps"
+  log s!"  Return edges: {retEdgeCount} ret-edges + {callContEdgeCount} call-continuation edges = {retEdgeCount + callContEdgeCount} total"
+  return returnEdges
+
+/-! ## Bourdoncle WTO (Weak Topological Order)
+
+Bourdoncle 1993 "Efficient chaotic iteration strategies with widenings" —
+produces a hierarchical decomposition of SCCs with identified loop headers.
+`vertex v` = DAG node (no back edge targets it).
+`component head children` = SCC with `head` as the loop header and
+`children` processed in WTO order. Nested components get their own inner
+fixpoint before the outer loop widens. -/
+
+inductive WTOComponent where
+  | vertex : UInt64 → WTOComponent
+  | component : UInt64 → Array WTOComponent → WTOComponent
+  deriving Inhabited
+
+/-- Collect all block addresses mentioned in a WTO component. -/
+partial def WTOComponent.addrs : WTOComponent → Array UInt64
+  | .vertex v => #[v]
+  | .component h cs => cs.foldl (fun acc c => acc ++ c.addrs) #[h]
+
+/-- Shared state for Bourdoncle WTO algorithm. -/
+structure WTOState where
+  dfn   : Std.HashMap UInt64 Nat
+  num   : Nat
+  stack : Array UInt64
+
+/-- Recursive visit in Bourdoncle's WTO algorithm (1993).
+    Returns the minimum dfn reachable from v (the "head" value).
+    Pushes WTO elements into `elemsRef` (the current nesting level).
+    Elements are appended in DFS postorder; caller reverses for WTO order. -/
+partial def wtoVisit
+    (succs : Std.HashMap UInt64 (Array UInt64))
+    (stRef : IO.Ref WTOState)
+    (elemsRef : IO.Ref (Array WTOComponent))
+    (v : UInt64) : IO Nat := do
+  let st ← stRef.get
+  let vDfn := st.num + 1
+  stRef.set { dfn := st.dfn.insert v vDfn, num := vDfn, stack := st.stack.push v }
+  let mut head := vDfn
+  let mut isLoop := false
+  let successors := succs.getD v #[]
+  for w in successors do
+    let wDfn := (← stRef.get).dfn.getD w 0
+    let minVal ← if wDfn == 0 then wtoVisit succs stRef elemsRef w
+                  else pure wDfn
+    if minVal <= head then
+      head := minVal
+      isLoop := true
+  if head == vDfn then
+    let maxVal := 1000000000
+    stRef.modify fun s => { s with dfn := s.dfn.insert v maxVal }
+    if isLoop then
+      let mut st' ← stRef.get
+      while st'.stack.size > 0 && st'.stack[st'.stack.size - 1]! != v do
+        let w := st'.stack[st'.stack.size - 1]!
+        st' := { st' with stack := st'.stack.pop, dfn := st'.dfn.insert w 0 }
+      st' := { st' with stack := st'.stack.pop }
+      stRef.set st'
+      let childRef ← IO.mkRef (#[] : Array WTOComponent)
+      for w in successors do
+        let wDfn := (← stRef.get).dfn.getD w 0
+        if wDfn == 0 then
+          let _ ← wtoVisit succs stRef childRef w
+      let children ← childRef.get
+      elemsRef.modify (·.push (.component v children))
+    else
+      stRef.modify fun s => { s with stack := s.stack.pop }
+      elemsRef.modify (·.push (.vertex v))
+  return head
+
+/-- Compute the Bourdoncle WTO decomposition of a CFG.
+    `entries` are the DFS roots; `succs` maps each node to its successors.
+    Returns WTO elements in topological order (DAG predecessors first).
+    SCC components are nested: inner loops converge before outer ones. -/
+def computeWTO
+    (entries : Array UInt64)
+    (succs : Std.HashMap UInt64 (Array UInt64)) :
+    IO (Array WTOComponent) := do
+  let stRef ← IO.mkRef ({ dfn := {}, num := 0, stack := #[] } : WTOState)
+  let elemsRef ← IO.mkRef (#[] : Array WTOComponent)
+  for entry in entries do
+    let entryDfn := (← stRef.get).dfn.getD entry 0
+    if entryDfn == 0 then
+      let _ ← wtoVisit succs stRef elemsRef entry
+  elemsRef.get
+
+/-- Pretty-print a WTO decomposition for logging. -/
+partial def ppWTO (components : Array WTOComponent) : String :=
+  let parts := components.map fun c => match c with
+    | .vertex v => s!"0x{String.mk (Nat.toDigits 16 v.toNat)}"
+    | .component h cs =>
+      s!"(0x{String.mk (Nat.toDigits 16 h.toNat)} {ppWTO cs})"
+  " ".intercalate parts.toList
+
+/-- Count unique addresses in a WTO decomposition. -/
+partial def wtoUniqueAddrs (components : Array WTOComponent) : Std.HashSet UInt64 :=
+  components.foldl (fun acc c => match c with
+    | .vertex v => acc.insert v
+    | .component h cs =>
+      let inner := wtoUniqueAddrs cs
+      inner.fold (fun s a => s.insert a) (acc.insert h))
+    {}
+
+/-- Count top-level vertices and components in a WTO (non-recursive). -/
+def wtoTopLevelStats (components : Array WTOComponent) : Nat × Nat :=
+  components.foldl (fun (dags, sccs) c => match c with
+    | .vertex _ => (dags + 1, sccs)
+    | .component _ _ => (dags, sccs + 1))
+    (0, 0)
+
+/-- Count vertices and components in a WTO (recursive — DAG vertices at all nesting levels). -/
+partial def wtoStats (components : Array WTOComponent) : Nat × Nat :=
+  components.foldl (fun (dags, sccs) c => match c with
+    | .vertex _ => (dags + 1, sccs)
+    | .component _ cs =>
+      let (innerDags, innerSccs) := wtoStats cs
+      (dags + innerDags, sccs + 1 + innerSccs))
+    (0, 0)
+
+/-- Detailed WTO structure logging: print each SCC with head, members, and nesting. -/
+partial def ppWTODetailed (log : String → IO Unit) (components : Array WTOComponent) (indent : String := "") : IO Unit := do
+  for c in components do
+    match c with
+    | .vertex v =>
+      log s!"{indent}vertex 0x{String.mk (Nat.toDigits 16 v.toNat)}"
+    | .component h cs =>
+      let allAddrs := cs.foldl (fun acc child => acc ++ child.addrs) (#[h] : Array UInt64)
+      log s!"{indent}SCC head=0x{String.mk (Nat.toDigits 16 h.toNat)} members={allAddrs.size} [{", ".intercalate (allAddrs.toList.map (fun a => s!"0x{String.mk (Nat.toDigits 16 a.toNat)}"))}]"
+      log s!"{indent}  children ({cs.size}):"
+      ppWTODetailed log cs (indent ++ "    ")
+
 /-- Compose body branches with frontier branches, simplify, return as Array.
     Uses direct iteration instead of Finset.biUnion/image.
     Returns (result, totalPairs, droppedCount). -/
@@ -791,321 +1130,6 @@ def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq 
   let skipped := totalPairs - composed_count
   return (result, composed_count, skipped, dropped)
 
-/-- Per-chunk composition result for parallel merge. -/
-structure ChunkResult (Sub PC : Type*) where
-  branches : Array (Branch Sub PC)
-  composed : Nat
-  dropped : Nat
-
-/-- Compose a chunk of body branches with the frontier (rip-indexed).
-    Pure function — no shared mutable state, safe to run in parallel. -/
-def composeChunk {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
-    (ip_reg : Reg) (bodyChunk : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
-    (frontierNoRip : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (frontierAll : Array (Branch (SymSub Reg) (SymPC Reg))) :
-    ChunkResult (SymSub Reg) (SymPC Reg) := Id.run do
-  let isa := vexSummaryISA Reg
-  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-  let mut dropped : Nat := 0
-  let mut composed_count : Nat := 0
-  for b in bodyChunk do
-    let compatible := match extractRipTarget ip_reg b.sub with
-      | some target => (frontierByRip.getD target #[]) ++ frontierNoRip
-      | none => frontierAll
-    for f in compatible do
-      composed_count := composed_count + 1
-      let composed := b.compose isa f
-      match simplifyBranch composed with
-      | none => dropped := dropped + 1
-      | some b' => result := result.push b'
-  return ⟨result, composed_count, dropped⟩
-
-/-- Split an array into N roughly-equal chunks. -/
-def splitIntoChunks {α : Type} (arr : Array α) (n : Nat) : Array (Array α) := Id.run do
-  if n == 0 || arr.size == 0 then return #[arr]
-  let chunkSize := (arr.size + n - 1) / n
-  let mut chunks : Array (Array α) := #[]
-  let mut i := 0
-  while i < arr.size do
-    let endIdx := min (i + chunkSize) arr.size
-    chunks := chunks.push (arr.extract i endIdx)
-    i := endIdx
-  return chunks
-
-/-- Parallel rip-indexed composition with dedup.
-    Splits body array into chunks, composes each chunk in parallel via IO.asTask,
-    then merges results into the HashSet sequentially.
-    Returns (newBranches, updatedCurrent, pairsComposed, skipped, dropped, dupes). -/
-def composeAndDedupParallel {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg]
-    (ip_reg : Reg) (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)))
-    (numWorkers : Nat := 8) :
-    IO (Array (Branch (SymSub Reg) (SymPC Reg)) × Std.HashSet (Branch (SymSub Reg) (SymPC Reg))
-      × Nat × Nat × Nat × Nat) := do
-  -- Build frontier index (shared across workers, immutable)
-  let (frontierByRip, frontierNoRip) ← do
-    let mut byRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
-    let mut noRip : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-    for f in frontierArr do
-      match extractRipGuard ip_reg f.pc with
-      | some addr =>
-        let arr := byRip.getD addr #[]
-        byRip := byRip.insert addr (arr.push f)
-      | none => noRip := noRip.push f
-    pure (byRip, noRip)
-  -- Split body into chunks and spawn tasks
-  let chunks := splitIntoChunks bodyArr numWorkers
-  let tasks ← chunks.mapM fun chunk =>
-    IO.asTask (prio := .dedicated) do
-      return composeChunk ip_reg chunk frontierByRip frontierNoRip frontierArr
-  -- Collect results
-  let results ← tasks.mapM fun task => do
-    let r ← IO.wait task
-    IO.ofExcept r
-  -- Merge into HashSet (sequential — avoids concurrent mutation)
-  let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-  let mut cur := current
-  let mut totalComposed : Nat := 0
-  let mut totalDropped : Nat := 0
-  let mut dupes : Nat := 0
-  for r in results do
-    totalComposed := totalComposed + r.composed
-    totalDropped := totalDropped + r.dropped
-    for b in r.branches do
-      if cur.contains b then
-        dupes := dupes + 1
-      else
-        newBranches := newBranches.push b
-        cur := cur.insert b
-  let totalPairs := bodyArr.size * frontierArr.size
-  let skipped := totalPairs - totalComposed
-  return (newBranches, cur, totalComposed, skipped, totalDropped, dupes)
-
-/-- Fast incremental stabilization using HashSet for O(1) membership.
-    Single-threaded rip-indexed composition with inline dedup.
-    Includes PC-signature equivalence class dedup and subsumption pruning. -/
-def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg] [ToString Reg]
-    (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
-  let isa := vexSummaryISA Reg
-  let initBranch := Branch.skip isa
-  -- Extract the closure: all distinct atomic guard PCs from body branches.
-  -- dataOnly=true filters rip-routing guards, keeping only data PCs (P₀).
-  let (closure, ripCount, dataCount) := extractClosure ip_reg bodyArr (dataOnly := true)
-  let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
-  current := current.insert initBranch
-  -- sigSeen tracks (sub, signature) classes across ALL iterations.
-  -- A new branch is only added if its signature class hasn't been seen before.
-  let mut sigSeen : Std.HashSet SigDedupKey := {}
-  let initSig := computePCSignature closure initBranch.pc
-  -- initSigKey inserted after closedness check determines dedupSubHash
-  let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
-  -- allBranchesBySub: sub hash → array of branches, for efficient subsumption check
-  let mut allBranchesBySub : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
-  allBranchesBySub := allBranchesBySub.insert (hash initBranch.sub) #[initBranch]
-  let log (msg : String) : IO Unit := do
-    IO.println msg
-    if let some path := logFile then
-      let h ← IO.FS.Handle.mk path .append
-      h.putStrLn msg
-  log s!"  closure: total={ripCount + dataCount} rip={ripCount} data={dataCount} (using data-only={closure.size})"
-  -- Collect registers referenced by data PCs (for projection/widening diagnostic)
-  let mut dataPCRegs : Std.HashSet Reg := {}
-  let mut dataPCsHaveLoads := false
-  for pc in closure do
-    dataPCRegs := SymPC.collectRegsHS pc dataPCRegs
-    if SymPC.hasLoad pc then dataPCsHaveLoads := true
-  let dataPCRegsArr := dataPCRegs.toArray
-  log s!"  data PC regs (direct): [{", ".intercalate (dataPCRegsArr.toList.map toString)}] ({dataPCRegsArr.size} regs, loads={dataPCsHaveLoads})"
-  -- Compute transitive closure of register dependency: if a projected register's
-  -- body expression references reg R, R must also be projected (since R's value
-  -- affects future projected values). Iterate until fixpoint.
-  let mut closedRegs := dataPCRegs
-  let mut closedNeedsMem := dataPCsHaveLoads
-  let mut changed := true
-  let mut closureRounds : Nat := 0
-  while changed do
-    changed := false
-    closureRounds := closureRounds + 1
-    for b in bodyArr do
-      -- Check what each projected register's expression depends on
-      let currentRegsArr := closedRegs.toArray
-      for r in currentRegsArr do
-        let exprRegs := SymExpr.collectRegsHS (b.sub.regs r) {}
-        for er in exprRegs do
-          unless closedRegs.contains er || er == ip_reg do
-            closedRegs := closedRegs.insert er
-            changed := true
-      -- If we need memory, check what the mem expression depends on
-      if closedNeedsMem then
-        let memRegs := SymMem.collectRegsHS b.sub.mem {}
-        for mr in memRegs do
-          unless closedRegs.contains mr || mr == ip_reg do
-            closedRegs := closedRegs.insert mr
-            changed := true
-      -- Check if any projected register's expression involves loads (adds mem dependency)
-      unless closedNeedsMem do
-        for r in currentRegsArr do
-          if SymExpr.hasLoad (b.sub.regs r) then
-            closedNeedsMem := true
-            changed := true
-  let closedRegsArr := closedRegs.toArray
-  log s!"  closed projection: [{", ".intercalate (closedRegsArr.toList.map toString)}] ({closedRegsArr.size} regs, loads={closedNeedsMem}, rounds={closureRounds})"
-  -- Helper: compute projection hash using the closed register set
-  let projHashOf (sub : SymSub Reg) : UInt64 := Id.run do
-    let mut h : UInt64 := 0
-    for r in closedRegsArr do
-      h := mixHash h (hash (sub.regs r))
-    if closedNeedsMem then h := mixHash h (hash sub.mem)
-    return h
-  let dedupSubHash (sub : SymSub Reg) : UInt64 := projHashOf sub
-  let initSigKey : SigDedupKey := ⟨dedupSubHash initBranch.sub, initSig⟩
-  sigSeen := sigSeen.insert initSigKey
-  for k in List.range maxIter do
-    let t_start ← IO.monoMsNow
-    let (composed, pairsComposed, skipped, dropped) :=
-      composeBranchArrayIndexed ip_reg bodyArr frontier
-    -- Inline dedup: exact-match via HashSet + signature-class via sigSeen
-    let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-    let mut dupes : Nat := 0
-    let mut sigCollapsed : Nat := 0
-    for b in composed do
-      if current.contains b then
-        dupes := dupes + 1
-      else
-        -- Check signature-class dedup (uses projection hash if closed)
-        let sig := computePCSignature closure b.pc
-        let key : SigDedupKey := ⟨dedupSubHash b.sub, sig⟩
-        if sigSeen.contains key then
-          sigCollapsed := sigCollapsed + 1
-        else
-          sigSeen := sigSeen.insert key
-          newBranches := newBranches.push b
-    -- Semantic subsumption via z3: batch check new branches against existing
-    let t_prune_start ← IO.monoMsNow
-    let mut prunedCount : Nat := 0
-    -- Build (stronger_pc, weaker_pc) pairs and track which new branch each belongs to
-    let mut pcPairs : Array (SymPC Reg × SymPC Reg) := #[]
-    let mut queryBranchIdx : Array Nat := #[]
-    let mut branchIdx : Nat := 0
-    for bi in newBranches do
-      let h := hash bi.sub
-      let existingGroup := allBranchesBySub.getD h #[]
-      for bj in existingGroup do
-        if bi.pc != bj.pc then
-          pcPairs := pcPairs.push (bi.pc, bj.pc)
-          queryBranchIdx := queryBranchIdx.push branchIdx
-      branchIdx := branchIdx + 1
-    -- Call z3 with caching (Green-style)
-    let mut subsumedSet : Std.HashSet Nat := {}
-    if pcPairs.size > 0 then
-      let subsCache ← IO.mkRef ({} : Z3Cache)
-      let (subsResults, subsHits) ← z3CheckImplCached subsCache pcPairs ".lake/smt_subsumption.smt2"
-      for i in [:subsResults.size] do
-        if h : i < subsResults.size then
-          if subsResults[i] then
-            if h2 : i < queryBranchIdx.size then
-              subsumedSet := subsumedSet.insert queryBranchIdx[i]
-      log s!"    z3: {pcPairs.size} queries, cache_hits={subsHits}, {subsumedSet.size} subsumed"
-    -- Filter new branches
-    let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-    branchIdx := 0
-    for bi in newBranches do
-      if subsumedSet.contains branchIdx then
-        prunedCount := prunedCount + 1
-      else
-        survivingNew := survivingNew.push bi
-      branchIdx := branchIdx + 1
-    newBranches := survivingNew
-    -- Update tracking structures with surviving new branches
-    for b in newBranches do
-      current := current.insert b
-      let h := hash b.sub
-      let arr := allBranchesBySub.getD h #[]
-      allBranchesBySub := allBranchesBySub.insert h (arr.push b)
-    let t_end ← IO.monoMsNow
-    -- Count distinct subs in frontier (diagnostic: how many "paths"?)
-    let mut frontierSubs : Std.HashSet UInt64 := {}
-    let mut frontierSubsNoRip : Std.HashSet UInt64 := {}
-    let mut projectedSubs : Std.HashSet UInt64 := {}
-    for b in newBranches do
-      frontierSubs := frontierSubs.insert (hash b.sub)
-      let noRipSub : SymSub Reg := { b.sub with regs := fun r => if r == ip_reg then .const 0 else b.sub.regs r }
-      frontierSubsNoRip := frontierSubsNoRip.insert (hash noRipSub)
-      -- Project sub onto closed projection registers
-      projectedSubs := projectedSubs.insert (projHashOf b.sub)
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} |distinct_subs|={frontierSubs.size} |no_rip|={frontierSubsNoRip.size} |proj|={projectedSubs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} pruned={prunedCount} compose={t_prune_start - t_start}ms prune={t_end - t_prune_start}ms total={t_end - t_start}ms"
-    if newBranches.size == 0 then
-      return some (k, current.size)
-    frontier := newBranches
-  return none
-
-/-! ## Stabilization Computation -/
-
-/-- Naive stabilization: composes bodyDenot with the FULL accumulated set each
-    iteration. Kept for correctness comparison. -/
-def computeStabilizationNaive {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (bodyDenot : Finset (Branch (SymSub Reg) (SymPC Reg)))
-    (maxIter : Nat) : IO (Option (Nat × Nat)) := do
-  let isa := vexSummaryISA Reg
-  let mut current : Finset (Branch (SymSub Reg) (SymPC Reg)) := {Branch.skip isa}
-  for k in List.range maxIter do
-    let composed := composeBranchFinsetsSimplified bodyDenot current
-    let next := current ∪ composed
-    if k % 5 == 0 || next == current then
-      IO.println s!"  K={k}: |S| = {current.card}, |new| = {(next \ current).card}"
-    if next == current then
-      return some (k, current.card)
-    current := next
-  return none
-
-/-- Incremental stabilization: only composes bodyDenot with the frontier
-    (branches added in the previous round), not the full accumulated set.
-
-    Correctness: composition distributes over union in the second argument.
-    If `current = old ∪ frontier`, then `body ⊗ current = (body ⊗ old) ∪ (body ⊗ frontier)`.
-    Since `body ⊗ old ⊆ current` (computed in prior rounds), only `body ⊗ frontier`
-    can produce genuinely new branches. -/
-def computeStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (bodyDenot : Finset (Branch (SymSub Reg) (SymPC Reg)))
-    (maxIter : Nat) (logFile : Option System.FilePath := none) : IO (Option (Nat × Nat)) := do
-  let isa := vexSummaryISA Reg
-  let init : Finset (Branch (SymSub Reg) (SymPC Reg)) := {Branch.skip isa}
-  let mut current := init
-  let mut frontier := init
-  let log (msg : String) : IO Unit := do
-    IO.println msg
-    if let some path := logFile then
-      let h ← IO.FS.Handle.mk path .append
-      h.putStrLn msg
-  for k in List.range maxIter do
-    let t_start ← IO.monoMsNow
-    let composed := composeBranchFinsetsSimplified bodyDenot frontier
-    let t_compose ← IO.monoMsNow
-    let newBranches := composed \ current
-    let t_diff ← IO.monoMsNow
-    log s!"  K={k}: |S|={current.card} |frontier|={frontier.card} |composed|={composed.card} |new|={newBranches.card} compose={t_compose - t_start}ms diff={t_diff - t_compose}ms"
-    if newBranches.card == 0 then
-      return some (k, current.card)
-    current := current ∪ newBranches
-    frontier := newBranches
-  return none
-
-/-! ## Dispatch Body Construction -/
-
-/-- Build the dispatch body CompTree from a list of (address, block) pairs.
-    Each block is guarded by `rip == address`. -/
-def buildDispatchBody {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (ip_reg : Reg) (blocks : List (UInt64 × Block Reg)) :
-    CompTree (SymSub Reg) (SymPC Reg) :=
-  blocks.foldr (fun (addr, block) acc =>
-    CompTree.guardedChoice
-      (SymPC.eq (SymExpr.reg ip_reg) (SymExpr.const addr))
-      (blockToCompTree block)
-      acc)
-    CompTree.skip
-
 /-- Compute bodyDenot as a flat union of per-block branches with rip guards.
     Avoids the nested negation chains from `denot` on nested guardedChoice. -/
 def flatBodyDenot {Reg : Type} [DecidableEq Reg] [Fintype Reg]
@@ -1138,89 +1162,12 @@ def parseBlocksWithAddresses (blockStrs : List String) :
     let block ← parseIRSB text
     return (ip, block)
 
-/-! ## Stratified Fixpoint — Per-Function Summaries
-
-Instead of treating all blocks as one flat dispatch loop, compute fixpoints
-bottom-up along the call graph:
-1. Leaf functions (next_sym) first — no outgoing calls to other parser functions
-2. NT functions (term, sum, test, expr, paren_expr, statement) — call next_sym
-   and each other via mutual recursion
-
-At each composition step, when a frontier branch's rip target matches another
-function's entry address, compose with that function's current summary instead
-of its individual blocks. This prevents cross-function path explosion. -/
-
-/-- A function in the stratified fixpoint. -/
+/-- A function specification for dispatch loop analysis. -/
 structure FunctionSpec where
   name : String
   entryAddr : UInt64
   blocks : List String  -- raw IRSB strings
   deriving Inhabited
-
-/-- Compose body branches with frontier, but when a body branch's rip target
-    matches a function entry, substitute that function's summary branches
-    instead of continuing through individual blocks.
-
-    For a body branch B with rip target = function F's entry:
-    - Compose B with each branch in F's summary
-    - The summary branch has rip = return address (wherever F returns to)
-    - Result: caller's pre-call work + F's full behavior + return to caller
-
-    Returns (result, pairsComposed, skipped, dropped, summaryHits). -/
-def composeBranchArrayStratified {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
-    (ip_reg : Reg)
-    (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg)))) :
-    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat × Nat × Nat × Nat := Id.run do
-  let isa := vexSummaryISA Reg
-  -- Build frontier index by rip guard
-  let mut frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
-  let mut frontierNoRip : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-  for f in frontierArr do
-    match extractRipGuard ip_reg f.pc with
-    | some addr =>
-      let arr := frontierByRip.getD addr #[]
-      frontierByRip := frontierByRip.insert addr (arr.push f)
-    | none => frontierNoRip := frontierNoRip.push f
-  -- Compose using index + summary substitution
-  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-  let mut dropped : Nat := 0
-  let mut composed_count : Nat := 0
-  let mut summaryHits : Nat := 0
-  let totalPairs := bodyArr.size * frontierArr.size
-  for b in bodyArr do
-    match extractRipTarget ip_reg b.sub with
-    | some target =>
-      -- Check if this target is a function entry with a summary
-      match summaries.get? target with
-      | some summaryBranches =>
-        -- Summary substitution: compose this body branch with callee's summary
-        summaryHits := summaryHits + 1
-        for sb in summaryBranches do
-          composed_count := composed_count + 1
-          let composed := b.compose isa sb
-          match simplifyBranch composed with
-          | none => dropped := dropped + 1
-          | some b' => result := result.push b'
-      | none =>
-        -- Normal rip-indexed composition
-        let compatible := (frontierByRip.getD target #[]) ++ frontierNoRip
-        for f in compatible do
-          composed_count := composed_count + 1
-          let composed := b.compose isa f
-          match simplifyBranch composed with
-          | none => dropped := dropped + 1
-          | some b' => result := result.push b'
-    | none =>
-      -- Can't determine target, fall back to all frontier branches
-      for f in frontierArr do
-        composed_count := composed_count + 1
-        let composed := b.compose isa f
-        match simplifyBranch composed with
-        | none => dropped := dropped + 1
-        | some b' => result := result.push b'
-  let skipped := totalPairs - composed_count
-  return (result, composed_count, skipped, dropped, summaryHits)
 
 /-- Per-function stabilization with optional initial frontier seeding.
     When initialFrontier is non-empty, those branches are added to the
@@ -1229,18 +1176,20 @@ def composeBranchArrayStratified {Reg : Type} [DecidableEq Reg] [Fintype Reg] [B
     putting them in the body (which would cause expression nesting). -/
 def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg] [ToString Reg]
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
     (maxIter : Nat) (log : String → IO Unit)
     (z3cache : IO.Ref Z3Cache)
-    (initialFrontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]) :
+    (initialFrontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[])
+    (closureBody : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]) :
     IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)))) := do
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
-  let (closure, ripCount, dataCount) := extractClosure ip_reg bodyArr (dataOnly := true)
+  -- Use closureBody for closure extraction if provided, otherwise use bodyArr
+  let closureSrc := if closureBody.size > 0 then closureBody else bodyArr
+  let (closure, ripCount, dataCount) := extractClosure ip_reg closureSrc (dataOnly := true)
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
   current := current.insert initBranch
   -- initialFrontier seeded into current AFTER closedness check (needs projection)
-  -- Compute closed projection (same as computeStabilizationHS)
+  -- Compute closed projection: transitive register dependency closure
   let mut dataPCRegs : Std.HashSet Reg := {}
   let mut dataPCsHaveLoads := false
   for pc in closure do
@@ -1527,57 +1476,368 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     frontier := newBranches
   return none
 
-/-- Split body branches into non-call (kept in body) and call-expanded
-    (seeded into initial frontier).
+/-! ## Unified WTO Fixpoint
 
-    For each body branch B:
-    - If B's rip target matches a function entry with a summary:
-      Compose B with each summary branch → add to callResults (initial frontier)
-      B is REMOVED from the body.
-    - Otherwise: B stays in the body for iterative composition.
+One unified WTO over all blocks. DAG blocks are processed once (single
+composition pass). SCC blocks are iterated until convergence. The WTO
+nesting structure ensures inner loops converge before outer ones. -/
 
-    This prevents re-expansion: summary results are in the initial frontier,
-    and the body only contains the function's own non-call blocks. Each
-    iteration composes non-call blocks with frontier — no expression nesting. -/
-def splitBodyAndExpandCalls {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
-    (ip_reg : Reg)
-    (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg)))) :
-    (Array (Branch (SymSub Reg) (SymPC Reg))  -- nonCallBody (for iterative composition)
-    × Array (Branch (SymSub Reg) (SymPC Reg))  -- callResults (initial frontier seed)
-    × Nat × Nat × Nat) := Id.run do  -- callsExpanded, branchesAdded, dropped
-  let isa := vexSummaryISA Reg
-  let mut nonCallBody : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-  let mut callResults : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
-  let mut callsExpanded : Nat := 0
-  let mut branchesAdded : Nat := 0
+/-- Process a DAG block: compose its body branches with cached successors.
+    Branches whose rip target is not in cache are kept as exit branches. -/
+def processDAGBlock
+    (ip_reg : Amd64Reg)
+    (addr : UInt64)
+    (blocksByAddr : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
+    (cache : IO.Ref (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))))
+    (returnEdges : Std.HashMap UInt64 (Array UInt64))
+    (log : String → IO Unit) : IO Unit := do
+  let isa := vexSummaryISA Amd64Reg
+  let bodyBranches := blocksByAddr.getD addr #[]
+  let cacheContents ← cache.get
+  let mut result : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+  let mut composed : Nat := 0
   let mut dropped : Nat := 0
-  for b in bodyArr do
+  let mut retComposed : Nat := 0
+  let mut retDropped : Nat := 0
+  for b in bodyBranches do
     match extractRipTarget ip_reg b.sub with
     | some target =>
-      match summaries.get? target with
-      | some summaryBranches =>
-        callsExpanded := callsExpanded + 1
-        for sb in summaryBranches do
-          let composed := b.compose isa sb
-          match simplifyBranch composed with
+      match cacheContents.get? target with
+      | some cachedBranches =>
+        for cb in cachedBranches do
+          composed := composed + 1
+          let comp := b.compose isa cb
+          match simplifyBranch comp with
           | none => dropped := dropped + 1
-          | some b' =>
-            callResults := callResults.push b'
-            branchesAdded := branchesAdded + 1
-      | none =>
-        nonCallBody := nonCallBody.push b
+          | some b' => result := result.push b'
+      | none => result := result.push b  -- exit branch, keep as-is
     | none =>
-      nonCallBody := nonCallBody.push b
-  return (nonCallBody, callResults, callsExpanded, branchesAdded, dropped)
+      -- Non-constant rip (return or computed jump).
+      -- Consult return edges: compose with each return-edge target's cached branches.
+      -- The composition produces PC with load(mem, rbp+0x8) == cont_addr;
+      -- simplifyBranchFull resolves the load-after-store, collapsing to true or dropping.
+      match returnEdges.get? addr with
+      | some retTargets =>
+        for tgt in retTargets do
+          match cacheContents.get? tgt with
+          | some cachedBranches =>
+            for cb in cachedBranches do
+              retComposed := retComposed + 1
+              let comp := b.compose isa cb
+              match simplifyBranchFull comp with
+              | none => retDropped := retDropped + 1
+              | some b' => result := result.push b'
+          | none => pure ()  -- target not cached yet, skip
+        -- If no return-edge compositions survived, keep original as exit
+        if retTargets.isEmpty then result := result.push b
+      | none => result := result.push b  -- no return edges, keep as exit
+  -- Only cache non-empty results. Blocks with 0 body (like _exit) stay uncached
+  -- so predecessors keep their original branches (exit branches).
+  if result.size > 0 then
+    cache.modify (·.insert addr result)
+  log s!"    DAG 0x{String.mk (Nat.toDigits 16 addr.toNat)}: {bodyBranches.size} body → {result.size} cached ({composed} composed, {dropped} dropped, {retComposed} ret-composed, {retDropped} ret-dropped)"
 
-def stratifiedFixpoint
+/-- Process an SCC component via convergence fixpoint.
+    Collects body branches for all SCC member blocks, splits into internal
+    (target ∈ SCC) vs external (pre-composed with cache), then runs the
+    standard convergence loop on the internal body with external seeds as
+    initial frontier. On convergence, groups result by rip-guard address
+    and updates cache per-block. -/
+def processSCCStabilization
+    (ip_reg : Amd64Reg)
+    (sccAddrs : Array UInt64)
+    (blocksByAddr : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
+    (cache : IO.Ref (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))))
+    (returnEdges : Std.HashMap UInt64 (Array UInt64))
+    (log : String → IO Unit)
+    (z3cache : IO.Ref Z3Cache)
+    (blockToFunc : Std.HashMap UInt64 UInt64 := {}) : IO Unit := do
+  let isa := vexSummaryISA Amd64Reg
+  let sccSet : Std.HashSet UInt64 := sccAddrs.foldl (fun s a => s.insert a) {}
+  -- Collect all body branches for SCC member blocks
+  let mut allBody : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+  for addr in sccAddrs do
+    for b in blocksByAddr.getD addr #[] do
+      allBody := allBody.push b
+  -- Split into internal body (target ∈ SCC) vs external seeds (pre-composed with cache)
+  let cacheContents ← cache.get
+  let mut internalBody : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+  let mut externalSeeds : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+  let mut exitBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+  let mut callsExpanded : Nat := 0
+  let mut droppedExp : Nat := 0
+  let mut retExpanded : Nat := 0
+  let mut retDropped : Nat := 0
+  for b in allBody do
+    match extractRipGuard ip_reg b.pc with
+    | none => exitBranches := exitBranches.push b
+    | some srcAddr =>
+    match extractRipTarget ip_reg b.sub with
+    | some target =>
+      if sccSet.contains target then
+        -- Check if this SCC-internal target already has cached results
+        -- (from inner WTO component processing)
+        match cacheContents.get? target with
+        | some cachedBranches =>
+          -- Pre-converged inner block: compose with cached result → seeds
+          callsExpanded := callsExpanded + 1
+          for cb in cachedBranches do
+            let composed := b.compose isa cb
+            match simplifyBranch composed with
+            | none => droppedExp := droppedExp + 1
+            | some b' => externalSeeds := externalSeeds.push b'
+        | none =>
+          -- Not yet cached: stays in convergence body
+          internalBody := internalBody.push b
+      else
+        match cacheContents.get? target with
+        | some cachedBranches =>
+          callsExpanded := callsExpanded + 1
+          for cb in cachedBranches do
+            let composed := b.compose isa cb
+            match simplifyBranch composed with
+            | none => droppedExp := droppedExp + 1
+            | some b' => externalSeeds := externalSeeds.push b'
+        | none => exitBranches := exitBranches.push b  -- exit
+    | none =>
+      -- Non-constant rip: consult return edges for this source block.
+      -- Return-edge targets in the SCC → internal body (after composition).
+      -- Return-edge targets outside the SCC → external seeds (after composition).
+      match returnEdges.get? srcAddr with
+      | some retTargets =>
+        for tgt in retTargets do
+          if sccSet.contains tgt then
+            match cacheContents.get? tgt with
+            | some cachedBranches =>
+              -- Return target is in SCC and cached (pre-converged inner block)
+              -- → compose and add to external seeds
+              for cb in cachedBranches do
+                retExpanded := retExpanded + 1
+                let comp := b.compose isa cb
+                match simplifyBranchFull comp with
+                | none => retDropped := retDropped + 1
+                | some b' => externalSeeds := externalSeeds.push b'
+            | none =>
+              -- Target is in SCC but not cached yet — compose with raw body → internal
+              for cb in blocksByAddr.getD tgt #[] do
+                retExpanded := retExpanded + 1
+                let comp := b.compose isa cb
+                match simplifyBranchFull comp with
+                | none => retDropped := retDropped + 1
+                | some b' => internalBody := internalBody.push b'
+          else
+            -- Return goes outside the SCC — compose and add to external seeds
+            match cacheContents.get? tgt with
+            | some cachedBranches =>
+              for cb in cachedBranches do
+                retExpanded := retExpanded + 1
+                let comp := b.compose isa cb
+                match simplifyBranchFull comp with
+                | none => retDropped := retDropped + 1
+                | some b' => externalSeeds := externalSeeds.push b'
+            | none => pure ()  -- target not cached, skip
+        if retTargets.isEmpty then exitBranches := exitBranches.push b
+      | none => exitBranches := exitBranches.push b  -- no return edges
+  log s!"    SCC [{sccAddrs.size} blocks]: {allBody.size} body → {internalBody.size} internal + {externalSeeds.size} ext-seeds + {exitBranches.size} exit ({callsExpanded} call-exp, {droppedExp} call-dropped, {retExpanded} ret-exp, {retDropped} ret-dropped)"
+  -- Use existing convergence loop with internal body and external seeds as frontier
+  let initialFrontier := externalSeeds ++ exitBranches
+  -- Compute function-scope closure body: include ALL blocks from every function
+  -- that has blocks in this SCC. This ensures closure PCs match function-level scope.
+  let mut closureBody : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+  if blockToFunc.size > 0 then
+    let mut funcEntries : Std.HashSet UInt64 := {}
+    for addr in sccAddrs do
+      match blockToFunc.get? addr with
+      | some funcEntry => funcEntries := funcEntries.insert funcEntry
+      | none => pure ()
+    -- Collect all blocks belonging to those functions
+    for (addr, branches) in blocksByAddr do
+      match blockToFunc.get? addr with
+      | some funcEntry =>
+        if funcEntries.contains funcEntry then
+          for b in branches do
+            closureBody := closureBody.push b
+      | none => pure ()
+  match ← computeFunctionStabilization ip_reg internalBody 200 log z3cache
+           (initialFrontier := initialFrontier)
+           (closureBody := closureBody) with
+  | some (k, summaryArr) =>
+    -- Group converged branches by rip-guard address → update cache per-block
+    let mut perBlock : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+    for b in summaryArr do
+      match extractRipGuard ip_reg b.pc with
+      | some addr =>
+        let arr := perBlock.getD addr #[]
+        perBlock := perBlock.insert addr (arr.push b)
+      | none => pure ()  -- skip branches without rip guard (e.g., skip branch)
+    for addr in sccAddrs do
+      let blockSummary := perBlock.getD addr #[]
+      cache.modify (·.insert addr blockSummary)
+    log s!"    SCC converged at K={k}, {summaryArr.size} total branches"
+    for addr in sccAddrs do
+      let n := perBlock.getD addr #[] |>.size
+      log s!"      0x{String.mk (Nat.toDigits 16 addr.toNat)}: {n} branches"
+  | none =>
+    log s!"    SCC DID NOT CONVERGE"
+
+mutual
+
+/-- Process a multi-function SCC: FLAT outer loop over function summaries.
+    All blocks in the multi-func SCC are handled in one flat loop — no recursive
+    WTO processing of sub-components (which causes exponential re-analysis with
+    deeply nested WTO structures). Each outer round runs
+    computeFunctionStabilization per function with cache-aware splitting.
+    Converges when all function summaries stabilize. -/
+partial def processMultiFuncSCC
+    (ip_reg : Amd64Reg)
+    (sccAddrs : Array UInt64)
+    (blocksByAddr : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
+    (cache : IO.Ref (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))))
+    (returnEdges : Std.HashMap UInt64 (Array UInt64))
+    (blockToFunc : Std.HashMap UInt64 UInt64)
+    (funcBlockAddrs : Std.HashMap UInt64 (Array UInt64))
+    (log : String → IO Unit)
+    (z3cache : IO.Ref Z3Cache) : IO Unit := do
+  let isa := vexSummaryISA Amd64Reg
+  -- Identify functions in this SCC
+  let mut sccFuncEntrySet : Std.HashSet UInt64 := {}
+  for addr in sccAddrs do
+    match blockToFunc.get? addr with
+    | some fe => sccFuncEntrySet := sccFuncEntrySet.insert fe
+    | none => pure ()
+  let sccFuncEntries := sccFuncEntrySet.fold (fun acc a => acc.push a) (#[] : Array UInt64)
+  -- All function entries (for cross-function call detection)
+  let allFuncEntries : Std.HashSet UInt64 := blockToFunc.fold (fun s _ v => s.insert v) {}
+  let funcSummaries ← IO.mkRef ({} : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
+  log s!"  Multi-func SCC: {sccAddrs.size} blocks across {sccFuncEntries.size} functions"
+  for outerRound in List.range 20 do
+    let prevSummaries ← funcSummaries.get
+    -- Per-function stabilization with cache-aware split (flat, no recursive WTO)
+    for funcEntry in sccFuncEntries do
+      let funcBlocks := funcBlockAddrs.getD funcEntry #[]
+      let cacheContents ← cache.get
+      let funcSums ← funcSummaries.get
+      -- Collect full function body
+      let mut funcBody : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+      for addr in funcBlocks do
+        for b in blocksByAddr.getD addr #[] do
+          funcBody := funcBody.push b
+      -- Cache-aware split
+      let mut convergenceBody : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+      let mut seeds : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+      let mut exitBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+      for b in funcBody do
+        match extractRipTarget ip_reg b.sub with
+        | some target =>
+          if allFuncEntries.contains target then
+            -- Cross-function call
+            let summary := if sccFuncEntrySet.contains target
+              then funcSums.get? target  -- SCC peer: use funcSummaries
+              else cacheContents.get? target  -- external: use cache
+            match summary with
+            | some sumBranches =>
+              for cb in sumBranches do
+                let composed := b.compose isa cb
+                match simplifyBranch composed with
+                | none => pure ()
+                | some b' => seeds := seeds.push b'
+            | none => exitBranches := exitBranches.push b
+          else
+            -- Intra-function target: check cache
+            match cacheContents.get? target with
+            | some cached =>
+              -- Pre-converged by inner WTO: compose → seeds
+              for cb in cached do
+                let composed := b.compose isa cb
+                match simplifyBranch composed with
+                | none => pure ()
+                | some b' => seeds := seeds.push b'
+            | none =>
+              -- Not cached: convergence body
+              convergenceBody := convergenceBody.push b
+        | none => exitBranches := exitBranches.push b
+      -- closureBody = ALL function body branches (for closure PC extraction)
+      let closureBody := funcBody
+      let frontier := seeds ++ exitBranches
+      log s!"    func 0x{String.mk (Nat.toDigits 16 funcEntry.toNat)} round {outerRound}: {convergenceBody.size} body, {seeds.size} seeds, {exitBranches.size} exits"
+      match ← computeFunctionStabilization ip_reg convergenceBody 200 log z3cache
+               (initialFrontier := frontier) (closureBody := closureBody) with
+      | some (k, result) =>
+        funcSummaries.modify (·.insert funcEntry result)
+        cache.modify (·.insert funcEntry result)
+      | none => log s!"    func 0x{String.mk (Nat.toDigits 16 funcEntry.toNat)}: DID NOT CONVERGE"
+    -- Outer convergence check
+    let newSummaries ← funcSummaries.get
+    let mut changed := false
+    for fe in sccFuncEntries do
+      let prev := prevSummaries.getD fe #[]
+      let curr := newSummaries.getD fe #[]
+      if prev.size != curr.size then changed := true
+    unless changed do
+      log s!"  Multi-func SCC converged after {outerRound + 1} outer rounds"
+      break
+
+/-- Dispatch a WTO component: vertex → DAG block, component → SCC fixpoint.
+    Single-function SCCs process children first (Bourdoncle order: inner loops
+    converge before outer), then run processSCCStabilization which uses cache-aware
+    splitting to treat pre-converged inner blocks as seeds.
+    Multi-function SCCs use processMultiFuncSCC with outer function-summary loop. -/
+partial def processWTOComponent
+    (ip_reg : Amd64Reg)
+    (blocksByAddr : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
+    (cache : IO.Ref (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))))
+    (returnEdges : Std.HashMap UInt64 (Array UInt64))
+    (log : String → IO Unit)
+    (z3cache : IO.Ref Z3Cache)
+    (blockToFunc : Std.HashMap UInt64 UInt64)
+    (funcBlockAddrs : Std.HashMap UInt64 (Array UInt64))
+    (comp : WTOComponent) : IO Unit := do
+  match comp with
+  | .vertex addr =>
+    processDAGBlock ip_reg addr blocksByAddr cache returnEdges log
+  | .component head children =>
+    let mut allAddrs : Array UInt64 := #[head]
+    for child in children do
+      allAddrs := allAddrs ++ child.addrs
+    -- Check if this SCC spans multiple functions
+    let mut funcEntrySet : Std.HashSet UInt64 := {}
+    for addr in allAddrs do
+      match blockToFunc.get? addr with
+      | some fe => funcEntrySet := funcEntrySet.insert fe
+      | none => pure ()
+    if funcEntrySet.size > 1 then
+      processMultiFuncSCC ip_reg allAddrs blocksByAddr cache returnEdges
+        blockToFunc funcBlockAddrs log z3cache
+    else
+      -- Single-function SCC: process children first (Bourdoncle order),
+      -- then stabilize. Inner loops converge → cache populated → cache-aware
+      -- split in processSCCStabilization treats them as pre-computed seeds.
+      for child in children do
+        processWTOComponent ip_reg blocksByAddr cache returnEdges log z3cache
+          blockToFunc funcBlockAddrs child
+      processSCCStabilization ip_reg allAddrs blocksByAddr cache returnEdges log z3cache blockToFunc
+
+end -- mutual
+
+/-- Unified WTO fixpoint: one WTO over all blocks.
+    Parses all function blocks, builds a unified CFG, computes Bourdoncle WTO,
+    then processes components in order. DAG blocks get single-pass composition;
+    SCC blocks get iterative convergence. -/
+def wtoFixpoint
     (functions : Array FunctionSpec)
     (log : String → IO Unit) :
     IO (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))) := do
   let ip_reg := Amd64Reg.rip
-  -- Parse all function blocks into raw body arrays
-  let mut funcBlocks : Array (String × Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := #[]
+  -- Step 1: Parse ALL function blocks → blocksByAddr
+  let mut blocksByAddr : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  let mut allBody : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+  let mut totalBlocks : Nat := 0
+  -- funcBlockAddrs: maps each block addr → all block addrs in the same function
+  -- (used for indirect jump edges in CFG)
+  let mut funcBlockAddrsBuilder : Array (Array UInt64) := #[]
+  -- blockToFunc: maps each block addr → its function's entry addr
+  -- (used for return edge computation)
+  let mut blockToFunc : Std.HashMap UInt64 UInt64 := {}
   for func in functions do
     match parseBlocksWithAddresses func.blocks with
     | .error e =>
@@ -1586,73 +1846,175 @@ def stratifiedFixpoint
     | .ok pairs =>
       let body := flatBodyDenot ip_reg pairs
       let bodyArr := finsetToArray body
-      funcBlocks := funcBlocks.push (func.name, bodyArr)
+      -- Collect all rip-guard addresses for this function
+      let mut funcAddrs : Std.HashSet UInt64 := {}
+      for b in bodyArr do
+        match extractRipGuard ip_reg b.pc with
+        | some addr => funcAddrs := funcAddrs.insert addr
+        | none => pure ()
+      let funcAddrArr := funcAddrs.fold (fun acc a => acc.push a) (#[] : Array UInt64)
+      funcBlockAddrsBuilder := funcBlockAddrsBuilder.push funcAddrArr
+      -- Build blockToFunc for this function
+      for addr in funcAddrArr do
+        blockToFunc := blockToFunc.insert addr func.entryAddr
+      -- Group by rip-guard address (source block)
+      for b in bodyArr do
+        match extractRipGuard ip_reg b.pc with
+        | some addr =>
+          let arr := blocksByAddr.getD addr #[]
+          blocksByAddr := blocksByAddr.insert addr (arr.push b)
+        | none => pure ()
+        allBody := allBody.push b
+      totalBlocks := totalBlocks + pairs.length
       log s!"  {func.name} @ 0x{String.mk (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
-  -- Phase 1: Compute leaf function (next_sym) fixpoint — no summaries needed
-  let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
-  -- Green-style z3 query cache: shared across all function stabilizations
+  log s!"  Total: {totalBlocks} blocks, {allBody.size} body branches, {blocksByAddr.size} source addresses"
+  -- Build funcBlockAddrs: each block addr → all sibling block addrs in same function
+  let mut funcBlockAddrs : Std.HashMap UInt64 (Array UInt64) := {}
+  for funcAddrArr in funcBlockAddrsBuilder do
+    for addr in funcAddrArr do
+      funcBlockAddrs := funcBlockAddrs.insert addr funcAddrArr
+  -- Step 2: Build unified CFG + compute WTO
+  let cfgSuccsDirect := buildCFGSuccessors ip_reg allBody funcBlockAddrs
+  let mut directEdges : Nat := 0
+  for (_, tgts) in cfgSuccsDirect do
+    directEdges := directEdges + tgts.size
+  log s!"  CFG (direct): {cfgSuccsDirect.size} source blocks, {directEdges} edges"
+  -- Step 2b: Compute return edges (call/ret interprocedural linkage)
+  log s!"\n=== Return Edge Analysis ==="
+  let returnEdges ← buildReturnEdges ip_reg #[.rsp, .rbp] .rsp allBody blockToFunc log
+  -- Merge return edges into CFG
+  let mut cfgSuccs := cfgSuccsDirect
+  for (src, tgts) in returnEdges do
+    let mut existing := cfgSuccs.getD src #[]
+    for tgt in tgts do
+      unless existing.contains tgt do
+        existing := existing.push tgt
+    cfgSuccs := cfgSuccs.insert src existing
+  let mut totalEdges : Nat := 0
+  for (_, tgts) in cfgSuccs do
+    totalEdges := totalEdges + tgts.size
+  log s!"  CFG (with return edges): {cfgSuccs.size} source blocks, {totalEdges} edges"
+  -- DFS entries: function entries FIRST, then remaining block addresses.
+  -- Ordering matters: function entries must be visited first so that cross-function
+  -- edges (e.g., term→paren_expr→expr→sum→term) are discovered during DFS
+  -- tree-edge traversal, enabling back-edge detection for inter-function SCCs.
+  -- Remaining block addresses are added as fallback roots for blocks unreachable
+  -- from any function entry (due to indirect jumps without constant targets).
+  let mut entryAddrs : Array UInt64 := functions.map (·.entryAddr)
+  let mut entrySet : Std.HashSet UInt64 := {}
+  for a in entryAddrs do entrySet := entrySet.insert a
+  -- Add all block addresses not already in entryAddrs
+  for (addr, _) in blocksByAddr do
+    unless entrySet.contains addr do
+      entryAddrs := entryAddrs.push addr
+      entrySet := entrySet.insert addr
+  let wto ← computeWTO entryAddrs cfgSuccs
+  let (dagCountAll, sccCount) := wtoStats wto
+  let (dagCountTop, sccCountTop) := wtoTopLevelStats wto
+  let uniqueAddrs := wtoUniqueAddrs wto
+  log s!"  WTO: {uniqueAddrs.size} unique addresses, {dagCountTop} top-level DAGs + {sccCountTop} top-level SCCs"
+  log s!"  WTO (recursive): {dagCountAll} DAG vertices at all nesting levels, {sccCount} total SCC components"
+  log s!"  WTO: blocksByAddr has {blocksByAddr.size} addresses"
+  -- Verify: every blocksByAddr key should appear in WTO
+  let mut missingFromWTO : Nat := 0
+  for (addr, _) in blocksByAddr do
+    unless uniqueAddrs.contains addr do
+      missingFromWTO := missingFromWTO + 1
+      log s!"    WARNING: block 0x{String.mk (Nat.toDigits 16 addr.toNat)} in blocksByAddr but NOT in WTO"
+  let mut extraInWTO : Nat := 0
+  for addr in uniqueAddrs do
+    unless blocksByAddr.contains addr do
+      extraInWTO := extraInWTO + 1
+  log s!"  WTO coverage: {missingFromWTO} blocks missing from WTO, {extraInWTO} WTO addrs not in blocksByAddr"
+  -- Detailed SCC logging
+  log s!"\n=== WTO SCC Details ==="
+  ppWTODetailed log wto
+  -- Step 3: Process components in block-level WTO order.
+  -- Return edges are threaded through so processDAGBlock and processSCCStabilization
+  -- can follow return paths (non-constant rip) by composing with continuation blocks.
+  let cache ← IO.mkRef ({} : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
   let z3cache ← IO.mkRef ({} : Z3Cache)
-  log s!"\n--- Phase 1: Leaf function (next_sym) ---"
-  let t0 ← IO.monoMsNow
-  let (nextSymName, nextSymBody) := funcBlocks[0]!
-  -- Use computeFunctionStabilization directly (returns branch array as summary).
-  -- Don't double-run with computeStabilizationHS — that keeps two copies of deeply-nested
-  -- symbolic branches alive simultaneously, causing OOM.
-  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log z3cache with
-  | some (k, summaryArr) =>
-    let t1 ← IO.monoMsNow
-    summaries := summaries.insert functions[0]!.entryAddr summaryArr
-    log s!"  {nextSymName}: converged at K={k}, {summaryArr.size} summary branches, {t1 - t0}ms"
-  | none =>
-    log s!"  {nextSymName}: DID NOT CONVERGE"
-    return {}
-  -- Phase 2: Iterate NT function summaries to fixpoint
-  -- At each outer round, for each NT function:
-  --   1. Split body into non-call blocks + call-expanded results (via splitBodyAndExpandCalls)
-  --   2. Run stabilization on non-call body, seeding call results as initial frontier
-  --   3. The converged set = new function summary
-  -- Key: non-call body never contains summary-expanded branches, preventing expression nesting
-  log s!"\n--- Phase 2: NT functions (mutual recursion) ---"
-  -- Initialize NT summaries as empty
-  for i in [1:functions.size] do
-    summaries := summaries.insert functions[i]!.entryAddr #[]
-  let mut outerRound : Nat := 0
-  let mut outerChanged := true
-  while outerChanged do
-    outerChanged := false
-    outerRound := outerRound + 1
-    log s!"\n  === Outer round {outerRound} ==="
-    for i in [1:functions.size] do
-      let func := functions[i]!
-      let (fname, rawBody) := funcBlocks[i]!
-      let t0 ← IO.monoMsNow
-      -- Step 1: Split body into non-call blocks + call-expanded results
-      let (nonCallBody, callResults, callsExp, branchesAdded, droppedExp) :=
-        splitBodyAndExpandCalls ip_reg rawBody summaries
-      log s!"    {fname}: split body {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, {branchesAdded} branches, {droppedExp} dropped)"
-      -- Step 2: Run stabilization on non-call body, seeding call results as initial frontier
-      let oldSummary := summaries.getD func.entryAddr #[]
-      match ← computeFunctionStabilization ip_reg nonCallBody {} 30 log z3cache (initialFrontier := callResults) with
-      | some (k, newSummary) =>
-        let t1 ← IO.monoMsNow
-        if newSummary.size != oldSummary.size then
-          outerChanged := true
-          summaries := summaries.insert func.entryAddr newSummary
-          log s!"  {fname}: K={k}, {newSummary.size} branches (was {oldSummary.size}), {t1 - t0}ms [CHANGED]"
+  log s!"\n=== WTO Processing ==="
+  for comp in wto do
+    processWTOComponent ip_reg blocksByAddr cache returnEdges log z3cache blockToFunc funcBlockAddrs comp
+  -- Step 3b: Post-WTO function-level summarization
+  -- Run computeFunctionStabilization for each function using WTO-populated cache.
+  -- For functions whose blocks were fully handled by WTO (DAG or inner SCC),
+  -- cache-aware splitting routes all branches to seeds → convergence is trivial.
+  log s!"\n=== Post-WTO Function Summarization ==="
+  let allFuncEntries : Std.HashSet UInt64 := functions.foldl (fun s f => s.insert f.entryAddr) {}
+  for func in functions do
+    let funcBlocks := funcBlockAddrs.getD func.entryAddr #[]
+    let cacheContents ← cache.get
+    -- Collect full function body
+    let mut funcBody : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+    for addr in funcBlocks do
+      for b in blocksByAddr.getD addr #[] do
+        funcBody := funcBody.push b
+    -- Cache-aware split
+    let mut convergenceBody : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+    let mut seeds : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+    let mut exitBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+    let isa := vexSummaryISA Amd64Reg
+    for b in funcBody do
+      match extractRipTarget ip_reg b.sub with
+      | some target =>
+        if allFuncEntries.contains target then
+          -- Cross-function call: compose with cache
+          match cacheContents.get? target with
+          | some sumBranches =>
+            for cb in sumBranches do
+              let composed := b.compose isa cb
+              match simplifyBranch composed with
+              | none => pure ()
+              | some b' => seeds := seeds.push b'
+          | none => exitBranches := exitBranches.push b
         else
-          log s!"  {fname}: K={k}, {newSummary.size} branches (stable), {t1 - t0}ms"
-      | none =>
-        log s!"  {fname}: DID NOT CONVERGE"
-        return {}
-  log s!"\n=== Stratified fixpoint complete after {outerRound} outer rounds ==="
-  for i in [:functions.size] do
-    let func := functions[i]!
-    let summary := summaries.getD func.entryAddr #[]
-    log s!"  {func.name}: {summary.size} branches"
+          -- Intra-function target: check cache
+          match cacheContents.get? target with
+          | some cached =>
+            for cb in cached do
+              let composed := b.compose isa cb
+              match simplifyBranch composed with
+              | none => pure ()
+              | some b' => seeds := seeds.push b'
+          | none =>
+            convergenceBody := convergenceBody.push b
+      | none => exitBranches := exitBranches.push b
+    let closureBody := funcBody
+    let frontier := seeds ++ exitBranches
+    log s!"  {func.name}: {convergenceBody.size} body, {seeds.size} seeds, {exitBranches.size} exits"
+    match ← computeFunctionStabilization ip_reg convergenceBody 200 log z3cache
+             (initialFrontier := frontier) (closureBody := closureBody) with
+    | some (k, result) =>
+      cache.modify (·.insert func.entryAddr result)
+      log s!"  {func.name}: converged K={k}, {result.size} branches"
+    | none => log s!"  {func.name}: DID NOT CONVERGE"
+  -- Step 4: Aggregate per-function summaries from cache
+  let cacheContents ← cache.get
+  let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  log s!"\n=== WTO Fixpoint Results ==="
+  log s!"  Per-function: all-blocks (entry-only) [old stratified for comparison]"
+  let oldCounts := #[("next_sym", 75), ("term", 40), ("sum", 29), ("test", 27),
+                      ("expr", 72), ("paren_expr", 67), ("statement", 214)]
+  for func in functions do
+    -- A function's summary = union of cached branches for all its blocks
+    let mut funcBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)) := #[]
+    let entryBranches := cacheContents.getD func.entryAddr #[]
+    match parseBlocksWithAddresses func.blocks with
+    | .error _ => pure ()
+    | .ok pairs =>
+      for (addr, _) in pairs do
+        for b in cacheContents.getD addr #[] do
+          funcBranches := funcBranches.push b
+    summaries := summaries.insert func.entryAddr funcBranches
+    let oldCount := oldCounts.foldl (fun acc (n, c) => if n == func.name then c else acc) 0
+    let match_ := if entryBranches.size == oldCount then "MATCH" else "MISMATCH"
+    log s!"  {func.name}: {funcBranches.size} ({entryBranches.size}) [old={oldCount}] {match_}"
   -- Z3 cache summary
-  let cacheContents ← z3cache.get
+  let z3cacheContents ← z3cache.get
   log s!"\n=== Z3 Cache Summary ==="
-  log s!"  cache entries: {cacheContents.size}"
+  log s!"  cache entries: {z3cacheContents.size}"
   return summaries
 
 /-! ## DFA & CFG Extraction -/
@@ -2062,8 +2424,8 @@ def dispatchLoopEvalMain : IO Unit := do
     IO.println msg
     let h ← IO.FS.Handle.mk logPath .append
     h.putStrLn msg
-  -- Stratified fixpoint: per-function summaries
-  log "=== Stratified Dispatch Loop Stabilization ==="
+  -- Unified WTO fixpoint: one WTO over all blocks
+  log "=== Unified WTO Dispatch Loop Stabilization ==="
   -- Use nextSymBlocks.take 55 for the leaf portion of next_sym (blocks 56-60
   -- in nextSymBlocks are calling-convention blocks from other functions that
   -- were included before proper per-function extraction). The 55 leaf blocks
@@ -2078,7 +2440,7 @@ def dispatchLoopEvalMain : IO Unit := do
     ⟨"paren_expr",  0x40064d, paren_exprBlocks⟩,
     ⟨"statement",   0x4006b1, statementBlocks⟩
   ]
-  let _summaries ← stratifiedFixpoint functions log
+  let _summaries ← wtoFixpoint functions log
   -- Task 2B: DFA extraction from next_sym body branches (raw, before stabilization)
   let ip_reg := Amd64Reg.rip
   match parseBlocksWithAddresses (nextSymBlocks.take 55) with
