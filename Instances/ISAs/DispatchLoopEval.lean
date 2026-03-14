@@ -1,7 +1,6 @@
 import Instances.ISAs.VexCompTree
 import Instances.ISAs.VexProofCompression
-import Instances.ISAs.NextSymParserTest
-import Instances.ISAs.ParserNTParserTest
+import Instances.ISAs.VexIRParser
 import Instances.ISAs.ElfSymbolTable
 import Lean.Data.Json
 
@@ -3419,47 +3418,7 @@ def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
     log s!"  {functions.size} functions loaded"
     runPipeline functions log
   | [] =>
-    -- No args: use hardcoded tinyc data (backward compat)
-    log "=== Stratified Dispatch Loop Stabilization ==="
-    let functions : Array FunctionSpec := #[
-      ⟨"next_sym",    0x40006f, nextSymBlocks.take 55⟩,
-      ⟨"term",        0x400427, termBlocks⟩,
-      ⟨"sum",         0x4004be, sumBlocks⟩,
-      ⟨"test",        0x400551, testBlocks⟩,
-      ⟨"expr",        0x4005bd, exprBlocks⟩,
-      ⟨"paren_expr",  0x40064d, paren_exprBlocks⟩,
-      ⟨"statement",   0x4006b1, statementBlocks⟩
-    ]
-    let summaries ← stratifiedFixpoint functions log
-    let ip_reg := Amd64Reg.rip
-    let funcEntries : Std.HashMap UInt64 String :=
-      ({} : Std.HashMap UInt64 String)
-        |>.insert 0x40006f "next_sym"
-        |>.insert 0x400427 "term"
-        |>.insert 0x4004be "sum"
-        |>.insert 0x400551 "test"
-        |>.insert 0x4005bd "expr"
-        |>.insert 0x40064d "paren_expr"
-        |>.insert 0x4006b1 "statement"
-        |>.insert 0x400000 "_exit"
-    -- Step 1: Extract LTS from next_sym body branches
-    match parseBlocksWithAddresses (nextSymBlocks.take 55) with
-    | .error e => log s!"LTS parse error: {e}"
-    | .ok pairs =>
-      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
-      let nextSymLTS := extractLTS ip_reg bodyArr
-      printLTS log "next_sym" nextSymLTS
-      -- Step 3: DFA specialization for tokenizer
-      let mut nextSymBlkSet : Std.HashSet UInt64 := {}
-      for b in bodyArr do
-        match extractRipGuard ip_reg b.pc with
-        | some src => nextSymBlkSet := nextSymBlkSet.insert src
-        | none => pure ()
-      printTokenizerDFA log nextSymLTS nextSymBlkSet bodyArr 0x40006f
-    -- Step 4: Parser detection
-    let parserResult ← detectParser functions summaries log
-    let ps := match parserResult with
-      | .ok ps => some ps
-      | .error _ => none
-    -- Step 5: EBNF extraction for parser NTs (LTS-based)
-    printLTSGrammar log functions funcEntries summaries ps
+    -- No args: print usage
+    IO.eprintln "Usage: dispatchLoopEval <blocks.json> <elf-binary>"
+    IO.eprintln "       dispatchLoopEval <per-function.json>"
+    IO.Process.exit 1
