@@ -31,10 +31,8 @@ dropping unsatisfiable branches and collapsing trivially-true conjuncts. -/
 partial def SymPC.simplifyConst {Reg : Type} : SymPC Reg → Option (SymPC Reg)
   | .true => some .true
   | .eq (.const a) (.const b) => if a == b then some .true else none
-  | .lt (.const a) (.const b) =>
-      if (a.toNat + 2^63) % 2^64 < (b.toNat + 2^63) % 2^64 then some .true else none
-  | .le (.const a) (.const b) =>
-      if (a.toNat + 2^63) % 2^64 ≤ (b.toNat + 2^63) % 2^64 then some .true else none
+  | .lt (.const a) (.const b) => if a < b then some .true else none
+  | .le (.const a) (.const b) => if a ≤ b then some .true else none
   | .eq l r => some (.eq l r)
   | .lt l r => some (.lt l r)
   | .le l r => some (.le l r)

@@ -24,15 +24,6 @@ These axioms are validated by:
   semantically equivalent ones (const-const eval, load-after-matching-store)
 - Empirical testing: the pipeline produces 19/20 golden grammar match on Tiny C
 
-## Known Issue
-
-`simplifyConst` applies signed-comparison bias to `.lt`/`.le` with constant operands,
-but `evalSymPC` uses unsigned `<`/`≤` on `UInt64`. For unsigned comparison operations
-(CmpLT64U) with constant operands, the simplification may be unsound. In practice
-this case rarely arises (constant-constant unsigned comparisons are folded by the
-compiler before reaching VEX IR). The signed cases (CmpLT32S) are correctly handled
-because the parser biases operands before they reach the PC level.
-
 ## Set-Level Lifting
 
 The main theorem `simplifiedBranches_sound` shows that applying simplification to
@@ -54,11 +45,7 @@ evaluation semantics. They are accepted alongside the pyvex and z3 trust
 boundaries as computational pipeline assumptions. -/
 
 /-- `simplifyConst` preserves PC evaluation: if it returns `some φ'`, then `φ'`
-    evaluates identically to `φ`. If it returns `none`, then `φ` is unsatisfiable.
-
-    Note: For `.lt`/`.le` with constant operands, this axiom assumes the comparison
-    semantics in `simplifyConst` match `evalSymPC`. See module docstring for the
-    signedness caveat. -/
+    evaluates identically to `φ`. If it returns `none`, then `φ` is unsatisfiable. -/
 axiom simplifyConst_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
   ∀ (φ : SymPC Reg) (s : ConcreteState Reg),
     match SymPC.simplifyConst φ with
