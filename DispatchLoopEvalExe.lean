@@ -1,3 +1,3 @@
 import Instances.ISAs.DispatchLoopEval
 
-def main : IO Unit := dispatchLoopEvalMain
+def main (args : List String) : IO Unit := dispatchLoopEvalMain args

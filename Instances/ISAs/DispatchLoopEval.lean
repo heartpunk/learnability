@@ -2,6 +2,7 @@ import Instances.ISAs.VexCompTree
 import Instances.ISAs.VexProofCompression
 import Instances.ISAs.NextSymParserTest
 import Instances.ISAs.ParserNTParserTest
+import Instances.ISAs.ElfSymbolTable
 import Lean.Data.Json
 
 set_option autoImplicit false
@@ -3353,63 +3354,112 @@ def printLTSGrammar (log : String → IO Unit)
   -- Structural comparison against golden grammar
   structuralGoldenCompare log grammars tokenNames
 
-/-! ## Run stabilization on next_sym -/
+/-! ## Run stabilization -/
 
-/-- Main entry point for dispatch loop evaluation.
-    Extracted from #eval so it can be used by both #eval and native exe. -/
-def dispatchLoopEvalMain : IO Unit := do
-  let logPath : System.FilePath := ".lake/stabilization.log"
-  IO.FS.writeFile logPath ""
-  let log (msg : String) : IO Unit := do
-    IO.println msg
-    let h ← IO.FS.Handle.mk logPath .append
-    h.putStrLn msg
-  -- Stratified fixpoint: per-function summaries
+/-- Build funcEntries map from function specs. -/
+def buildFuncEntries (functions : Array FunctionSpec) : Std.HashMap UInt64 String :=
+  functions.foldl (fun m f => m.insert f.entryAddr f.name) {}
+
+/-- Run the full pipeline on a set of function specs: fixpoint → detect → extract.
+    The generic pipeline used by both legacy and file-based entry points. -/
+def runPipeline (functions : Array FunctionSpec) (log : String → IO Unit) : IO Unit := do
   log "=== Stratified Dispatch Loop Stabilization ==="
-  -- Use nextSymBlocks.take 55 for the leaf portion of next_sym (blocks 56-60
-  -- in nextSymBlocks are calling-convention blocks from other functions that
-  -- were included before proper per-function extraction). The 55 leaf blocks
-  -- converge to 414 branches with a 3-register projection {rax, rbp, rsp}.
-  -- NT function block lists come from parser_nt_blocks.json extraction.
-  let functions : Array FunctionSpec := #[
-    ⟨"next_sym",    0x40006f, nextSymBlocks.take 55⟩,
-    ⟨"term",        0x400427, termBlocks⟩,
-    ⟨"sum",         0x4004be, sumBlocks⟩,
-    ⟨"test",        0x400551, testBlocks⟩,
-    ⟨"expr",        0x4005bd, exprBlocks⟩,
-    ⟨"paren_expr",  0x40064d, paren_exprBlocks⟩,
-    ⟨"statement",   0x4006b1, statementBlocks⟩
-  ]
   let summaries ← stratifiedFixpoint functions log
-  let ip_reg := Amd64Reg.rip
-  let funcEntries : Std.HashMap UInt64 String :=
-    ({} : Std.HashMap UInt64 String)
-      |>.insert 0x40006f "next_sym"
-      |>.insert 0x400427 "term"
-      |>.insert 0x4004be "sum"
-      |>.insert 0x400551 "test"
-      |>.insert 0x4005bd "expr"
-      |>.insert 0x40064d "paren_expr"
-      |>.insert 0x4006b1 "statement"
-      |>.insert 0x400000 "_exit"
-  -- Step 1: Extract LTS from next_sym body branches
-  match parseBlocksWithAddresses (nextSymBlocks.take 55) with
-  | .error e => log s!"LTS parse error: {e}"
-  | .ok pairs =>
-    let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
-    let nextSymLTS := extractLTS ip_reg bodyArr
-    printLTS log "next_sym" nextSymLTS
-    -- Step 3: DFA specialization for tokenizer
-    let mut nextSymBlkSet : Std.HashSet UInt64 := {}
-    for b in bodyArr do
-      match extractRipGuard ip_reg b.pc with
-      | some src => nextSymBlkSet := nextSymBlkSet.insert src
-      | none => pure ()
-    printTokenizerDFA log nextSymLTS nextSymBlkSet bodyArr 0x40006f
-  -- Step 4: Parser detection
+  let funcEntries := buildFuncEntries functions
+  -- Parser detection
   let parserResult ← detectParser functions summaries log
   let ps := match parserResult with
     | .ok ps => some ps
     | .error _ => none
-  -- Step 5: EBNF extraction for parser NTs (LTS-based)
+  -- EBNF extraction for parser NTs (LTS-based)
   printLTSGrammar log functions funcEntries summaries ps
+
+/-- Main entry point using file-based input: blocks.json + ELF binary.
+    Loads blocks from JSON, reads symbols from ELF, discovers functions, runs pipeline. -/
+def dispatchLoopEvalFromFiles (blocksJson : System.FilePath) (elfBinary : System.FilePath)
+    (log : String → IO Unit) : IO Unit := do
+  log s!"Loading blocks from {blocksJson}..."
+  let blocks ← loadBlocksFromJSON blocksJson
+  log s!"  {blocks.size} blocks loaded"
+  log s!"Reading symbols from {elfBinary}..."
+  let symbols ← ElfSymbolTable.readSymbolsFromFile elfBinary
+  log s!"  {symbols.size} function symbols found"
+  for (name, addr, size) in symbols do
+    log s!"    {name} @ 0x{String.mk (Nat.toDigits 16 addr.toNat)}, {size} bytes"
+  match discoverFunctions blocks symbols with
+  | .error e => log s!"Function discovery error: {e}"
+  | .ok functions =>
+    log s!"Discovered {functions.size} functions with blocks:"
+    for f in functions do
+      log s!"  {f.name}: {f.blocks.length} blocks"
+    runPipeline functions log
+
+/-- Standard log function: writes to both stdout and a log file. -/
+def mkLogger (logPath : System.FilePath) : IO (String → IO Unit) := do
+  IO.FS.writeFile logPath ""
+  return fun msg => do
+    IO.println msg
+    let h ← IO.FS.Handle.mk logPath .append
+    h.putStrLn msg
+
+/-- Main entry point for dispatch loop evaluation with CLI args.
+    - 0 args: legacy hardcoded tinyc data
+    - 1 arg (JSON path): per-function JSON format
+    - 2 args (blocks.json, ELF binary): file-based discovery mode -/
+def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
+  let log ← mkLogger ".lake/stabilization.log"
+  match args with
+  | blocksJson :: elfBinary :: _ =>
+    -- File-based mode: blocks.json + ELF binary
+    dispatchLoopEvalFromFiles blocksJson elfBinary log
+  | [jsonPath] =>
+    -- Single arg: per-function JSON format
+    log s!"Loading functions from {jsonPath}..."
+    let functions ← loadFunctionsFromJSON jsonPath
+    log s!"  {functions.size} functions loaded"
+    runPipeline functions log
+  | [] =>
+    -- No args: use hardcoded tinyc data (backward compat)
+    log "=== Stratified Dispatch Loop Stabilization ==="
+    let functions : Array FunctionSpec := #[
+      ⟨"next_sym",    0x40006f, nextSymBlocks.take 55⟩,
+      ⟨"term",        0x400427, termBlocks⟩,
+      ⟨"sum",         0x4004be, sumBlocks⟩,
+      ⟨"test",        0x400551, testBlocks⟩,
+      ⟨"expr",        0x4005bd, exprBlocks⟩,
+      ⟨"paren_expr",  0x40064d, paren_exprBlocks⟩,
+      ⟨"statement",   0x4006b1, statementBlocks⟩
+    ]
+    let summaries ← stratifiedFixpoint functions log
+    let ip_reg := Amd64Reg.rip
+    let funcEntries : Std.HashMap UInt64 String :=
+      ({} : Std.HashMap UInt64 String)
+        |>.insert 0x40006f "next_sym"
+        |>.insert 0x400427 "term"
+        |>.insert 0x4004be "sum"
+        |>.insert 0x400551 "test"
+        |>.insert 0x4005bd "expr"
+        |>.insert 0x40064d "paren_expr"
+        |>.insert 0x4006b1 "statement"
+        |>.insert 0x400000 "_exit"
+    -- Step 1: Extract LTS from next_sym body branches
+    match parseBlocksWithAddresses (nextSymBlocks.take 55) with
+    | .error e => log s!"LTS parse error: {e}"
+    | .ok pairs =>
+      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      let nextSymLTS := extractLTS ip_reg bodyArr
+      printLTS log "next_sym" nextSymLTS
+      -- Step 3: DFA specialization for tokenizer
+      let mut nextSymBlkSet : Std.HashSet UInt64 := {}
+      for b in bodyArr do
+        match extractRipGuard ip_reg b.pc with
+        | some src => nextSymBlkSet := nextSymBlkSet.insert src
+        | none => pure ()
+      printTokenizerDFA log nextSymLTS nextSymBlkSet bodyArr 0x40006f
+    -- Step 4: Parser detection
+    let parserResult ← detectParser functions summaries log
+    let ps := match parserResult with
+      | .ok ps => some ps
+      | .error _ => none
+    -- Step 5: EBNF extraction for parser NTs (LTS-based)
+    printLTSGrammar log functions funcEntries summaries ps
