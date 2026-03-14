@@ -93,7 +93,7 @@ def ByteMem.eraseAddr (mem : ByteMem) (addr : UInt64) : ByteMem :=
 def ByteMem.writeByte (mem : ByteMem) (addr : UInt64) (value : UInt8) : ByteMem :=
   (addr, value) :: ByteMem.eraseAddr mem addr
 
-private def ByteMem.readLEAux (mem : ByteMem) (addr : UInt64) : Nat → UInt64
+def ByteMem.readLEAux (mem : ByteMem) (addr : UInt64) : Nat → UInt64
   | 0 => 0
   | n + 1 =>
       let rest := ByteMem.readLEAux mem addr n
@@ -118,7 +118,7 @@ def ByteMem.read64le (mem : ByteMem) (addr : UInt64) : UInt64 :=
   | .w32, mem, addr => ByteMem.read32le mem addr
   | .w64, mem, addr => ByteMem.read64le mem addr
 
-private def ByteMem.writeLEAux (mem : ByteMem) (addr value : UInt64) : Nat → ByteMem
+def ByteMem.writeLEAux (mem : ByteMem) (addr value : UInt64) : Nat → ByteMem
   | 0 => mem
   | n + 1 =>
       let shifted := UInt64.shiftRight value (UInt64.ofNat (8 * n))
@@ -339,5 +339,70 @@ def TempEnv.write (temps : TempEnv) (tmp : Nat) (value : UInt64) : TempEnv :=
     in Mathlib, so we provide a concrete list instead. -/
 class EnumReg (Reg : Type) where
   allRegs : List Reg
+
+/-! ## ByteMem read-after-write lemmas -/
+
+/-- Erasing address `a` doesn't affect readByte at `b ≠ a`. -/
+theorem readByte_eraseAddr_ne (mem : ByteMem) (a b : UInt64) (h : a ≠ b) :
+    ByteMem.readByte (ByteMem.eraseAddr mem a) b =
+    ByteMem.readByte mem b := by
+  induction mem with
+  | nil => rfl
+  | cons cell rest ih =>
+    simp only [ByteMem.eraseAddr, List.filter]
+    by_cases hca : cell.1 = a
+    · have : (cell.1 ≠ a) = False := by simp [hca]
+      simp only [this, decide_false]
+      simp only [ByteMem.readByte]
+      have hcb : ¬(cell.1 = b) := fun hcb => h (hca ▸ hcb)
+      simp only [hcb, ite_false]
+      exact ih
+    · have : (cell.1 ≠ a) = True := by simp [hca]
+      simp only [this, decide_true]
+      simp only [ByteMem.readByte]
+      split
+      · rfl
+      · exact ih
+
+theorem readByte_writeByte_same (mem : ByteMem) (addr : UInt64) (val : UInt8) :
+    ByteMem.readByte (ByteMem.writeByte mem addr val) addr = val := by
+  unfold ByteMem.writeByte; simp [ByteMem.readByte]
+
+theorem readByte_writeByte_ne (mem : ByteMem) (a b : UInt64) (val : UInt8) (h : a ≠ b) :
+    ByteMem.readByte (ByteMem.writeByte mem a val) b = ByteMem.readByte mem b := by
+  unfold ByteMem.writeByte
+  simp only [ByteMem.readByte, if_neg h]
+  exact readByte_eraseAddr_ne mem a b h
+
+theorem readByte_writeLEAux_nonoverlap
+    (mem : ByteMem) (addr value : UInt64) (n : Nat) (b : UInt64)
+    (h : ∀ i : Nat, i < n → addr + UInt64.ofNat i ≠ b) :
+    ByteMem.readByte (ByteMem.writeLEAux mem addr value n) b =
+    ByteMem.readByte mem b := by
+  induction n generalizing mem with
+  | zero => rfl
+  | succ k ih =>
+    simp only [ByteMem.writeLEAux]
+    have hk : addr + UInt64.ofNat k ≠ b := h k (Nat.lt_succ_of_le (Nat.le_refl k))
+    rw [ih (ByteMem.writeByte mem (addr + UInt64.ofNat k) _)
+        (fun i hi => h i (Nat.lt_of_lt_of_le hi (Nat.le_succ k)))]
+    exact readByte_writeByte_ne mem _ b _ hk
+
+theorem readLEAux_writeLEAux_nonoverlap
+    (mem : ByteMem) (storeAddr value : UInt64) (storeN : Nat)
+    (loadAddr : UInt64) (loadN : Nat)
+    (h : ∀ (i j : Nat), i < storeN → j < loadN →
+      storeAddr + UInt64.ofNat i ≠ loadAddr + UInt64.ofNat j) :
+    ByteMem.readLEAux (ByteMem.writeLEAux mem storeAddr value storeN) loadAddr loadN =
+    ByteMem.readLEAux mem loadAddr loadN := by
+  induction loadN with
+  | zero => rfl
+  | succ k ih =>
+    simp only [ByteMem.readLEAux]
+    have ih' := ih (fun i j hi hj => h i j hi (Nat.lt_of_lt_of_le hj (Nat.le_succ k)))
+    have hk := readByte_writeLEAux_nonoverlap mem storeAddr value storeN
+      (loadAddr + UInt64.ofNat k)
+      (fun i hi => h i k hi (Nat.lt_succ_of_le (Nat.le_refl k)))
+    rw [ih', hk]
 
 end VexISA
