@@ -74,18 +74,24 @@ section DispatchBodyHStep
 variable {Reg : Type}
 variable [DecidableEq Reg] [Fintype Reg]
 
+/-- `buildDispatchBody` on a cons unfolds to a `guardedChoice`. -/
+private theorem buildDispatchBody_cons
+    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ip_reg : Reg) (addr : UInt64) (block : Block Reg)
+    (rest : List (UInt64 × Block Reg)) :
+    buildDispatchBody ip_reg ((addr, block) :: rest) =
+      .guardedChoice (.eq (.reg ip_reg) (.const addr))
+        (blockToCompTree block)
+        (buildDispatchBody ip_reg rest) := rfl
+
 /-- Key behavioral property of `buildDispatchBody`: if the body tree
     dispatches to some state `s'`, then `s'` was produced by one of the
     blocks whose rip-guard matches `s.read ip_reg`.
 
-    This is axiomatized because `buildDispatchBody` is a `foldr` over
-    `guardedChoice` nodes, and proving the inductive characterization
-    of `treeBehavior` for such a fold requires unwinding the
-    `choiceBehavior`/`seqBehavior`/`assertBehavior` layers at each step.
-    The property is structurally obvious from the construction:
-    each `guardedChoice` checks `rip == addr`, and if it fires, executes
-    `blockToCompTree block`. -/
-axiom buildDispatchBody_behavior
+    Proved by induction on `blocks`. Each `guardedChoice` checks
+    `rip == addr`; the satisfied case uses `treeBehavior_blockToCompTree`,
+    the unsatisfied case recurses. -/
+theorem buildDispatchBody_behavior
     {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (ip_reg : Reg)
     (blocks : List (UInt64 × Block Reg))
@@ -93,7 +99,33 @@ axiom buildDispatchBody_behavior
     (h_tree : CompTree.treeBehavior (vexSummaryISA Reg)
       (buildDispatchBody ip_reg blocks) s s')
     (h_addr : ∃ p ∈ blocks, s.read ip_reg = p.1) :
-  ∃ p ∈ blocks, s.read ip_reg = p.1 ∧ s' ∈ execBlockSuccs p.2 s
+  ∃ p ∈ blocks, s.read ip_reg = p.1 ∧ s' ∈ execBlockSuccs p.2 s := by
+  induction blocks with
+  | nil => simp at h_addr
+  | cons hd rest ih =>
+    obtain ⟨addr, block⟩ := hd
+    rw [buildDispatchBody_cons] at h_tree
+    simp only [CompTree.treeBehavior, choiceBehavior, seqBehavior, assertBehavior] at h_tree
+    obtain ⟨t, ⟨hsat, ht⟩, htree⟩ | ⟨t, ⟨hsat, ht⟩, htree⟩ := h_tree
+    · -- Guard satisfied: rip = addr
+      rw [ht] at htree
+      simp only [vexSummaryISA, satisfiesSymPC, evalSymPC, evalSymExpr] at hsat
+      refine ⟨(addr, block), List.Mem.head rest, eq_of_beq hsat,
+        (treeBehavior_blockToCompTree block _ s').mp htree⟩
+    · -- Guard not satisfied: rip ≠ addr
+      rw [ht] at htree
+      simp only [vexSummaryISA, satisfiesSymPC, evalSymPC, evalSymExpr] at hsat
+      -- hsat : ¬ s.regs ip_reg = addr (simp reduced read → regs)
+      obtain ⟨p, hp, hp_addr⟩ := h_addr
+      cases hp with
+      | head =>
+        simp only [ConcreteState.read] at hp_addr
+        simp only [ConcreteState.read] at hsat
+        rw [hp_addr, beq_self_eq_true, Bool.not_true] at hsat
+        exact absurd hsat (by decide)
+      | tail _ hp =>
+        obtain ⟨q, hq, hq_addr, hq_exec⟩ := ih htree ⟨p, hp, hp_addr⟩
+        exact ⟨q, List.Mem.tail _ hq, hq_addr, hq_exec⟩
 
 /-- Derive `hStep` for a dispatch loop body. -/
 theorem hStep_of_dispatchBody
