@@ -2,6 +2,7 @@ import Instances.ISAs.VexCompTree
 import Instances.ISAs.VexProofCompression
 import Instances.ISAs.NextSymParserTest
 import Instances.ISAs.ParserNTParserTest
+import Lean.Data.Json
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -1138,6 +1139,39 @@ def parseBlocksWithAddresses (blockStrs : List String) :
     let block ← parseIRSB text
     return (ip, block)
 
+/-! ## JSON Block Loading
+
+Load VEX IR blocks from JSON files. Supports two formats:
+1. Flat format: `{"arch": "amd64", "blocks": ["IRSB {...}", ...]}`
+2. Per-function format: `{"arch": "amd64", "functions": {"name": {"addr": "0x...", "size": N, "blocks": [...]}, ...}}`
+The flat format comes from pyvex linear sweep. The per-function format is the
+legacy format from `reference/tinyc/parser_nt_blocks.json`. -/
+
+/-- Load a flat list of IRSB strings from a JSON file.
+    Accepts both flat format (blocks array) and per-function format (concatenates all blocks). -/
+def loadBlocksFromJSON (path : System.FilePath) : IO (Array String) := do
+  let contents ← IO.FS.readFile path
+  match Lean.Json.parse contents with
+  | .error e => throw (IO.userError s!"JSON parse error in {path}: {e}")
+  | .ok json =>
+    -- Try flat format first: {"blocks": [...]}
+    match json.getObjValAs? (α := Array String) "blocks" with
+    | .ok blocks => return blocks
+    | .error _ =>
+      -- Try per-function format: {"functions": {"name": {"blocks": [...]}}}
+      match json.getObjVal? "functions" with
+      | .error _ => throw (IO.userError s!"JSON has neither 'blocks' nor 'functions' key")
+      | .ok funcsJson =>
+        match funcsJson with
+        | .obj funcsObj =>
+          let mut allBlocks : Array String := #[]
+          for (_, funcJson) in funcsObj.toArray do
+            match funcJson.getObjValAs? (α := Array String) "blocks" with
+            | .ok blocks => allBlocks := allBlocks ++ blocks
+            | .error e => throw (IO.userError s!"Error reading function blocks: {e}")
+          return allBlocks
+        | _ => throw (IO.userError s!"'functions' value is not an object")
+
 /-! ## Stratified Fixpoint — Per-Function Summaries
 
 Instead of treating all blocks as one flat dispatch loop, compute fixpoints
@@ -1156,6 +1190,47 @@ structure FunctionSpec where
   entryAddr : UInt64
   blocks : List String  -- raw IRSB strings
   deriving Inhabited
+
+/-- Parse a hex address string (with or without 0x prefix) to UInt64. -/
+private def parseHexAddr (s : String) : Option UInt64 :=
+  let digits := if s.startsWith "0x" || s.startsWith "0X" then s.drop 2 else s
+  digits.foldl (fun acc c =>
+    acc.bind fun n =>
+      if '0' ≤ c && c ≤ '9' then some (n * 16 + (c.toNat - '0'.toNat))
+      else if 'a' ≤ c && c ≤ 'f' then some (n * 16 + (c.toNat - 'a'.toNat + 10))
+      else if 'A' ≤ c && c ≤ 'F' then some (n * 16 + (c.toNat - 'A'.toNat + 10))
+      else none) (some 0)
+  |>.map UInt64.ofNat
+
+/-- Load per-function specs from legacy JSON format.
+    Format: `{"functions": {"name": {"addr": "0x...", "size": N, "blocks": [...]}, ...}}` -/
+def loadFunctionsFromJSON (path : System.FilePath) : IO (Array FunctionSpec) := do
+  let contents ← IO.FS.readFile path
+  match Lean.Json.parse contents with
+  | .error e => throw (IO.userError s!"JSON parse error in {path}: {e}")
+  | .ok json =>
+    match json.getObjVal? "functions" with
+    | .error _ => throw (IO.userError s!"JSON has no 'functions' key (not per-function format)")
+    | .ok funcsJson =>
+      match funcsJson with
+      | .obj funcsObj =>
+        let mut specs : Array FunctionSpec := #[]
+        for (name, funcJson) in funcsObj.toArray do
+          let addrStr ← match funcJson.getObjValAs? (α := String) "addr" with
+            | .ok s => pure s
+            | .error e => throw (IO.userError s!"Missing addr for {name}: {e}")
+          let addr ← match parseHexAddr addrStr with
+            | some a => pure a
+            | none =>
+              match addrStr.toNat? with
+              | some n => pure (UInt64.ofNat n)
+              | none => throw (IO.userError s!"Bad address for {name}: {addrStr}")
+          let blocks ← match funcJson.getObjValAs? (α := Array String) "blocks" with
+            | .ok bs => pure bs.toList
+            | .error e => throw (IO.userError s!"Missing blocks for {name}: {e}")
+          specs := specs.push ⟨name, addr, blocks⟩
+        return specs
+      | _ => throw (IO.userError s!"'functions' value is not an object")
 
 /-- Compose body branches with frontier, but when a body branch's rip target
     matches a function entry, substitute that function's summary branches
