@@ -52,16 +52,21 @@ axiom z3_implication_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   ∀ (s : ConcreteState Reg),
     evalSymPC s φ₁ = true → evalSymPC s φ₂ = true
 
-/-! ## Subset Soundness (Trivial Direction)
+/-! ## Subset Soundness (Proved, No Axioms)
 
-Dedup produces a subset. Soundness is downward-closed. -/
+Dedup produces a subset. Soundness is downward-closed.
 
-/-- The step function used by dedupBySignature's for loop. -/
-private def dedupStep {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
+The proof connects the `do`-notation desugaring (which uses `MProd` for
+mutable state threading) to `List.foldl` via `Array.forIn_pure_yield_eq_foldl`,
+then establishes the subset invariant by induction on the branch list. -/
+
+/-- The step function used by dedupBySignature's for loop.
+    Uses `MProd` to match the `do`-notation desugaring of mutable state. -/
+private def dedupStepM {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
     (closure : Array (SymPC Reg))
     (b : Branch (SymSub Reg) (SymPC Reg))
-    (r : Nat × Array (Branch (SymSub Reg) (SymPC Reg)) × Std.HashSet (SigDedupKey Reg)) :
-    Nat × Array (Branch (SymSub Reg) (SymPC Reg)) × Std.HashSet (SigDedupKey Reg) :=
+    (r : MProd Nat (MProd (Array (Branch (SymSub Reg) (SymPC Reg))) (Std.HashSet (SigDedupKey Reg)))) :
+    MProd Nat (MProd (Array (Branch (SymSub Reg) (SymPC Reg))) (Std.HashSet (SigDedupKey Reg))) :=
   if r.snd.snd.contains ⟨b.sub, computePCSignature closure b.pc⟩ = true then
     ⟨r.fst + 1, r.snd.fst, r.snd.snd⟩
   else
@@ -69,15 +74,15 @@ private def dedupStep {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg
 
 /-- The dedup fold preserves the invariant: every element of the result array
     was either in the initial array or in the input list. -/
-private theorem foldl_dedupStep_subset {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+private theorem foldl_dedupStepM_subset {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     [Hashable Reg] [EnumReg Reg]
     (closure : Array (SymPC Reg))
     (bs : List (Branch (SymSub Reg) (SymPC Reg)))
     (origBranches : List (Branch (SymSub Reg) (SymPC Reg)))
-    (state : Nat × Array (Branch (SymSub Reg) (SymPC Reg)) × Std.HashSet (SigDedupKey Reg))
-    (h_state : ∀ x, x ∈ state.2.1.toList → x ∈ origBranches)
+    (state : MProd Nat (MProd (Array (Branch (SymSub Reg) (SymPC Reg))) (Std.HashSet (SigDedupKey Reg))))
+    (h_state : ∀ x, x ∈ state.snd.fst.toList → x ∈ origBranches)
     (h_bs : ∀ x, x ∈ bs → x ∈ origBranches) :
-    ∀ x, x ∈ (bs.foldl (fun acc b => dedupStep closure b acc) state).2.1.toList →
+    ∀ x, x ∈ (bs.foldl (fun acc b => dedupStepM closure b acc) state).snd.fst.toList →
       x ∈ origBranches := by
   induction bs generalizing state with
   | nil =>
@@ -86,11 +91,11 @@ private theorem foldl_dedupStep_subset {Reg : Type} [DecidableEq Reg] [Fintype R
   | cons y rest ih =>
     intro x hx
     simp only [List.foldl] at hx
-    unfold dedupStep at hx
+    unfold dedupStepM at hx
     split at hx
-    · exact ih ⟨state.1 + 1, state.2.1, state.2.2⟩ h_state
+    · exact ih ⟨state.fst + 1, state.snd.fst, state.snd.snd⟩ h_state
         (fun x hx => h_bs x (List.mem_cons_of_mem y hx)) x hx
-    · exact ih ⟨state.1, state.2.1.push y, state.2.2.insert _⟩
+    · exact ih ⟨state.fst, state.snd.fst.push y, state.snd.snd.insert _⟩
         (fun x hx => by
           rw [Array.toList_push, List.mem_append, List.mem_singleton] at hx
           rcases hx with h | h
@@ -98,19 +103,46 @@ private theorem foldl_dedupStep_subset {Reg : Type} [DecidableEq Reg] [Fintype R
           · exact h ▸ h_bs y (.head rest))
         (fun x hx => h_bs x (List.mem_cons_of_mem y hx)) x hx
 
-/-- `dedupBySignature` agrees with a foldl of `dedupStep`. This is an axiom
-    because `Id.run do` with `for` desugars through `ForIn`/`ForInStep` which
-    is not definitionally equal to `List.foldl`, but computes the same result. -/
-private axiom dedupBySignature_eq_foldl {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+/-- The `forIn` in `dedupBySignature` equals `Array.foldl` of `dedupStepM`.
+    The body always returns `ForInStep.yield`, so `forIn_pure_yield_eq_foldl` applies.
+    Key insight: `do`-notation desugars mutable state to `MProd`, not `Prod`. -/
+private theorem dedupForIn_eq_foldl {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     [Hashable Reg] [EnumReg Reg]
     (closure : Array (SymPC Reg))
     (branches : Array (Branch (SymSub Reg) (SymPC Reg))) :
-  (dedupBySignature closure branches).1 =
-    (branches.toList.foldl (fun acc b => dedupStep closure b acc)
-      ⟨0, #[], ∅⟩).2.1
+    (forIn branches
+      (⟨0, #[], ∅⟩ : MProd Nat (MProd (Array (Branch (SymSub Reg) (SymPC Reg))) (Std.HashSet (SigDedupKey Reg))))
+      (fun (b : Branch (SymSub Reg) (SymPC Reg))
+        (r : MProd Nat (MProd (Array (Branch (SymSub Reg) (SymPC Reg))) (Std.HashSet (SigDedupKey Reg)))) =>
+        if r.snd.snd.contains { sub := b.sub, sig := computePCSignature closure b.pc } = true then
+          (pure (ForInStep.yield ⟨r.fst + 1, r.snd.fst, r.snd.snd⟩) : Id (ForInStep _))
+        else
+          pure (ForInStep.yield
+            ⟨r.fst, r.snd.fst.push b,
+              r.snd.snd.insert { sub := b.sub, sig := computePCSignature closure b.pc }⟩)) : Id _) =
+    Array.foldl (fun acc (b : Branch (SymSub Reg) (SymPC Reg)) => dedupStepM closure b acc)
+      (⟨0, #[], ∅⟩ : MProd Nat (MProd (Array (Branch (SymSub Reg) (SymPC Reg))) (Std.HashSet (SigDedupKey Reg))))
+      branches := by
+  have hbody : (fun (b : Branch (SymSub Reg) (SymPC Reg))
+    (r : MProd Nat (MProd (Array (Branch (SymSub Reg) (SymPC Reg))) (Std.HashSet (SigDedupKey Reg)))) =>
+      if r.snd.snd.contains { sub := b.sub, sig := computePCSignature closure b.pc } = true then
+        (pure (ForInStep.yield ⟨r.fst + 1, r.snd.fst, r.snd.snd⟩) : Id (ForInStep _))
+      else
+        pure (ForInStep.yield
+          ⟨r.fst, r.snd.fst.push b,
+            r.snd.snd.insert { sub := b.sub, sig := computePCSignature closure b.pc }⟩)) =
+    (fun b r => pure (ForInStep.yield (dedupStepM closure b r))) := by
+    funext b r; unfold dedupStepM; split <;> rfl
+  rw [hbody]
+  rw [Array.forIn_pure_yield_eq_foldl]
+  simp [pure, Pure.pure]
 
-/-- Dedup produces a subset of the original branch set. Proved via the
-    foldl invariant + agreement axiom. -/
+/-- Dedup produces a subset of the original branch set. Every branch in the
+    deduped set was in the original set.
+
+    **Proved without axioms.** The proof unfolds the `do`-notation desugaring,
+    bridges `forIn` → `Array.foldl` → `List.foldl`, then applies the
+    `foldl_dedupStepM_subset` inductive invariant. -/
 theorem dedupBySignature_subset {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     [Hashable Reg] [EnumReg Reg]
     (closure : Array (SymPC Reg))
@@ -118,8 +150,12 @@ theorem dedupBySignature_subset {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   ∀ b, b ∈ (dedupBySignature closure branches).1.toList →
     b ∈ branches.toList := by
   intro b hb
-  rw [dedupBySignature_eq_foldl] at hb
-  exact foldl_dedupStep_subset closure branches.toList branches.toList ⟨0, #[], ∅⟩
+  unfold dedupBySignature at hb
+  simp only [Id.run, bind, Bind.bind] at hb
+  rw [dedupForIn_eq_foldl] at hb
+  simp only [pure, Pure.pure] at hb
+  simp only [← Array.foldl_toList] at hb
+  exact foldl_dedupStepM_subset closure branches.toList branches.toList ⟨0, #[], ∅⟩
     (by simp) (fun x hx => hx) b hb
 
 /-- Soundness is preserved by dedup: a subset of a sound set is sound.
