@@ -1232,6 +1232,30 @@ def loadFunctionsFromJSON (path : System.FilePath) : IO (Array FunctionSpec) := 
         return specs
       | _ => throw (IO.userError s!"'functions' value is not an object")
 
+/-- Discover functions by assigning IRSB blocks to ELF symbols.
+    For each symbol (name, addr, size), collects blocks whose entry address
+    (from first IMark) falls in [addr, addr + size). -/
+def discoverFunctions (blocks : Array String) (symbols : Array (String × UInt64 × UInt64)) :
+    Except String (Array FunctionSpec) := do
+  -- Extract entry address from each block
+  let mut blockAddrs : Array (UInt64 × String) := #[]
+  for blockStr in blocks do
+    let addr ← extractIMarkIP blockStr
+    blockAddrs := blockAddrs.push (addr, blockStr)
+  -- Sort symbols by address for deterministic output
+  let sortedSyms := symbols.qsort fun (_, a1, _) (_, a2, _) => a1 < a2
+  -- Assign blocks to symbols
+  let mut result : Array FunctionSpec := #[]
+  for (name, addr, size) in sortedSyms do
+    let funcBlocks := blockAddrs.filter fun (blockAddr, _) =>
+      blockAddr >= addr && blockAddr < addr + size
+    -- Sort blocks by address within each function
+    let sortedBlocks := funcBlocks.qsort fun (a1, _) (a2, _) => a1 < a2
+    let blockStrs := sortedBlocks.map (·.2) |>.toList
+    if !blockStrs.isEmpty then
+      result := result.push ⟨name, addr, blockStrs⟩
+  return result
+
 /-- Compose body branches with frontier, but when a body branch's rip target
     matches a function entry, substitute that function's summary branches
     instead of continuing through individual blocks.
