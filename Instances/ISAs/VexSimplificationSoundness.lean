@@ -15,8 +15,8 @@ semantics required by `BranchModel.Sound` from `Core/Composition.lean`.
 `simplifyConst` is a total `def` — its soundness (`simplifyConst_sound`) is fully proved.
 
 The load-after-store functions (`simplifyLoadStoreExpr`, `simplifyLoadStoreMem`,
-`simplifyLoadStorePC`) are still `partial def`s, making them opaque to the proof
-system. Their behavior is axiomatized:
+`simplifyLoadStorePC`) are now total `def`s. Their soundness is axiomatized
+pending full proofs:
 
 1. `simplifyLoadStoreExpr_sound`: load-after-store resolution preserves expression evaluation
 2. `simplifyLoadStoreMem_sound`: store chain simplification preserves memory evaluation
@@ -55,14 +55,14 @@ theorem simplifyConst_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     cases lhs <;> cases rhs <;> (try rfl)
     rename_i a b
     by_cases h : a < b
-    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr, decide_eq_true h]
-    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr, decide_eq_false h]
+    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr]
+    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr]
   | le lhs rhs =>
     cases lhs <;> cases rhs <;> (try rfl)
     rename_i a b
     by_cases h : a ≤ b
-    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr, decide_eq_true h]
-    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr, decide_eq_false h]
+    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr]
+    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr]
   | and φ ψ ih_φ ih_ψ =>
     simp only [SymPC.simplifyConst]
     revert ih_φ ih_ψ
@@ -77,6 +77,112 @@ theorem simplifyConst_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     match hφ : SymPC.simplifyConst φ with
     | none => simp_all [evalSymPC]
     | some φ_val => cases φ_val <;> simp_all [evalSymPC]
+
+/-! ## UInt64 arithmetic helpers (bridge to BitVec via show/congr/bv_omega) -/
+
+private theorem uint64_add_assoc (a b c : UInt64) : a + b + c = a + (b + c) := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_add]; bv_omega
+
+private theorem uint64_add_comm (a b : UInt64) : a + b = b + a := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1; bv_omega
+
+private theorem uint64_add_left_comm (a b c : UInt64) : a + (b + c) = b + (a + c) := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_add]; bv_omega
+
+private theorem uint64_add_zero (a : UInt64) : a + 0 = a := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_ofNat]; bv_omega
+
+private theorem uint64_zero_add (a : UInt64) : 0 + a = a := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_ofNat]; bv_omega
+
+private theorem uint64_sub_add_cancel (a b : UInt64) : a - b + b = a := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_sub]; bv_omega
+
+private theorem uint64_sub_add (a b c : UInt64) : a - b + c = a + (c - b) := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_sub]; bv_omega
+
+private theorem uint64_sub_sub (a b c : UInt64) : a - (b - c) = a - b + c := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_sub]; bv_omega
+
+private theorem uint64_sub_zero (a : UInt64) : a - 0 = a := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_ofNat]; bv_omega
+
+private theorem uint64_sub_sub_eq (a b c : UInt64) : a - b - c = a - (b + c) := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_sub, UInt64.toBitVec_add]; bv_omega
+
+private theorem uint64_add_sub_cancel (a b : UInt64) : a + b - b = a := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_add]; bv_omega
+
+private theorem uint64_add_sub (a b c : UInt64) : a + b - c = a + (b - c) := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+  simp only [UInt64.toBitVec_add, UInt64.toBitVec_sub]; bv_omega
+
+/-! ## foldAdd64 / foldSub64 soundness -/
+
+theorem foldAdd64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (a b : SymExpr Reg) (s : ConcreteState Reg) :
+    evalSymExpr s (foldAdd64 a b) = evalSymExpr s a + evalSymExpr s b := by
+  unfold foldAdd64
+  split <;> simp only [evalSymExpr]
+  any_goals exact (uint64_add_zero _).symm
+  any_goals exact (uint64_zero_add _).symm
+  any_goals exact uint64_add_comm _ _
+  all_goals (
+    split
+    · next h =>
+      have hc := eq_of_beq h
+      first
+        | (subst hc; exact (uint64_sub_add_cancel _ _).symm)
+        | (subst hc; rw [uint64_add_comm]; exact (uint64_sub_add_cancel _ _).symm)
+        | rw [uint64_add_assoc, hc, uint64_add_zero]
+        | rw [uint64_add_left_comm, hc, uint64_add_zero]
+    · first
+        | (simp only [evalSymExpr];
+           simp only [uint64_add_assoc, uint64_add_comm, uint64_add_left_comm])
+        | (split
+           · next _ _ =>
+             simp only [evalSymExpr]
+             simp only [uint64_add_comm, uint64_sub_add]
+           · next _ _ =>
+             simp only [evalSymExpr]
+             simp only [uint64_add_comm, uint64_sub_sub])
+  )
+
+theorem foldSub64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (a b : SymExpr Reg) (s : ConcreteState Reg) :
+    evalSymExpr s (foldSub64 a b) = evalSymExpr s a - evalSymExpr s b := by
+  unfold foldSub64
+  split <;> simp only [evalSymExpr]
+  any_goals exact (uint64_sub_zero _).symm
+  all_goals (
+    split
+    · next h =>
+      have hc := eq_of_beq h
+      first
+        | rw [uint64_sub_sub_eq, hc, uint64_sub_zero]
+        | (subst hc; exact (uint64_add_sub_cancel _ _).symm)
+    · first
+        | (simp only [evalSymExpr]; rw [uint64_sub_sub_eq])
+        | (split
+           · next _ _ =>
+             simp only [evalSymExpr]
+             rw [uint64_add_sub]
+           · next _ _ =>
+             simp only [evalSymExpr]
+             rw [uint64_sub_sub, uint64_sub_add, uint64_add_sub])
+  )
+
+/-! ## Load-After-Store soundness axioms (to be proved) -/
 
 /-- `simplifyLoadStoreExpr` preserves expression evaluation: resolving
     load-after-store patterns and folding constant arithmetic does not
@@ -97,10 +203,11 @@ axiom simplifyLoadStorePC_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
   ∀ (φ : SymPC Reg) (s : ConcreteState Reg),
     evalSymPC s (simplifyLoadStorePC φ) = evalSymPC s φ
 
-/-! ## Load-After-Store Axioms (partial def, to be proved after making total)
+/-! ## Load-After-Store Axioms (now total defs, proofs in progress)
 
-These will become theorems once the `partial def` functions are rewritten
-with well-founded recursion. -/
+The load-after-store functions are now total `def`s (not `partial`).
+Their soundness proofs will use `foldAdd64_sound`, `foldSub64_sound`,
+and `resolveLoadFrom_sound` as building blocks. -/
 
 /-- `simplifyBranchFull` computes the composition of `simplifyLoadStore*` and
     `simplifyConst`. Proved by `rfl` — `simplifyBranchFull` is a regular `def`
