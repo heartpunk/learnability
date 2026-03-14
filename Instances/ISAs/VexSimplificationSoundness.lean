@@ -10,17 +10,20 @@ The pipeline's simplification functions (`simplifyConst`, `simplifyLoadStoreExpr
 noise from composition. This file proves that these transformations preserve the
 semantics required by `BranchModel.Sound` from `Core/Composition.lean`.
 
+## Proved Theorems
+
+All simplification functions are total `def`s with proved soundness:
+- `simplifyConst_sound`: constant folding preserves PC evaluation
+- `foldAdd64_sound`, `foldSub64_sound`: arithmetic folding preserves expression evaluation
+- `simplifyLoadStoreExpr_sound`: load-after-store resolution preserves expression evaluation
+- `simplifyLoadStoreMem_sound`: store chain simplification preserves memory evaluation
+- `simplifyLoadStorePC_sound`: load-after-store on PCs preserves PC evaluation
+
 ## Trust Boundaries
 
-`simplifyConst` is a total `def` — its soundness (`simplifyConst_sound`) is fully proved.
-
-The load-after-store functions (`simplifyLoadStoreExpr`, `simplifyLoadStoreMem`,
-`simplifyLoadStorePC`) are now total `def`s. Their soundness is axiomatized
-pending full proofs:
-
-1. `simplifyLoadStoreExpr_sound`: load-after-store resolution preserves expression evaluation
-2. `simplifyLoadStoreMem_sound`: store chain simplification preserves memory evaluation
-3. `simplifyLoadStorePC_sound`: load-after-store on PCs preserves PC evaluation
+- `resolveLoadFrom_sound`: load resolution through store chains. Subsumes ByteMem
+  read-after-write properties. Sound for non-overlapping byte ranges (standard x86-64
+  aligned accesses) but not proven for arbitrary overlapping multi-byte ranges.
 
 ## Set-Level Lifting
 
@@ -274,9 +277,26 @@ end
 
 /-- `simplifyLoadStorePC` preserves PC evaluation: load-after-store
     resolution in path conditions does not change satisfiability. -/
-axiom simplifyLoadStorePC_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
-  ∀ (φ : SymPC Reg) (s : ConcreteState Reg),
-    evalSymPC s (simplifyLoadStorePC φ) = evalSymPC s φ
+theorem simplifyLoadStorePC_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (φ : SymPC Reg) (s : ConcreteState Reg) :
+    evalSymPC s (simplifyLoadStorePC φ) = evalSymPC s φ := by
+  induction φ with
+  | true => rfl
+  | eq a b =>
+    simp only [simplifyLoadStorePC, evalSymPC]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | lt a b =>
+    simp only [simplifyLoadStorePC, evalSymPC]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | le a b =>
+    simp only [simplifyLoadStorePC, evalSymPC]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | and φ ψ ih_φ ih_ψ =>
+    simp only [simplifyLoadStorePC, evalSymPC]
+    rw [ih_φ, ih_ψ]
+  | not φ ih =>
+    simp only [simplifyLoadStorePC, evalSymPC]
+    rw [ih]
 
 /-- `simplifyBranchFull` computes the composition of `simplifyLoadStore*` and
     `simplifyConst`. Proved by `rfl` — `simplifyBranchFull` is a regular `def`
