@@ -148,23 +148,6 @@ theorem hStep_of_dispatchBody
       (hComplete s)
   exact ⟨p.2, hBlocksIn p hp_mem, hp_exec⟩
 
-/-- Derive `hAllBlocks` for a dispatch loop body. -/
-axiom hAllBlocks_of_dispatchBody
-    {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (loop : VexLoopSummary Reg)
-    (ip_reg : Reg)
-    (blocks : List (UInt64 × Block Reg))
-    (allBlocks : Finset (Block Reg))
-    (hBody : loop.body = buildDispatchBody ip_reg blocks)
-    (hBlocksIn : ∀ p ∈ blocks, p.2 ∈ allBlocks)
-    (hComplete : ∀ s : ConcreteState Reg,
-      ∃ p ∈ blocks, s.read ip_reg = p.1)
-    (hUnique : ∀ p₁ p₂, p₁ ∈ blocks → p₂ ∈ blocks →
-      p₁.1 = p₂.1 → p₁ = p₂) :
-    ∀ s blk, blk ∈ allBlocks →
-      (∃ σ ∈ lowerBlockSummaries blk, Summary.enabled σ s) →
-      loop.bodyEffect s ∈ execBlockSuccs blk s
-
 end DispatchBodyHStep
 
 /-! ## Phase 3: Pipeline Convergence → Abstract Fixpoint -/
