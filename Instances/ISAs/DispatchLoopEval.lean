@@ -116,13 +116,12 @@ partial def exprSummary {Reg : Type} [ToString Reg] : SymExpr Reg → Nat → St
   | .load w m addr, d => s!"ld{w.byteCount*8}(mem[{memNodeCount m}],{exprSummary addr (d-1)})"
 end
 
-mutual
 /-- Fold nested add64/sub64 with constants.
     Normalizes stack arithmetic so load/store addresses match.
     e.g. add64(add64(x, C(8)), C(8)) → add64(x, C(16))
          sub64(sub64(x, C(8)), C(16)) → sub64(x, C(24))
          sub64(add64(x, C(16)), C(8)) → add64(x, C(8)) -/
-partial def foldAdd64 {Reg : Type} [DecidableEq Reg]
+def foldAdd64 {Reg : Type} [DecidableEq Reg]
     (a b : SymExpr Reg) : SymExpr Reg :=
   match a, b with
   -- const + const
@@ -153,7 +152,7 @@ partial def foldAdd64 {Reg : Type} [DecidableEq Reg]
   | .const c, x => .add64 x (.const c)
   | _, _ => .add64 a b
 
-partial def foldSub64 {Reg : Type} [DecidableEq Reg]
+def foldSub64 {Reg : Type} [DecidableEq Reg]
     (a b : SymExpr Reg) : SymExpr Reg :=
   match a, b with
   -- const - const
@@ -171,8 +170,29 @@ partial def foldSub64 {Reg : Type} [DecidableEq Reg]
   | x, .const 0 => x
   | _, _ => .sub64 a b
 
+/-- Resolve a load from a (simplified) memory term.
+    Walks the store chain looking for a matching address. -/
+def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
+    (loadWidth : Width) (mem : SymMem Reg) (loadAddr : SymExpr Reg) : SymExpr Reg :=
+  match mem with
+  | .base => .load loadWidth .base loadAddr
+  | .store storeWidth innerMem storeAddr storeVal =>
+    if loadWidth == storeWidth && loadAddr == storeAddr then
+      storeVal  -- MATCH: load reads what was just stored
+    else
+      match (storeAddr, loadAddr) with
+      | (.const a, .const b) =>
+        if a != b then
+          resolveLoadFrom loadWidth innerMem loadAddr  -- different constant addrs, skip store
+        else
+          .load loadWidth mem loadAddr  -- same const but different width, keep as-is
+      -- Non-constant addresses that don't match: can't determine statically,
+      -- keep as-is (conservative/sound — may leave loads unresolved)
+      | _ => .load loadWidth mem loadAddr
+
+mutual
 /-- Simplify: load-after-store resolution + arithmetic constant folding. -/
-partial def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymExpr Reg
+def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymExpr Reg
   | .const v => .const v
   | .reg r => .reg r
   | .low32 x => .low32 (simplifyLoadStoreExpr x)
@@ -193,28 +213,8 @@ partial def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg �
     let mem' := simplifyLoadStoreMem mem
     resolveLoadFrom w mem' addr'
 
-/-- Resolve a load from a (simplified) memory term.
-    Walks the store chain looking for a matching address. -/
-partial def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
-    (loadWidth : Width) (mem : SymMem Reg) (loadAddr : SymExpr Reg) : SymExpr Reg :=
-  match mem with
-  | .base => .load loadWidth .base loadAddr
-  | .store storeWidth innerMem storeAddr storeVal =>
-    if loadWidth == storeWidth && loadAddr == storeAddr then
-      storeVal  -- MATCH: load reads what was just stored
-    else
-      match (storeAddr, loadAddr) with
-      | (.const a, .const b) =>
-        if a != b then
-          resolveLoadFrom loadWidth innerMem loadAddr  -- different constant addrs, skip store
-        else
-          .load loadWidth mem loadAddr  -- same const but different width, keep as-is
-      -- Non-constant addresses that don't match: can't determine statically,
-      -- keep as-is (conservative/sound — may leave loads unresolved)
-      | _ => .load loadWidth mem loadAddr
-
 /-- Simplify store chains in a SymMem. -/
-partial def simplifyLoadStoreMem {Reg : Type} [DecidableEq Reg] : SymMem Reg → SymMem Reg
+def simplifyLoadStoreMem {Reg : Type} [DecidableEq Reg] : SymMem Reg → SymMem Reg
   | .base => .base
   | .store w mem addr val =>
     .store w (simplifyLoadStoreMem mem)
@@ -223,7 +223,7 @@ partial def simplifyLoadStoreMem {Reg : Type} [DecidableEq Reg] : SymMem Reg →
 end
 
 /-- Simplify load-after-store patterns in a SymPC. -/
-partial def simplifyLoadStorePC {Reg : Type} [DecidableEq Reg] : SymPC Reg → SymPC Reg
+def simplifyLoadStorePC {Reg : Type} [DecidableEq Reg] : SymPC Reg → SymPC Reg
   | .true => .true
   | .eq a b => .eq (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .lt a b => .lt (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
