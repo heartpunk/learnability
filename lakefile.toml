@@ -84,3 +84,7 @@ name = "ModelEq"
 [[lean_exe]]
 name = "dispatchLoopEval"
 root = "DispatchLoopEvalExe"
+
+[[lean_exe]]
+name = "dispatchLoopTest"
+root = "DispatchLoopTestExe"

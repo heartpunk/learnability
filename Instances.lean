@@ -97,6 +97,7 @@ import Instances.ISAs.VexCompTree
 import Instances.ISAs.VexDispatchLoop
 import Instances.ISAs.VexProofCompression
 import Instances.ISAs.ElfSymbolTable
+import Instances.ISAs.DispatchLoopTestSubjects
 
 import Instances.Examples.Phase4LoopStabilization
 
