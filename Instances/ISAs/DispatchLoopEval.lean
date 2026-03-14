@@ -1232,11 +1232,14 @@ def loadFunctionsFromJSON (path : System.FilePath) : IO (Array FunctionSpec) := 
         return specs
       | _ => throw (IO.userError s!"'functions' value is not an object")
 
-/-- Discover functions by assigning IRSB blocks to ELF symbols.
-    For each symbol (name, addr, size), collects blocks whose entry address
-    (from first IMark) falls in [addr, addr + size). -/
+/-- Result of function discovery: specs + count of orphan blocks not in any symbol. -/
+structure DiscoveryResult where
+  functions : Array FunctionSpec
+  orphanCount : Nat
+  deriving Inhabited
+
 def discoverFunctions (blocks : Array String) (symbols : Array (String × UInt64 × UInt64)) :
-    Except String (Array FunctionSpec) := do
+    Except String DiscoveryResult := do
   -- Extract entry address from each block
   let mut blockAddrs : Array (UInt64 × String) := #[]
   for blockStr in blocks do
@@ -1246,6 +1249,7 @@ def discoverFunctions (blocks : Array String) (symbols : Array (String × UInt64
   let sortedSyms := symbols.qsort fun (_, a1, _) (_, a2, _) => a1 < a2
   -- Assign blocks to symbols
   let mut result : Array FunctionSpec := #[]
+  let mut assignedCount : Nat := 0
   for (name, addr, size) in sortedSyms do
     let funcBlocks := blockAddrs.filter fun (blockAddr, _) =>
       blockAddr >= addr && blockAddr < addr + size
@@ -1254,7 +1258,9 @@ def discoverFunctions (blocks : Array String) (symbols : Array (String × UInt64
     let blockStrs := sortedBlocks.map (·.2) |>.toList
     if !blockStrs.isEmpty then
       result := result.push ⟨name, addr, blockStrs⟩
-  return result
+      assignedCount := assignedCount + sortedBlocks.size
+  let orphanCount := blockAddrs.size - assignedCount
+  return ⟨result, orphanCount⟩
 
 /-- Compose body branches with frontier, but when a body branch's rip target
     matches a function entry, substitute that function's summary branches
@@ -3391,11 +3397,13 @@ def dispatchLoopEvalFromFiles (blocksJson : System.FilePath) (elfBinary : System
     log s!"    {name} @ 0x{String.mk (Nat.toDigits 16 addr.toNat)}, {size} bytes"
   match discoverFunctions blocks symbols with
   | .error e => log s!"Function discovery error: {e}"
-  | .ok functions =>
-    log s!"Discovered {functions.size} functions with blocks:"
-    for f in functions do
+  | .ok result =>
+    log s!"Discovered {result.functions.size} functions with blocks:"
+    for f in result.functions do
       log s!"  {f.name}: {f.blocks.length} blocks"
-    runPipeline functions log
+    if result.orphanCount > 0 then
+      log s!"  WARNING: {result.orphanCount} blocks not in any function symbol range"
+    runPipeline result.functions log
 
 /-- Standard log function: writes to both stdout and a log file. -/
 def mkLogger (logPath : System.FilePath) : IO (String → IO Unit) := do

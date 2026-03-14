@@ -93,6 +93,8 @@ def main() -> None:
     if args.text:
         result = extract_text_section(args.binary)
     elif args.start is not None and args.end is not None:
+        if args.end <= args.start:
+            parser.error(f"--end (0x{args.end:x}) must be greater than --start (0x{args.start:x})")
         result = extract_linear(args.binary, args.start, args.end - args.start)
     elif args.func is not None and args.size is not None:
         result = extract_linear(args.binary, args.func, args.size)
