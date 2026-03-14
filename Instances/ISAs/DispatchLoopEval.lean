@@ -676,28 +676,32 @@ def computePCSignature {Reg : Type} [DecidableEq Reg] [Hashable Reg] [Hashable (
 def hashPCSignature (sig : List Bool) : UInt64 :=
   sig.foldl (fun acc b => mixHash acc (if b then 1 else 0)) 7
 
-/-- Key for PC-signature dedup: combines substitution hash with PC signature.
-    Two branches with the same dedup key are in the same equivalence class. -/
-structure SigDedupKey where
-  subHash : UInt64
+/-- Key for PC-signature dedup: combines substitution with PC signature.
+    Two branches with the same dedup key are in the same equivalence class.
+    Uses structural equality on `sub` (not hash) to avoid hash-collision unsoundness. -/
+structure SigDedupKey (Reg : Type) [DecidableEq Reg] [Fintype Reg] where
+  sub : SymSub Reg
   sig : List Bool
-  deriving BEq
 
-instance : Hashable SigDedupKey where
-  hash k := mixHash k.subHash (hashPCSignature k.sig)
+instance {Reg : Type} [DecidableEq Reg] [Fintype Reg] : BEq (SigDedupKey Reg) where
+  beq k₁ k₂ := decide (k₁.sub = k₂.sub) && k₁.sig == k₂.sig
+
+instance {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] :
+    Hashable (SigDedupKey Reg) where
+  hash k := mixHash (hash k.sub) (hashPCSignature k.sig)
 
 /-- Dedup an array of branches by (sub, PC-signature) equivalence class.
     Returns (dedupedArray, collapsedCount). -/
-def dedupBySignature {Reg : Type} [DecidableEq Reg] [Hashable Reg] [EnumReg Reg]
+def dedupBySignature {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
     (closure : Array (SymPC Reg))
     (branches : Array (Branch (SymSub Reg) (SymPC Reg))) :
     Array (Branch (SymSub Reg) (SymPC Reg)) × Nat := Id.run do
-  let mut seen : Std.HashSet SigDedupKey := {}
+  let mut seen : Std.HashSet (SigDedupKey Reg) := {}
   let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
   let mut collapsed : Nat := 0
   for b in branches do
     let sig := computePCSignature closure b.pc
-    let key : SigDedupKey := ⟨hash b.sub, sig⟩
+    let key : SigDedupKey Reg := ⟨b.sub, sig⟩
     if seen.contains key then
       collapsed := collapsed + 1
     else
@@ -898,7 +902,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   current := current.insert initBranch
   -- sigSeen tracks (sub, signature) classes across ALL iterations.
   -- A new branch is only added if its signature class hasn't been seen before.
-  let mut sigSeen : Std.HashSet SigDedupKey := {}
+  let mut sigSeen : Std.HashSet (SigDedupKey Reg) := {}
   let initSig := computePCSignature closure initBranch.pc
   -- initSigKey inserted after closedness check determines dedupSubHash
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
@@ -961,7 +965,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     if closedNeedsMem then h := mixHash h (hash sub.mem)
     return h
   let dedupSubHash (sub : SymSub Reg) : UInt64 := projHashOf sub
-  let initSigKey : SigDedupKey := ⟨dedupSubHash initBranch.sub, initSig⟩
+  let initSigKey : SigDedupKey Reg := ⟨initBranch.sub, initSig⟩
   sigSeen := sigSeen.insert initSigKey
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
@@ -977,7 +981,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       else
         -- Check signature-class dedup (uses projection hash if closed)
         let sig := computePCSignature closure b.pc
-        let key : SigDedupKey := ⟨dedupSubHash b.sub, sig⟩
+        let key : SigDedupKey Reg := ⟨b.sub, sig⟩
         if sigSeen.contains key then
           sigCollapsed := sigCollapsed + 1
         else
