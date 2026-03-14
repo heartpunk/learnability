@@ -3186,7 +3186,8 @@ def extractNTGrammar
     Builds terminal and NT mappings, then checks production-level isomorphism. -/
 def structuralGoldenCompare (log : String → IO Unit)
     (grammars : Array ExtractedNTGrammar)
-    (tokenNames : TokenNameTable) : IO Unit := do
+    (tokenNames : TokenNameTable)
+    (golden : Std.HashMap String (List (List String)) := goldenProds) : IO Unit := do
   -- Collect all known NT names (function NTs + synthetic rep NTs)
   let mut allNTNames : Std.HashSet String := {}
   for g in grammars do
@@ -3194,9 +3195,9 @@ def structuralGoldenCompare (log : String → IO Unit)
     match g.repNTName with
     | some n => allNTNames := allNTNames.insert n
     | none => pure ()
-  -- Golden NTs: keys of goldenProds
+  -- Golden NTs: keys of golden prods
   let goldenNTNames : Std.HashSet String :=
-    goldenProds.toArray.foldl (fun s (k, _) => s.insert k) {}
+    golden.toArray.foldl (fun s (k, _) => s.insert k) {}
   for n in goldenNTNames do
     allNTNames := allNTNames.insert n
   -- Synthetic NTs: golden NTs not in extracted function NTs (e.g., "statements")
@@ -3215,15 +3216,15 @@ def structuralGoldenCompare (log : String → IO Unit)
   let mut termMapping : Std.HashMap String String := {}
   let mut prodGoldenPairs : Array (Array (Array GrammarSym) × List (List String)) := #[]
   for g in grammars do
-    prodGoldenPairs := prodGoldenPairs.push (g.prods, goldenProds.getD g.funcName [])
+    prodGoldenPairs := prodGoldenPairs.push (g.prods, golden.getD g.funcName [])
     match g.repNTName with
     | some repName =>
       let goldenName := ntMapping.getD repName repName
-      prodGoldenPairs := prodGoldenPairs.push (g.repNTProds, goldenProds.getD goldenName [])
+      prodGoldenPairs := prodGoldenPairs.push (g.repNTProds, golden.getD goldenName [])
     | none => pure ()
-  for (prods, golden) in prodGoldenPairs do
+  for (prods, goldenEntry) in prodGoldenPairs do
     -- Phase 1: remove exact matches from both pools
-    let mut remainGolden : List (List String) := golden
+    let mut remainGolden : List (List String) := goldenEntry
     let mut unmatchedProds : Array (Array GrammarSym) := #[]
     for prod in prods do
       let rendered := prod.toList.map fun sym => match sym with
@@ -3261,9 +3262,9 @@ def structuralGoldenCompare (log : String → IO Unit)
   let mut totalGolden : Nat := 0
   let mut totalExtra : Nat := 0
   for g in grammars do
-    let golden := goldenProds.getD g.funcName []
+    let goldenForFunc := golden.getD g.funcName []
     let goldenSet : Std.HashSet String :=
-      golden.foldl (fun s gp => s.insert (" ".intercalate gp)) {}
+      goldenForFunc.foldl (fun s gp => s.insert (" ".intercalate gp)) {}
     -- Render extracted productions with mappings applied
     let mut matchCount : Nat := 0
     let mut extraCount : Nat := 0
@@ -3282,7 +3283,7 @@ def structuralGoldenCompare (log : String → IO Unit)
     match g.repNTName with
     | some repName =>
       let goldenName := ntMapping.getD repName repName
-      let repGolden := goldenProds.getD goldenName []
+      let repGolden := golden.getD goldenName []
       let repGoldenSet : Std.HashSet String :=
         repGolden.foldl (fun s gp => s.insert (" ".intercalate gp)) {}
       let mut repMatch : Nat := 0
@@ -3301,12 +3302,12 @@ def structuralGoldenCompare (log : String → IO Unit)
       totalMatch := totalMatch + repMatch
       totalGolden := totalGolden + repTotal
     | none => pure ()
-    let mark := if matchCount == golden.length && golden.length > 0 then " ✓" else ""
-    log s!"  {g.funcName}: {matchCount}/{golden.length}{mark}"
+    let mark := if matchCount == goldenForFunc.length && goldenForFunc.length > 0 then " ✓" else ""
+    log s!"  {g.funcName}: {matchCount}/{goldenForFunc.length}{mark}"
     if extraCount > 0 then
       log s!"    ({extraCount} extra productions)"
     totalMatch := totalMatch + matchCount
-    totalGolden := totalGolden + golden.length
+    totalGolden := totalGolden + goldenForFunc.length
     totalExtra := totalExtra + extraCount
   let mark := if totalMatch == totalGolden then " ✓" else ""
   log s!"  Total: {totalMatch}/{totalGolden}{mark}"
@@ -3319,7 +3320,8 @@ def printLTSGrammar (log : String → IO Unit)
     (functions : Array FunctionSpec)
     (funcEntries : Std.HashMap UInt64 String)
     (_summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))))
-    (parserStructure : Option ParserStructure := none) : IO Unit := do
+    (parserStructure : Option ParserStructure := none)
+    (golden : Std.HashMap String (List (List String)) := goldenProds) : IO Unit := do
   let ip_reg := Amd64Reg.rip
   let (tokenNames, lexerName, lexerAddr) := match parserStructure with
     | some ps => (ps.tokenNames, ps.lexerName, ps.lexerAddr)
@@ -3351,7 +3353,7 @@ def printLTSGrammar (log : String → IO Unit)
         log s!"    {repName} -> {formatProd tokenNames prod}"
     | none => pure ()
   -- Structural comparison against golden grammar
-  structuralGoldenCompare log grammars tokenNames
+  structuralGoldenCompare log grammars tokenNames golden
 
 /-! ## Run stabilization -/
 
@@ -3360,8 +3362,10 @@ def buildFuncEntries (functions : Array FunctionSpec) : Std.HashMap UInt64 Strin
   functions.foldl (fun m f => m.insert f.entryAddr f.name) {}
 
 /-- Run the full pipeline on a set of function specs: fixpoint → detect → extract.
-    The generic pipeline used by both legacy and file-based entry points. -/
-def runPipeline (functions : Array FunctionSpec) (log : String → IO Unit) : IO Unit := do
+    The generic pipeline used by both legacy and file-based entry points.
+    When golden prods are provided, structural comparison is run against them. -/
+def runPipeline (functions : Array FunctionSpec) (log : String → IO Unit)
+    (golden : Std.HashMap String (List (List String)) := goldenProds) : IO Unit := do
   log "=== Stratified Dispatch Loop Stabilization ==="
   let summaries ← stratifiedFixpoint functions log
   let funcEntries := buildFuncEntries functions
@@ -3371,7 +3375,7 @@ def runPipeline (functions : Array FunctionSpec) (log : String → IO Unit) : IO
     | .ok ps => some ps
     | .error _ => none
   -- EBNF extraction for parser NTs (LTS-based)
-  printLTSGrammar log functions funcEntries summaries ps
+  printLTSGrammar log functions funcEntries summaries ps golden
 
 /-- Main entry point using file-based input: blocks.json + ELF binary.
     Loads blocks from JSON, reads symbols from ELF, discovers functions, runs pipeline. -/
