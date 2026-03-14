@@ -1694,7 +1694,7 @@ def stratifiedFixpoint
       let body := flatBodyDenot ip_reg pairs
       let bodyArr := finsetToArray body
       funcBlocks := funcBlocks.push (func.name, bodyArr)
-      log s!"  {func.name} @ 0x{String.mk (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
+      log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
   -- Phase 1: Compute leaf function (next_sym) fixpoint — no summaries needed
   let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
   -- Green-style z3 query cache: shared across all function stabilizations
@@ -1824,7 +1824,7 @@ def describeDataGuard (rax : Amd64Reg) (pc : SymPC Amd64Reg) : String :=
 
 /-- Format a UInt64 as a hex address. -/
 def hexAddr (a : UInt64) : String :=
-  s!"0x{String.mk (Nat.toDigits 16 a.toNat)}"
+  s!"0x{String.ofList (Nat.toDigits 16 a.toNat)}"
 
 /-- Print DFA transition table from next_sym body branches (single-step transitions). -/
 def printDFATable (log : String → IO Unit)
@@ -2016,7 +2016,7 @@ def goldenProds : Std.HashMap String (List (List String)) :=
     - internal transitions (tgt in blocks)
     - return continuations after external calls (retOpt if tgt not in blocks) -/
 def cfgReachable (entry : UInt64) (cfg : AnnotatedCFG) (blocks : Std.HashSet UInt64)
-    (funcEntries : Std.HashMap UInt64 String) :
+    (_funcEntries : Std.HashMap UInt64 String) :
     Std.HashSet UInt64 := Id.run do
   let mut visited : Std.HashSet UInt64 := {}
   let mut queue : Array UInt64 := #[entry]
@@ -3069,7 +3069,7 @@ partial def ltsExtractProds
 def ltsReachable (entry : UInt64)
     (ltsMap : Std.HashMap UInt64 (Array LTSTransition))
     (funcBlocks : Std.HashSet UInt64)
-    (funcEntries : Std.HashMap UInt64 String)
+    (_funcEntries : Std.HashMap UInt64 String)
     (bodyBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) :
     Std.HashSet UInt64 := Id.run do
   let mut visited : Std.HashSet UInt64 := {}
@@ -3396,7 +3396,7 @@ def dispatchLoopEvalFromFiles (blocksJson : System.FilePath) (elfBinary : System
   let symbols ← ElfSymbolTable.readSymbolsFromFile elfBinary
   log s!"  {symbols.size} function symbols found"
   for (name, addr, size) in symbols do
-    log s!"    {name} @ 0x{String.mk (Nat.toDigits 16 addr.toNat)}, {size} bytes"
+    log s!"    {name} @ 0x{String.ofList (Nat.toDigits 16 addr.toNat)}, {size} bytes"
   match discoverFunctions blocks symbols with
   | .error e => log s!"Function discovery error: {e}"
   | .ok result =>
