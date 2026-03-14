@@ -28,7 +28,7 @@ dropping unsatisfiable branches and collapsing trivially-true conjuncts. -/
 
 /-- Simplify a SymPC by evaluating constant-constant comparisons.
     Returns `none` if the PC is unsatisfiable (should drop the branch). -/
-partial def SymPC.simplifyConst {Reg : Type} : SymPC Reg → Option (SymPC Reg)
+def SymPC.simplifyConst {Reg : Type} : SymPC Reg → Option (SymPC Reg)
   | .true => some .true
   | .eq (.const a) (.const b) => if a == b then some .true else none
   | .lt (.const a) (.const b) => if a < b then some .true else none

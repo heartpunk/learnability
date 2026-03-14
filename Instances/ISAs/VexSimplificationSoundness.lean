@@ -12,17 +12,15 @@ semantics required by `BranchModel.Sound` from `Core/Composition.lean`.
 
 ## Trust Boundaries
 
-The simplification functions are `partial def`s in Lean 4, making them opaque to
-the proof system. We axiomatize their behavior:
+`simplifyConst` is a total `def` — its soundness (`simplifyConst_sound`) is fully proved.
 
-1. `simplifyConst_sound`: constant folding preserves PC evaluation
-2. `simplifyLoadStoreExpr_sound`: load-after-store resolution preserves expression evaluation
+The load-after-store functions (`simplifyLoadStoreExpr`, `simplifyLoadStoreMem`,
+`simplifyLoadStorePC`) are still `partial def`s, making them opaque to the proof
+system. Their behavior is axiomatized:
+
+1. `simplifyLoadStoreExpr_sound`: load-after-store resolution preserves expression evaluation
+2. `simplifyLoadStoreMem_sound`: store chain simplification preserves memory evaluation
 3. `simplifyLoadStorePC_sound`: load-after-store on PCs preserves PC evaluation
-
-These axioms are validated by:
-- Structural inspection: each function traverses the term, replacing subterms with
-  semantically equivalent ones (const-const eval, load-after-matching-store)
-- Empirical testing: the pipeline produces 19/20 golden grammar match on Tiny C
 
 ## Set-Level Lifting
 
@@ -38,19 +36,47 @@ open VexISA
 
 namespace VexISA
 
-/-! ## Simplification Axioms (Trust Boundary)
-
-These axioms state that the `partial def` simplification functions preserve
-evaluation semantics. They are accepted alongside the pyvex and z3 trust
-boundaries as computational pipeline assumptions. -/
+/-! ## Proved: simplifyConst soundness -/
 
 /-- `simplifyConst` preserves PC evaluation: if it returns `some φ'`, then `φ'`
     evaluates identically to `φ`. If it returns `none`, then `φ` is unsatisfiable. -/
-axiom simplifyConst_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
-  ∀ (φ : SymPC Reg) (s : ConcreteState Reg),
+theorem simplifyConst_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (φ : SymPC Reg) (s : ConcreteState Reg) :
     match SymPC.simplifyConst φ with
     | some φ' => evalSymPC s φ' = evalSymPC s φ
-    | none    => evalSymPC s φ = false
+    | none    => evalSymPC s φ = false := by
+  induction φ with
+  | true => rfl
+  | eq lhs rhs =>
+    cases lhs <;> cases rhs <;> (try rfl)
+    rename_i a b
+    cases hab : (a == b) <;> simp_all [SymPC.simplifyConst, evalSymPC, evalSymExpr]
+  | lt lhs rhs =>
+    cases lhs <;> cases rhs <;> (try rfl)
+    rename_i a b
+    by_cases h : a < b
+    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr, decide_eq_true h]
+    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr, decide_eq_false h]
+  | le lhs rhs =>
+    cases lhs <;> cases rhs <;> (try rfl)
+    rename_i a b
+    by_cases h : a ≤ b
+    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr, decide_eq_true h]
+    · simp [SymPC.simplifyConst, h, evalSymPC, evalSymExpr, decide_eq_false h]
+  | and φ ψ ih_φ ih_ψ =>
+    simp only [SymPC.simplifyConst]
+    revert ih_φ ih_ψ
+    match hφ : SymPC.simplifyConst φ, hψ : SymPC.simplifyConst ψ with
+    | none, _ => simp [evalSymPC]; intro h _; simp [h]
+    | some _, none => simp [evalSymPC]; intro _ h; simp [h]
+    | some φ_val, some ψ_val =>
+      cases φ_val <;> cases ψ_val <;> simp_all [evalSymPC]
+  | not φ ih_φ =>
+    simp only [SymPC.simplifyConst]
+    revert ih_φ
+    match hφ : SymPC.simplifyConst φ with
+    | none => simp_all [evalSymPC]
+    | some φ_val => cases φ_val <;> simp_all [evalSymPC]
 
 /-- `simplifyLoadStoreExpr` preserves expression evaluation: resolving
     load-after-store patterns and folding constant arithmetic does not
@@ -71,12 +97,10 @@ axiom simplifyLoadStorePC_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
   ∀ (φ : SymPC Reg) (s : ConcreteState Reg),
     evalSymPC s (simplifyLoadStorePC φ) = evalSymPC s φ
 
-/-! ## Partial def Termination Agreement
+/-! ## Load-After-Store Axioms (partial def, to be proved after making total)
 
-The `partial def` simplification functions compute the same results as
-their well-founded-recursive equivalents would. This axiom class bridges
-the gap between Lean's `partial def` (which is opaque) and the semantic
-properties we can prove about total functions. -/
+These will become theorems once the `partial def` functions are rewritten
+with well-founded recursion. -/
 
 /-- `simplifyBranchFull` computes the composition of `simplifyLoadStore*` and
     `simplifyConst`. Proved by `rfl` — `simplifyBranchFull` is a regular `def`
