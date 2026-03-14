@@ -91,11 +91,10 @@ their well-founded-recursive equivalents would. This axiom class bridges
 the gap between Lean's `partial def` (which is opaque) and the semantic
 properties we can prove about total functions. -/
 
-/-- Agreement axiom for `partial def` termination: `simplifyBranchFull` computes
-    the result described by composing `simplifyLoadStore*` and `simplifyConst`.
-    This is trivially true by inspection of the code but required because
-    `partial def` is opaque. -/
-axiom simplifyBranchFull_agreement {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
+/-- `simplifyBranchFull` computes the composition of `simplifyLoadStore*` and
+    `simplifyConst`. Proved by `rfl` — `simplifyBranchFull` is a regular `def`
+    (not `partial`), so its body is transparent. -/
+theorem simplifyBranchFull_agreement {Reg : Type} [DecidableEq Reg] [Fintype Reg] :
   ∀ (b : Branch (SymSub Reg) (SymPC Reg)),
     simplifyBranchFull b =
       let simplifiedSub : SymSub Reg := {
@@ -105,7 +104,8 @@ axiom simplifyBranchFull_agreement {Reg : Type} [DecidableEq Reg] [Fintype Reg] 
       let simplifiedPC := simplifyLoadStorePC b.pc
       match SymPC.simplifyConst simplifiedPC with
       | none => none
-      | some pc' => some ⟨simplifiedSub, pc'⟩
+      | some pc' => some ⟨simplifiedSub, pc'⟩ := by
+  intro b; rfl
 
 /-! ## Single-Branch Soundness
 
