@@ -197,36 +197,6 @@ theorem subsumed_branch_redundant
   simp only [vexSummaryISA, satisfiesSymPC] at hsat₁ ⊢
   exact ⟨h_implies s hsat₁, by rw [h_sub_eq]⟩
 
-/-! ## Dedup Preserves PC-Signature Structure
-
-For the convergence framework, what matters is that dedup preserves
-the PC-signature equivalence classes. Two branches with the same
-(sub, PC-signature) key produce the same transitions for states in
-the same PC-equivalence class. -/
-
-/-- Dedup by (sub, signature) preserves the set of reachable successors
-    from any given state. For each state `s`, if some branch in the original
-    set fires and produces successor `s'`, then some branch in the deduped
-    set also fires and produces `s'` (possibly a different branch from the
-    same equivalence class).
-
-    This is axiomatized because the proof depends on the internal structure
-    of `dedupBySignature` (which iterates, keeping the first representative
-    of each class) and on the fact that branches with the same sub and
-    PC-signature produce the same successor. -/
-axiom dedupBySignature_preserves_successors
-    {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
-    (closure : Array (SymPC Reg))
-    (branches : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (s : ConcreteState Reg)
-    (b : Branch (SymSub Reg) (SymPC Reg))
-    (hb : b ∈ branches.toList)
-    (hsat : (vexSummaryISA Reg).satisfies s b.pc) :
-  ∃ b' ∈ (dedupBySignature closure branches).1.toList,
-    (vexSummaryISA Reg).satisfies s b'.pc ∧
-    (vexSummaryISA Reg).eval_sub b'.sub s =
-      (vexSummaryISA Reg).eval_sub b.sub s
-
 /-! ## Pipeline Dedup: Combined Simplification + Dedup Soundness
 
 The pipeline applies simplification THEN dedup. Both are sound
