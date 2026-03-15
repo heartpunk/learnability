@@ -144,7 +144,11 @@ def inferStoreWidth (valueStr : String) (st : ParseState) : Except String Width 
     | none    => .error s!"no type declaration for t{n}"
   | none => .ok .w64
 
-partial def parseExpr (s : String) (st : ParseState) : Except String (Expr Amd64Reg) :=
+def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
+    : Except String (Expr Amd64Reg) :=
+  match fuel with
+  | 0 => .error s!"parseExpr: recursion limit exceeded on: {s}"
+  | fuel + 1 =>
   let s := myTrim s
   -- Bug fix 2: strip VEX type annotation suffix (e.g. ":Ity_I64" on CCall results)
   let s := (s.splitOn ":Ity_").headI
@@ -171,43 +175,43 @@ partial def parseExpr (s : String) (st : ParseState) : Except String (Expr Amd64
         resolveReg argsStr |>.map .get
       else if op.startsWith "LDle:" then do
         let w    ← typeToWidth (myDrop op 5)
-        let addr ← parseExpr argsStr st
+        let addr ← parseExpr argsStr st fuel
         .ok (.load w addr)
       else
         let args := splitTopCommas argsStr
         match op, args with
-        | "64to32",  [a] => do let e ← parseExpr a st; .ok (.narrow32 e)
-        | "32Uto64", [a] => do let e ← parseExpr a st; .ok (.zext64 e)
-        | "8Sto32",  [a] => do let e ← parseExpr a st; .ok (.sext8to32 e)
-        | "32Sto64", [a] => do let e ← parseExpr a st; .ok (.sext32to64 e)
-        | "8Uto32",  [a] => parseExpr a st
-        | "8Uto64",  [a] => parseExpr a st
-        | "16Uto32", [a] => parseExpr a st
-        | "16Uto64", [a] => parseExpr a st
-        | "1Uto64",  [a] => parseExpr a st
-        | "64to1",   [a] => parseExpr a st
-        | "1Uto32",  [a] => parseExpr a st
-        | "32to1",   [a] => parseExpr a st
+        | "64to32",  [a] => do let e ← parseExpr a st fuel; .ok (.narrow32 e)
+        | "32Uto64", [a] => do let e ← parseExpr a st fuel; .ok (.zext64 e)
+        | "8Sto32",  [a] => do let e ← parseExpr a st fuel; .ok (.sext8to32 e)
+        | "32Sto64", [a] => do let e ← parseExpr a st fuel; .ok (.sext32to64 e)
+        | "8Uto32",  [a] => parseExpr a st fuel
+        | "8Uto64",  [a] => parseExpr a st fuel
+        | "16Uto32", [a] => parseExpr a st fuel
+        | "16Uto64", [a] => parseExpr a st fuel
+        | "1Uto64",  [a] => parseExpr a st fuel
+        | "64to1",   [a] => parseExpr a st fuel
+        | "1Uto32",  [a] => parseExpr a st fuel
+        | "32to1",   [a] => parseExpr a st fuel
         | "Add32", [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.add32 l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.add32 l r)
         | "Sub32", [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.sub32 l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.sub32 l r)
         | "Shl32", [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.shl32 l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.shl32 l r)
         | "Add64", [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.add64 l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.add64 l r)
         | "Sub64", [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.sub64 l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.sub64 l r)
         | "Xor64", [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.xor64 l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.xor64 l r)
         | "And64", [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.and64 l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.and64 l r)
         | "Or64",  [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.or64  l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.or64  l r)
         | "Shl64", [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.shl64 l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.shl64 l r)
         | "Shr64", [a, b] => do
-          let l ← parseExpr a st; let r ← parseExpr b st; .ok (.shr64 l r)
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.shr64 l r)
         | _, _ => .error s!"unsupported expression: {s}"
 
 /-! ## Condition parser -/
