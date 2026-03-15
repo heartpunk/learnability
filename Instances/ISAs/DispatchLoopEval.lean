@@ -466,7 +466,7 @@ def SymPC.hasLoad {Reg : Type} : SymPC Reg → Bool
 
 mutual
 /-- Collect all registers referenced in a SymExpr (as Reg values). -/
-partial def SymExpr.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
+def SymExpr.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
     : SymExpr Reg → Std.HashSet Reg → Std.HashSet Reg
   | .const _, s => s
   | .reg r, s => s.insert r
@@ -486,7 +486,7 @@ partial def SymExpr.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
   | .load _ m addr, s => SymExpr.collectRegsHS addr (SymMem.collectRegsHS m s)
 
 /-- Collect all registers referenced in a SymMem. -/
-partial def SymMem.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
+def SymMem.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
     : SymMem Reg → Std.HashSet Reg → Std.HashSet Reg
   | .base, s => s
   | .store _ m addr val, s =>
@@ -494,7 +494,7 @@ partial def SymMem.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
 end
 
 /-- Collect all registers referenced in a SymPC. -/
-partial def SymPC.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
+def SymPC.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
     : SymPC Reg → Std.HashSet Reg → Std.HashSet Reg
   | .true, s => s
   | .eq l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
