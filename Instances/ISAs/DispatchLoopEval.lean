@@ -296,7 +296,7 @@ Queries are batched into a single CVC5 invocation per sub-hash group using
 push/pop for efficiency. -/
 
 /-- Collect the top-level conjuncts of a PC into a list. -/
-partial def SymPC.conjuncts {Reg : Type} : SymPC Reg → List (SymPC Reg)
+def SymPC.conjuncts {Reg : Type} : SymPC Reg → List (SymPC Reg)
   | .and φ ψ => SymPC.conjuncts φ ++ SymPC.conjuncts ψ
   | pc => [pc]
 
