@@ -91,28 +91,41 @@ inductive RegionTag where
   | stack : RegionTag
   deriving DecidableEq, Repr
 
+/-- Look up which loaded region (if any) contains address `c`. -/
+def lookupRegion (regions : Array MemRegion) (c : UInt64) : Option RegionTag :=
+  let rec go (i : Nat) : Option RegionTag :=
+    if i ≥ regions.size then none
+    else
+      let r := regions[i]!
+      if c ≥ r.vaddr && c.toNat < r.vaddr.toNat + r.size then
+        some (.loaded i)
+      else go (i + 1)
+  go 0
+
 /-- Classify a symbolic address into its memory region, if determinable.
-    Returns `none` for addresses that can't be classified (conservative). -/
+    Returns `none` for addresses that can't be classified (conservative).
+
+    Handles indirect loads through base memory: `load(base_mem, const)` where
+    the constant is in a loaded ELF region (GOT, data, etc.) classifies as
+    `loaded` — the loaded pointer targets the loaded image, not the stack.
+    Sound on x86-64: statically-initialized pointers (GOT entries, data section
+    pointers) don't point into the runtime stack. -/
 def classifyAddr {Reg : Type} [DecidableEq Reg]
     (regions : Array MemRegion) (stackRegs : List Reg)
     (addr : SymExpr Reg) : Option RegionTag :=
   match addr with
-  | .const c =>
-    -- Constant address: look up in regions by range [vaddr, vaddr+size)
-    let rec go (i : Nat) : Option RegionTag :=
-      if i ≥ regions.size then none
-      else
-        let r := regions[i]!
-        if c ≥ r.vaddr && c.toNat < r.vaddr.toNat + r.size then
-          some (.loaded i)
-        else go (i + 1)
-    go 0
+  | .const c => lookupRegion regions c
   | .reg r =>
     if stackRegs.any (· == r) then some .stack else none
   | .add64 (.reg r) (.const _) =>
     if stackRegs.any (· == r) then some .stack else none
   | .sub64 (.reg r) (.const _) =>
     if stackRegs.any (· == r) then some .stack else none
+  | .load _ .base (.const c) =>
+    -- Indirect load from base memory at constant address.
+    -- If the source address is in a loaded region (GOT, data, etc.),
+    -- the loaded pointer is also from the loaded image — not the stack.
+    lookupRegion regions c
   | _ => none
 
 /-- Optional address classifier. When provided, enables region-based
