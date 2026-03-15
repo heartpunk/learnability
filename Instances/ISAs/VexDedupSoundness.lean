@@ -23,11 +23,11 @@ at the PC-signature level (not at the individual branch level), collapsing
 an equivalence class to a single representative preserves the convergence
 properties.
 
-## z3 Subsumption Trust Boundary
+## SMT Subsumption
 
-The pipeline also uses z3-based subsumption pruning: if z3 says `φ₁ → φ₂`
-and `sub₁ = sub₂`, then branch₁ is redundant. We axiomatize z3 soundness
-as a trust boundary.
+The pipeline also uses SMT-based subsumption pruning (via CVC5): if the solver
+confirms `φ₁ → φ₂` and `sub₁ = sub₂`, then branch₁ is redundant. The proof chain
+takes the implication as a hypothesis — no axiom required.
 -/
 
 set_option autoImplicit false
@@ -36,21 +36,6 @@ set_option relaxedAutoImplicit false
 open VexISA
 
 namespace VexISA
-
-/-! ## z3 Trust Boundary -/
-
-/-- z3 implication soundness: if z3 reports that `φ₁ → φ₂` is valid,
-    then for all concrete states, `φ₁` satisfied implies `φ₂` satisfied.
-
-    This is a trust boundary — z3 is an external tool whose correctness
-    we accept. The axiom is parameterized to allow different z3 call
-    sites to use it independently. -/
-axiom z3_implication_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-  (φ₁ φ₂ : SymPC Reg)
-  (hz3 : ∀ (s : ConcreteState Reg),
-         evalSymPC s φ₁ = true → evalSymPC s φ₂ = true → True) :
-  ∀ (s : ConcreteState Reg),
-    evalSymPC s φ₁ = true → evalSymPC s φ₂ = true
 
 /-! ## Subset Soundness (Proved, No Axioms)
 
@@ -172,7 +157,7 @@ theorem dedup_preserves_soundness
 
 /-! ## Subsumption Preserves Reachability
 
-The harder direction: z3 subsumption pruning does not lose reachable
+The harder direction: SMT subsumption pruning does not lose reachable
 successor states. If `sub₁ = sub₂` and `φ₁ → φ₂`, then branch₁ is
 redundant — any state satisfying `φ₁` also satisfies `φ₂` and reaches
 the same successor via `sub₂ = sub₁`. -/
@@ -181,7 +166,7 @@ the same successor via `sub₂ = sub₁`. -/
     and `φ₁ → φ₂` (for all concrete states), then any transition witnessed
     by `b₁` is also witnessed by `b₂`.
 
-    This is the semantic justification for z3 subsumption pruning. -/
+    This is the semantic justification for SMT subsumption pruning. -/
 theorem subsumed_branch_redundant
     {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (b₁ b₂ : Branch (SymSub Reg) (SymPC Reg))

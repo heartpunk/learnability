@@ -32,7 +32,7 @@ This file provides the connection:
 ## Trust Boundaries (Explicit Axioms)
 
 - **pyvex**: VEX IR lifting is faithful to x86-64 semantics
-- **z3**: SMT implication checks are sound
+- **CVC5**: SMT implication checks are sound (no axiom — hypothesized in proof chain)
 - **`partial def` termination**: Lean's `partial def` functions compute the
   same results as their total equivalents
 - **Simplification soundness**: `simplifyConst`, `simplifyLoadStoreExpr`,
@@ -320,8 +320,8 @@ theorem pipeline_extracted_model_adequate
 structure PipelineTrustBoundaries (Reg : Type) [DecidableEq Reg] [Fintype Reg] where
   /-- pyvex faithfully lifts x86-64 instructions to VEX IR. -/
   pyvex_faithful : Prop
-  /-- z3 SMT implication checks are sound. -/
-  z3_sound : Prop
+  /-- SMT implication checks are sound (CVC5). -/
+  smt_sound : Prop
   /-- The simplification functions preserve evaluation semantics. -/
   simplification_sound : Prop
   /-- The dispatch body construction correctly dispatches by `ip_reg`. -/
