@@ -427,7 +427,7 @@ theorem evalSymPC_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 /-! ## Hashable instances for fast HashSet-based computation -/
 
 mutual
-partial def hashSymExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → UInt64
+def hashSymExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → UInt64
   | .const v => mixHash 1 (hash v)
   | .reg r => mixHash 2 (hash r)
   | .low32 e => mixHash 3 (hashSymExpr e)
@@ -445,7 +445,7 @@ partial def hashSymExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → UInt64
   | .shr64 l r => mixHash 15 (mixHash (hashSymExpr l) (hashSymExpr r))
   | .load w m a => mixHash 16 (mixHash (hash w.byteCount) (mixHash (hashSymMem m) (hashSymExpr a)))
 
-partial def hashSymMem {Reg : Type} [Hashable Reg] : SymMem Reg → UInt64
+def hashSymMem {Reg : Type} [Hashable Reg] : SymMem Reg → UInt64
   | .base => 17
   | .store w m a v => mixHash 18 (mixHash (hash w.byteCount) (mixHash (hashSymMem m) (mixHash (hashSymExpr a) (hashSymExpr v))))
 end
@@ -453,7 +453,7 @@ end
 instance {Reg : Type} [Hashable Reg] : Hashable (SymExpr Reg) := ⟨hashSymExpr⟩
 instance {Reg : Type} [Hashable Reg] : Hashable (SymMem Reg) := ⟨hashSymMem⟩
 
-partial def hashSymPC {Reg : Type} [Hashable Reg] : SymPC Reg → UInt64
+def hashSymPC {Reg : Type} [Hashable Reg] : SymPC Reg → UInt64
   | .true => 19
   | .eq l r => mixHash 20 (mixHash (hash l) (hash r))
   | .lt l r => mixHash 21 (mixHash (hash l) (hash r))

@@ -54,7 +54,7 @@ def pickReg (idx : Nat) : Amd64Reg :=
   | _ => .rax
 
 /-- Generate a random expression of given depth. -/
-partial def genExpr (rng : RNG) (depth : Nat) : RNG × Expr Amd64Reg :=
+def genExpr (rng : RNG) (depth : Nat) : RNG × Expr Amd64Reg :=
   if depth == 0 then
     let (rng, choice) := rng.nextNat 3
     match choice with
