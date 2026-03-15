@@ -234,6 +234,21 @@ def foldSub64 {Reg : Type} [DecidableEq Reg]
   | x, .const 0 => x
   | _, _ => .sub64 a b
 
+/-- Fold `and64` with constant identities and absorption. -/
+def foldAnd64 {Reg : Type} [DecidableEq Reg]
+    (a b : SymExpr Reg) : SymExpr Reg :=
+  match a, b with
+  | .const x, .const y => .const (x &&& y)
+  | x, .const m =>
+    if m == 0xFFFF_FFFF_FFFF_FFFF then x
+    else if m == 0 then .const 0
+    else .and64 x (.const m)
+  | .const m, x =>
+    if m == 0xFFFF_FFFF_FFFF_FFFF then x
+    else if m == 0 then .const 0
+    else .and64 (.const m) x
+  | _, _ => .and64 a b
+
 /-- Resolve a load from a (simplified) memory term.
     Walks the store chain looking for a matching address.
     When an `AddrClassifier` is provided, uses region-based non-aliasing to
@@ -290,7 +305,7 @@ def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymEx
   | .add64 a b => foldAdd64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .sub64 a b => foldSub64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .xor64 a b => .xor64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
-  | .and64 a b => .and64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .and64 a b => foldAnd64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .or64 a b => .or64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .shl64 a b => .shl64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .shr64 a b => .shr64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
@@ -339,7 +354,7 @@ def simplifyLoadStoreExprR {Reg : Type} [DecidableEq Reg]
   | .add64 a b => foldAdd64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .sub64 a b => foldSub64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .xor64 a b => .xor64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
-  | .and64 a b => .and64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .and64 a b => foldAnd64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .or64 a b => .or64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .shl64 a b => .shl64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .shr64 a b => .shr64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
