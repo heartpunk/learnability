@@ -37,7 +37,7 @@ This file provides the connection:
   same results as their total equivalents
 - **Simplification soundness**: `simplifyConst`, `simplifyLoadStoreExpr`,
   `simplifyLoadStorePC` preserve evaluation semantics
-  (axiomatized in `VexSimplificationSoundness.lean`)
+  (proved in `VexSimplificationSoundness.lean`)
 - **Dispatch body construction**: `buildDispatchBody` dispatches to the
   block matching `ip_reg` (axiomatized below in Phase 4)
 
