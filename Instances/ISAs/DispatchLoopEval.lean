@@ -1945,16 +1945,18 @@ def buildAnnotatedBodyCFG (ip_reg : Amd64Reg)
 /-- DFS through body CFG collecting ordered call sequences as productions.
     Each external call (to next_sym or another NT) becomes one production symbol.
     The return address in memory is used to find the continuation after each call. -/
-partial def dfsExtractProds
+def dfsExtractProds
     (cur : UInt64)
     (steps : Array String)
     (cfg : AnnotatedCFG)
     (blocks : Std.HashSet UInt64)
     (funcEntries : Std.HashMap UInt64 String)
     (visited : Std.HashSet UInt64)
-    (depth : Nat) :
-    Array (Array String) := Id.run do
-  if depth > 60 || visited.contains cur then return #[steps]
+    (fuel : Nat := 61) :
+    Array (Array String) :=
+  match fuel with
+  | 0 => #[steps]
+  | fuel' + 1 => if visited.contains cur then #[steps] else Id.run do
   let visited' := visited.insert cur
   let edges := cfg.getD cur #[]
   if edges.isEmpty then
@@ -1975,7 +1977,7 @@ partial def dfsExtractProds
       | some ret =>
         if blocks.contains ret then
           allPaths := allPaths.append
-            (dfsExtractProds ret steps' cfg blocks funcEntries visited' (depth + 1))
+            (dfsExtractProds ret steps' cfg blocks funcEntries visited' fuel')
         else
           allPaths := allPaths.push steps'  -- call is at function tail
       | none =>
@@ -1985,7 +1987,7 @@ partial def dfsExtractProds
       if blocks.contains tgt then
         -- Internal transition within this function: recurse without recording a step
         allPaths := allPaths.append
-          (dfsExtractProds tgt steps cfg blocks funcEntries visited' (depth + 1))
+          (dfsExtractProds tgt steps cfg blocks funcEntries visited' fuel')
       else
         -- External call to unknown helper (e.g. a helper like isdigit called before next_sym).
         -- Follow the return address to find the continuation (the helper is transparent).
@@ -1993,7 +1995,7 @@ partial def dfsExtractProds
         | some ret =>
           if blocks.contains ret then
             allPaths := allPaths.append
-              (dfsExtractProds ret steps cfg blocks funcEntries visited' (depth + 1))
+              (dfsExtractProds ret steps cfg blocks funcEntries visited' fuel')
           else if !steps.isEmpty then
             allPaths := allPaths.push steps  -- tail call to unknown, end path
         | none =>
@@ -2054,7 +2056,7 @@ def printFunctionProductions (log : String → IO Unit)
     (funcEntries : Std.HashMap UInt64 String) : IO Unit := do
   let ip_reg := Amd64Reg.rip
   let (cfg, blocks) := buildAnnotatedBodyCFG ip_reg bodyArr
-  let rawPaths := dfsExtractProds entryAddr #[] cfg blocks funcEntries {} 0
+  let rawPaths := dfsExtractProds entryAddr #[] cfg blocks funcEntries {}
   -- Also explore orphan loop-body blocks (not reachable from entry via internal CFG).
   -- For NT calls (not next_sym) in orphan blocks, start DFS from the return continuation
   -- with the callee as the first step. This captures iterative loop alternatives like
@@ -2073,7 +2075,7 @@ def printFunctionProductions (log : String → IO Unit)
             if blocks.contains ret then
               -- Start DFS from NT call's return continuation, with callee as first step
               orphanPaths := orphanPaths.append
-                (dfsExtractProds ret #[callee] cfg blocks funcEntries {} 0)
+                (dfsExtractProds ret #[callee] cfg blocks funcEntries {})
           | none => pure ()
         | none => pure ()
   -- Deduplicate
@@ -2987,7 +2989,7 @@ inductive DFSResult where
     productions: `funcName ++ steps[idx:]` (e.g., sum '+' term).
     Guard-based NT specialization: when calling an NT with accumulated guard that
     simplifies to a single positive tokenCode, emit terminal instead of nonterminal. -/
-partial def ltsExtractProds
+def ltsExtractProds
     (cur : UInt64)
     (steps : Array GrammarSym)
     (accGuard : CharClass)
@@ -2997,12 +2999,14 @@ partial def ltsExtractProds
     (visited : Std.HashSet UInt64)
     (nodeStepIdx : Std.HashMap UInt64 Nat)
     (funcName : String)
-    (depth : Nat)
+    (fuel : Nat)
     (bodyBranches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))
     (lexerName : String := "next_sym")
     (tokenNames : TokenNameTable := {}) :
-    Array (Array GrammarSym) := Id.run do
-  if depth > 60 then return #[steps]
+    Array (Array GrammarSym) :=
+  match fuel with
+  | 0 => #[steps]
+  | fuel' + 1 => Id.run do
   if visited.contains cur then
     -- Back-edge detected: create left-recursive production
     match nodeStepIdx.get? cur with
@@ -3046,7 +3050,7 @@ partial def ltsExtractProds
       | some ret =>
         if funcBlocks.contains ret then
           allPaths := allPaths.append
-            (ltsExtractProds ret steps' .any ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches lexerName tokenNames)
+            (ltsExtractProds ret steps' .any ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName fuel' bodyBranches lexerName tokenNames)
         else
           allPaths := allPaths.push steps'
       | none =>
@@ -3054,7 +3058,7 @@ partial def ltsExtractProds
     | none =>
       if funcBlocks.contains t.tgt then
         allPaths := allPaths.append
-          (ltsExtractProds t.tgt steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches lexerName tokenNames)
+          (ltsExtractProds t.tgt steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName fuel' bodyBranches lexerName tokenNames)
       else
         -- Unknown external (helper like printf): preserve guard through call
         let retAddr := bodyBranches.findSome? fun b =>
@@ -3066,7 +3070,7 @@ partial def ltsExtractProds
         | some ret =>
           if funcBlocks.contains ret then
             allPaths := allPaths.append
-              (ltsExtractProds ret steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName (depth + 1) bodyBranches lexerName tokenNames)
+              (ltsExtractProds ret steps combinedGuard ltsMap funcBlocks funcEntries visited' nodeStepIdx' funcName fuel' bodyBranches lexerName tokenNames)
           else if !steps.isEmpty then
             allPaths := allPaths.push steps
         | none =>
@@ -3142,7 +3146,7 @@ def extractNTGrammar
     let arr := ltsMap.getD t.src #[]
     ltsMap := ltsMap.insert t.src (arr.push t)
   -- Main DFS from entry
-  let rawPaths := ltsExtractProds entryAddr #[] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr lexerName tokenNames
+  let rawPaths := ltsExtractProds entryAddr #[] .any ltsMap funcBlocks funcEntries {} {} funcName 61 bodyArr lexerName tokenNames
   -- Orphan blocks: not reachable from entry, contain NT calls
   let reachable := ltsReachable entryAddr ltsMap funcBlocks funcEntries bodyArr
   let mut orphanPaths : Array (Array GrammarSym) := #[]
@@ -3164,7 +3168,7 @@ def extractNTGrammar
             | some ret =>
               if funcBlocks.contains ret then
                 orphanPaths := orphanPaths.append
-                  (ltsExtractProds ret #[.nonterminal callee] .any ltsMap funcBlocks funcEntries {} {} funcName 0 bodyArr lexerName tokenNames)
+                  (ltsExtractProds ret #[.nonterminal callee] .any ltsMap funcBlocks funcEntries {} {} funcName 61 bodyArr lexerName tokenNames)
             | none => pure ()
         | none => pure ()
   -- Deduplicate using rendered strings

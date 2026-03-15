@@ -218,9 +218,10 @@ gap — the pipeline COMPUTES the right answer but doesn't CERTIFY it.
 
 Two concrete steps would substantially narrow the gap:
 
-1. **Make `toSMTLib` total and prove it.** Currently a `partial def`. A total version with
-   a proof that it faithfully encodes `SymPC` into SMT-LIB would allow lean-smt to verify
-   CVC5's answers at the kernel level, eliminating the CVC5 implementation trust boundary.
+1. **Prove `toSMTLib` faithfully encodes `SymPC`.** `toSMTLib` is now total (`def`, not
+   `partial def`). A proof that it faithfully encodes `SymPC` into SMT-LIB would allow
+   lean-smt to verify CVC5's answers at the kernel level, eliminating the CVC5
+   implementation trust boundary.
 
 2. **ISA-precise symbolic execution.** Replace pyvex with a formally verified ISA
    specification (e.g., Sail for ARM/RISC-V, or a custom Lean ISA model). This narrows the

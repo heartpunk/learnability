@@ -33,10 +33,9 @@ This file provides the connection:
 
 - **pyvex**: VEX IR lifting is faithful to x86-64 semantics
 - **CVC5**: SMT implication checks are sound (no axiom — hypothesized in proof chain)
-- **`partial def` termination**: The remaining `partial def` functions
-  (`dfsExtractProds`, `ltsExtractProds`) are graph traversal utilities
-  with depth/visited parameters — not expression-level operations.
-  All SymExpr/SymMem/SymPC structural recursions are now total `def`.
+- **`partial def` termination**: ELIMINATED. All functions are total `def`.
+  Graph traversals use fuel parameters; string parsers use fuel parameters;
+  expression-level functions use structural recursion on inductive types.
 - **Simplification soundness**: `simplifyConst`, `simplifyLoadStoreExpr`,
   `simplifyLoadStorePC` preserve evaluation semantics
   (proved in `VexSimplificationSoundness.lean`)
