@@ -184,12 +184,16 @@ def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
       | (.const a, .const b) =>
         -- Skip store only when byte ranges are provably non-overlapping.
         -- Range [a, a+sw) and [b, b+lw) don't overlap iff a+sw ≤ b ∨ b+lw ≤ a.
-        let sw := UInt64.ofNat storeWidth.byteCount
-        let lw := UInt64.ofNat loadWidth.byteCount
-        if a + sw ≤ b ∨ b + lw ≤ a then
+        -- Uses Nat arithmetic with non-wrapping guards to avoid UInt64 wrapping
+        -- unsoundness (UInt64 addition wraps mod 2^64, so a + sw ≤ b can hold
+        -- vacuously when a is near UInt64.max).
+        if a.toNat + storeWidth.byteCount ≤ UInt64.size ∧
+           b.toNat + loadWidth.byteCount ≤ UInt64.size ∧
+           (a.toNat + storeWidth.byteCount ≤ b.toNat ∨
+            b.toNat + loadWidth.byteCount ≤ a.toNat) then
           resolveLoadFrom loadWidth innerMem loadAddr  -- non-overlapping, skip store
         else
-          .load loadWidth mem loadAddr  -- overlapping or same addr, keep as-is
+          .load loadWidth mem loadAddr  -- overlapping or wrapping, keep as-is
       -- Non-constant addresses that don't match: can't determine statically,
       -- keep as-is (conservative/sound — may leave loads unresolved)
       | _ => .load loadWidth mem loadAddr

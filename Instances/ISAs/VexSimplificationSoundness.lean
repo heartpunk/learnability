@@ -195,9 +195,12 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (w : Width) (mem : SymMem Reg) (addr : SymExpr Reg) (s : ConcreteState Reg) :
     evalSymExpr s (resolveLoadFrom w mem addr) =
     ByteMem.read w (evalSymMem s mem) (evalSymExpr s addr) := by
-  induction mem with
+  -- SymMem is mutually inductive with SymExpr, so `induction` is unavailable.
+  -- Use `cases` + explicit recursive call for the IH.
+  cases mem with
   | base => rfl
-  | store sw innerMem sa sv ih =>
+  | store sw innerMem sa sv =>
+    have ih := resolveLoadFrom_sound w innerMem addr s
     simp only [resolveLoadFrom]
     split
     · -- Matching case: same width and address
@@ -212,14 +215,17 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     · -- Non-matching case
       split
       · -- Both const addresses
-        rename_i a b
+        rename_i a b heq
+        have hsa : sa = SymExpr.const a := congrArg Prod.fst heq
+        have haddr : addr = SymExpr.const b := congrArg Prod.snd heq
+        subst hsa; subst haddr
         split
         · -- Non-overlapping: skip store, use IH
           rename_i hnoverlap
           rw [ih]
           simp only [evalSymExpr, evalSymMem]
           rw [ByteMem_read_write_nonoverlap w sw (evalSymMem s innerMem)
-              a (evalSymExpr s sv) b hnoverlap]
+              a (evalSymExpr s sv) b hnoverlap.1 hnoverlap.2.1 hnoverlap.2.2]
         · -- Overlapping: conservative, keep as-is
           simp only [evalSymExpr, evalSymMem]
       · -- Non-const addresses: conservative, keep as-is

@@ -487,11 +487,56 @@ theorem ByteMem_read_write_same (w : Width) (M : ByteMem) (a v : UInt64) :
   · exact read_write_same_w32 M a v
   · exact read_write_same_w64 M a v
 
-/-! ## Width-level non-overlap: read after write at non-overlapping byte ranges -/
+/-! ## Width-level non-overlap: read after write at non-overlapping byte ranges
+
+The non-wrapping guards `h_a` and `h_b` ensure that the store and load byte ranges
+don't wrap around the 2^64 address boundary, which is necessary for the interval
+non-overlap condition to correctly imply pointwise address distinctness in UInt64
+(modular) arithmetic. -/
+
+private theorem uint64_add_ofNat_ne (a b : UInt64) (n m i j : Nat)
+    (h_a : a.toNat + n ≤ UInt64.size) (h_b : b.toNat + m ≤ UInt64.size)
+    (h : a.toNat + n ≤ b.toNat ∨ b.toNat + m ≤ a.toNat)
+    (hi : i < n) (hj : j < m) :
+    a + UInt64.ofNat i ≠ b + UInt64.ofNat j := by
+  -- Prove all Nat facts first, before UInt64 terms enter the context
+  have h_ne : a.toNat + i ≠ b.toNat + j := by omega
+  have h_i_lt : i < UInt64.size := by omega
+  have h_j_lt : j < UInt64.size := by omega
+  have h_ai_lt : a.toNat + i < UInt64.size := by omega
+  have h_bj_lt : b.toNat + j < UInt64.size := by omega
+  have h_lhs : (a + UInt64.ofNat i).toNat = a.toNat + i := by
+    rw [UInt64.toNat_add]
+    have : (UInt64.ofNat i).toNat = i := by
+      simp [UInt64.ofNat, UInt64.toNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt h_i_lt]
+    rw [this, Nat.mod_eq_of_lt h_ai_lt]
+  have h_rhs : (b + UInt64.ofNat j).toNat = b.toNat + j := by
+    rw [UInt64.toNat_add]
+    have : (UInt64.ofNat j).toNat = j := by
+      simp [UInt64.ofNat, UInt64.toNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt h_j_lt]
+    rw [this, Nat.mod_eq_of_lt h_bj_lt]
+  exact fun heq => h_ne (by rw [← h_lhs, ← h_rhs]; exact congrArg UInt64.toNat heq)
 
 theorem ByteMem_read_write_nonoverlap (lw sw : Width) (M : ByteMem) (a v b : UInt64)
-    (h : a + UInt64.ofNat sw.byteCount ≤ b ∨ b + UInt64.ofNat lw.byteCount ≤ a) :
+    (h_a : a.toNat + sw.byteCount ≤ UInt64.size)
+    (h_b : b.toNat + lw.byteCount ≤ UInt64.size)
+    (h : a.toNat + sw.byteCount ≤ b.toNat ∨ b.toNat + lw.byteCount ≤ a.toNat) :
     ByteMem.read lw (ByteMem.write sw M a v) b = ByteMem.read lw M b := by
-  sorry
+  have hp : ∀ i j, i < sw.byteCount → j < lw.byteCount →
+      a + UInt64.ofNat i ≠ b + UInt64.ofNat j :=
+    fun i j hi hj => uint64_add_ofNat_ne a b sw.byteCount lw.byteCount i j h_a h_b h hi hj
+  cases lw <;> cases sw <;>
+    simp only [ByteMem.read, ByteMem.write, Width.byteCount,
+               ByteMem.read8, ByteMem.read16le, ByteMem.read32le, ByteMem.read64le,
+               ByteMem.write8, ByteMem.write16le, ByteMem.write32le, ByteMem.write64le] at *
+  all_goals first
+    | exact readLEAux_writeLEAux_nonoverlap M a v _ b _ hp
+    | (congr 1; congr 1
+       exact readByte_writeLEAux_nonoverlap M a v _ b
+        (fun i hi => by simpa using hp i 0 hi (by omega)))
+    | exact readLEAux_writeByte_nonoverlap M a _ b _
+        (fun j hj => by simpa using hp 0 j (by omega) hj)
+    | (congr 1; congr 1
+       exact readByte_writeByte_ne M a b _ (by simpa using hp 0 0 (by omega) (by omega)))
 
 end VexISA
