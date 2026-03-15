@@ -196,5 +196,61 @@
         "IRSB {\n   t0:Ity_I64 t1:Ity_I64 t2:Ity_I64 t3:Ity_I32 t4:Ity_I32 t5:Ity_I32 t6:Ity_I32 t7:Ity_I32 t8:Ity_I32 t9:Ity_I64 t10:Ity_I64 t11:Ity_I64 t12:Ity_I64 t13:Ity_I64 t14:Ity_I64 t15:Ity_I64 t16:Ity_I64 t17:Ity_I32 t18:Ity_I64 t19:Ity_I32 t20:Ity_I64 t21:Ity_I64 t22:Ity_I64 t23:Ity_I64 t24:Ity_I32 t25:Ity_I64 t26:Ity_I32 t27:Ity_I64 t28:Ity_I64 t29:Ity_I64 t30:Ity_I64 t31:Ity_I64\n\n   00 | ------ IMark(0x400911, 4, 0) ------\n   01 | t13 = GET:I64(rbp)\n   02 | t12 = Add64(t13,0xfffffffffffffff0)\n   03 | t14 = LDle:I64(t12)\n   04 | PUT(rax) = t14\n   05 | PUT(rip) = 0x0000000000400915\n   06 | ------ IMark(0x400915, 1, 0) ------\n   07 | PUT(rsp) = t13\n   08 | t2 = LDle:I64(t13)\n   09 | PUT(rbp) = t2\n   10 | t15 = Add64(t13,0x0000000000000008)\n   11 | PUT(rsp) = t15\n   12 | ------ IMark(0x400916, 2, 0) ------\n   13 | PUT(rdx) = 0x0000000000000000\n   14 | ------ IMark(0x400918, 2, 0) ------\n   15 | PUT(cc_op) = 0x0000000000000013\n   16 | PUT(cc_dep1) = 0x0000000000000000\n   17 | PUT(cc_dep2) = 0x0000000000000000\n   18 | PUT(rdi) = 0x0000000000000000\n   19 | PUT(rip) = 0x000000000040091a\n   20 | ------ IMark(0x40091a, 1, 0) ------\n   21 | t10 = LDle:I64(t15)\n   22 | t11 = Add64(t15,0x0000000000000008)\n   23 | PUT(rsp) = t11\n   24 | t30 = Sub64(t11,0x0000000000000080)\n   25 | ====== AbiHint(0xt30, 128, t10) ======\n   NEXT: PUT(rip) = t10; Ijk_Ret\n}"
       ]
     }
-  }
+  },
+  "memory_regions": [
+    {
+      "name": ".text",
+      "vaddr": "0x400000",
+      "size": 4515,
+      "flags": "rx"
+    },
+    {
+      "name": ".data",
+      "vaddr": "0x4011a4",
+      "size": 4,
+      "flags": "rw"
+    },
+    {
+      "name": ".bss",
+      "vaddr": "0x4011c0",
+      "size": 1288,
+      "flags": "rw"
+    },
+    {
+      "name": ".rodata",
+      "vaddr": "0x4016c8",
+      "size": 391,
+      "flags": "r"
+    },
+    {
+      "name": ".data.rel.local",
+      "vaddr": "0x401860",
+      "size": 40,
+      "flags": "rw"
+    },
+    {
+      "name": ".data.rel",
+      "vaddr": "0x401888",
+      "size": 8,
+      "flags": "rw"
+    },
+    {
+      "name": ".note.gnu.property",
+      "vaddr": "0x401890",
+      "size": 48,
+      "flags": "r"
+    },
+    {
+      "name": ".eh_frame",
+      "vaddr": "0x401890",
+      "size": 600,
+      "flags": "r"
+    },
+    {
+      "name": "extern",
+      "vaddr": "0x500000",
+      "size": 623,
+      "flags": "rw"
+    }
+  ]
 }

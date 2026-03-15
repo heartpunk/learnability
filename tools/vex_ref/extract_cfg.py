@@ -16,6 +16,13 @@ Modes:
 
 Output (stdout):
     {"arch": "amd64", "blocks": ["IRSB {\\n   ...\\n}", ...]}
+
+Memory regions are extracted from CLE's loaded view of the binary — the same
+loader that provides virtual-address → file-bytes mapping for pyvex.  For
+relocatable objects (.o files), CLE rebases sections and creates an ExternObject
+for unresolved symbols (GOT-like).  The regions array captures every mapped
+region so the pipeline can determine which constant addresses are in which
+region (non-overlapping by CLE construction).
 """
 from __future__ import annotations
 
@@ -23,6 +30,44 @@ import argparse
 import json
 
 import angr
+
+
+def extract_memory_regions(project: "angr.Project") -> list[dict]:
+    """Extract all mapped memory regions from CLE's loaded view.
+
+    Returns a list of {name, vaddr, size, flags} dicts for every ALLOC
+    section in the main object plus the ExternObject (if present).
+    Regions are non-overlapping by CLE construction.
+    """
+    regions = []
+    obj = project.loader.main_object
+    for sec in obj.sections:
+        if not sec.occupies_memory:
+            continue
+        flags = ""
+        if sec.is_readable:
+            flags += "r"
+        if sec.is_writable:
+            flags += "w"
+        if sec.is_executable:
+            flags += "x"
+        regions.append({
+            "name": sec.name,
+            "vaddr": f"0x{sec.vaddr:x}",
+            "size": sec.memsize,
+            "flags": flags,
+        })
+    # ExternObject: CLE's synthetic GOT for unresolved relocations
+    for o in project.loader.all_objects:
+        if type(o).__name__ == "ExternObject" and o.min_addr < o.max_addr:
+            regions.append({
+                "name": "extern",
+                "vaddr": f"0x{o.min_addr:x}",
+                "size": o.max_addr - o.min_addr,
+                "flags": "rw",
+            })
+            break
+    return regions
 
 
 def extract_linear(binary: str, func_addr: int, func_size: int) -> dict:
@@ -43,7 +88,11 @@ def extract_linear(binary: str, func_addr: int, func_size: int) -> dict:
             )
         addr += block.size
 
-    return {"arch": "amd64", "blocks": blocks}
+    return {
+        "arch": "amd64",
+        "memory_regions": extract_memory_regions(project),
+        "blocks": blocks,
+    }
 
 
 def extract_text_section(binary: str) -> dict:
@@ -55,7 +104,11 @@ def extract_text_section(binary: str) -> dict:
     if text is None:
         raise ValueError("No .text section found in binary")
 
-    return extract_linear(binary, text.min_addr, text.memsize)
+    result = extract_linear(binary, text.min_addr, text.memsize)
+    # extract_linear already includes regions from its own project, but
+    # it creates a second project internally.  Override with ours.
+    result["memory_regions"] = extract_memory_regions(project)
+    return result
 
 
 def main() -> None:

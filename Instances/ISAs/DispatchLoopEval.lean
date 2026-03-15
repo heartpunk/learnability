@@ -61,12 +61,63 @@ After composition, memory terms grow as chains of `store` operations.
 `load(W, store(W, mem, addr, val), addr')` can be simplified:
 - If W matches and addr == addr' (syntactically): result is `val`
 - If addr and addr' are different constants: skip the store, recurse into mem
+- If addr and addr' are in different memory regions: skip the store
 - Otherwise: keep as-is (can't determine statically)
 
 This is an EXACT optimization — it evaluates what the concrete semantics would
 compute, just at the symbolic level. No information is lost. Combined with
 simplifyConst (which handles const-const comparisons), this collapses the
-expression chains that cause unbounded growth in iterative composition. -/
+expression chains that cause unbounded growth in iterative composition.
+
+The region-based elimination uses ELF section layout from CLE: addresses in
+different sections (text, data, bss, extern, stack) can't alias. The classifier
+maps constant addresses to their section by range lookup, and register-relative
+addresses (rsp±k, rbp±k) to a synthetic "stack" region.  Non-overlapping by
+CLE's loader construction + x86-64 ABI stack placement. -/
+
+/-- A memory region from the ELF binary (loaded via CLE). -/
+structure MemRegion where
+  name : String
+  vaddr : UInt64
+  size : Nat
+  flags : String
+  deriving Repr, Inhabited
+
+/-- Region identity for non-aliasing: if two addresses have different
+    `RegionTag`s, they can't alias. `loaded idx` = ELF section at index `idx`
+    in the regions array. `stack` = rsp/rbp-relative (not in any loaded region). -/
+inductive RegionTag where
+  | loaded (idx : Nat) : RegionTag
+  | stack : RegionTag
+  deriving DecidableEq, Repr
+
+/-- Classify a symbolic address into its memory region, if determinable.
+    Returns `none` for addresses that can't be classified (conservative). -/
+def classifyAddr {Reg : Type} [DecidableEq Reg]
+    (regions : Array MemRegion) (stackRegs : List Reg)
+    (addr : SymExpr Reg) : Option RegionTag :=
+  match addr with
+  | .const c =>
+    -- Constant address: look up in regions by range [vaddr, vaddr+size)
+    let rec go (i : Nat) : Option RegionTag :=
+      if i ≥ regions.size then none
+      else
+        let r := regions[i]!
+        if c ≥ r.vaddr && c.toNat < r.vaddr.toNat + r.size then
+          some (.loaded i)
+        else go (i + 1)
+    go 0
+  | .reg r =>
+    if stackRegs.any (· == r) then some .stack else none
+  | .add64 (.reg r) (.const _) =>
+    if stackRegs.any (· == r) then some .stack else none
+  | .sub64 (.reg r) (.const _) =>
+    if stackRegs.any (· == r) then some .stack else none
+  | _ => none
+
+/-- Optional address classifier. When provided, enables region-based
+    store elimination in `resolveLoadFrom`. -/
+abbrev AddrClassifier (Reg : Type) := SymExpr Reg → Option RegionTag
 
 /-! ## Expression Diagnostics -/
 
@@ -171,9 +222,12 @@ def foldSub64 {Reg : Type} [DecidableEq Reg]
   | _, _ => .sub64 a b
 
 /-- Resolve a load from a (simplified) memory term.
-    Walks the store chain looking for a matching address. -/
+    Walks the store chain looking for a matching address.
+    When an `AddrClassifier` is provided, uses region-based non-aliasing to
+    skip stores whose address is in a different region from the load address. -/
 def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
-    (loadWidth : Width) (mem : SymMem Reg) (loadAddr : SymExpr Reg) : SymExpr Reg :=
+    (loadWidth : Width) (mem : SymMem Reg) (loadAddr : SymExpr Reg)
+    (classify : Option (AddrClassifier Reg) := none) : SymExpr Reg :=
   match mem with
   | .base => .load loadWidth .base loadAddr
   | .store storeWidth innerMem storeAddr storeVal =>
@@ -191,12 +245,23 @@ def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
            b.toNat + loadWidth.byteCount ≤ UInt64.size ∧
            (a.toNat + storeWidth.byteCount ≤ b.toNat ∨
             b.toNat + loadWidth.byteCount ≤ a.toNat) then
-          resolveLoadFrom loadWidth innerMem loadAddr  -- non-overlapping, skip store
+          resolveLoadFrom loadWidth innerMem loadAddr classify  -- non-overlapping, skip store
         else
           .load loadWidth mem loadAddr  -- overlapping or wrapping, keep as-is
-      -- Non-constant addresses that don't match: can't determine statically,
-      -- keep as-is (conservative/sound — may leave loads unresolved)
-      | _ => .load loadWidth mem loadAddr
+      | _ =>
+        -- Non-constant addresses that don't match syntactically.
+        -- Try region-based non-aliasing: if store and load addresses are in
+        -- different regions, they can't alias — skip the store.
+        match classify with
+        | some clf =>
+          match (clf storeAddr, clf loadAddr) with
+          | (some sr, some lr) =>
+            if sr != lr then
+              resolveLoadFrom loadWidth innerMem loadAddr classify  -- different regions, skip
+            else
+              .load loadWidth mem loadAddr  -- same region, can't determine
+          | _ => .load loadWidth mem loadAddr  -- unclassifiable, conservative
+        | none => .load loadWidth mem loadAddr  -- no classifier, conservative
 
 mutual
 /-- Simplify: load-after-store resolution + arithmetic constant folding. -/
@@ -239,20 +304,92 @@ def simplifyLoadStorePC {Reg : Type} [DecidableEq Reg] : SymPC Reg → SymPC Reg
   | .and φ ψ => .and (simplifyLoadStorePC φ) (simplifyLoadStorePC ψ)
   | .not φ => .not (simplifyLoadStorePC φ)
 
+/-! ## Region-Aware Simplification
+
+Variants of the load-after-store simplifier that accept an address classifier
+for region-based store elimination. When a store address and load address are
+in different memory regions, the store can be skipped (non-aliasing by
+construction from ELF section layout). -/
+
+mutual
+/-- Region-aware simplify: load-after-store + arithmetic + region non-aliasing. -/
+def simplifyLoadStoreExprR {Reg : Type} [DecidableEq Reg]
+    (classify : AddrClassifier Reg) : SymExpr Reg → SymExpr Reg
+  | .const v => .const v
+  | .reg r => .reg r
+  | .low32 x => .low32 (simplifyLoadStoreExprR classify x)
+  | .uext32 x => .uext32 (simplifyLoadStoreExprR classify x)
+  | .sext8to32 x => .sext8to32 (simplifyLoadStoreExprR classify x)
+  | .sext32to64 x => .sext32to64 (simplifyLoadStoreExprR classify x)
+  | .sub32 a b => .sub32 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .shl32 a b => .shl32 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .add64 a b => foldAdd64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .sub64 a b => foldSub64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .xor64 a b => .xor64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .and64 a b => .and64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .or64 a b => .or64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .shl64 a b => .shl64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .shr64 a b => .shr64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .load w mem addr =>
+    let addr' := simplifyLoadStoreExprR classify addr
+    let mem' := simplifyLoadStoreMemR classify mem
+    resolveLoadFrom w mem' addr' (some classify)
+
+/-- Region-aware store chain simplification. -/
+def simplifyLoadStoreMemR {Reg : Type} [DecidableEq Reg]
+    (classify : AddrClassifier Reg) : SymMem Reg → SymMem Reg
+  | .base => .base
+  | .store w mem addr val =>
+    .store w (simplifyLoadStoreMemR classify mem)
+            (simplifyLoadStoreExprR classify addr)
+            (simplifyLoadStoreExprR classify val)
+end
+
+/-- Region-aware PC simplification. -/
+def simplifyLoadStorePCR {Reg : Type} [DecidableEq Reg]
+    (classify : AddrClassifier Reg) : SymPC Reg → SymPC Reg
+  | .true => .true
+  | .eq a b => .eq (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .lt a b => .lt (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .le a b => .le (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .and φ ψ => .and (simplifyLoadStorePCR classify φ) (simplifyLoadStorePCR classify ψ)
+  | .not φ => .not (simplifyLoadStorePCR classify φ)
+
+/-- Simplify a PC using region-aware simplification if a classifier is available,
+    otherwise fall back to standard simplification. -/
+def simplifyLoadStorePCOpt {Reg : Type} [DecidableEq Reg]
+    (classify : Option (AddrClassifier Reg)) (pc : SymPC Reg) : SymPC Reg :=
+  match classify with
+  | some clf => simplifyLoadStorePCR clf pc
+  | none => simplifyLoadStorePC pc
+
 /-- Full simplification: load-after-store + constant folding on a branch.
     Returns `none` if the PC is unsatisfiable after simplification. -/
 def simplifyBranchFull {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (b : Branch (SymSub Reg) (SymPC Reg)) : Option (Branch (SymSub Reg) (SymPC Reg)) :=
-  -- First apply load-after-store to sub and PC
-  let simplifiedSub : SymSub Reg := {
-    regs := fun r => simplifyLoadStoreExpr (b.sub.regs r)
-    mem := simplifyLoadStoreMem b.sub.mem
-  }
-  let simplifiedPC := simplifyLoadStorePC b.pc
-  -- Then apply constant folding
-  match SymPC.simplifyConst simplifiedPC with
-  | none => none
-  | some pc' => some ⟨simplifiedSub, pc'⟩
+    (b : Branch (SymSub Reg) (SymPC Reg))
+    (classify : Option (AddrClassifier Reg) := none) :
+    Option (Branch (SymSub Reg) (SymPC Reg)) :=
+  match classify with
+  | some clf =>
+    -- Region-aware simplification
+    let simplifiedSub : SymSub Reg := {
+      regs := fun r => simplifyLoadStoreExprR clf (b.sub.regs r)
+      mem := simplifyLoadStoreMemR clf b.sub.mem
+    }
+    let simplifiedPC := simplifyLoadStorePCR clf b.pc
+    match SymPC.simplifyConst simplifiedPC with
+    | none => none
+    | some pc' => some ⟨simplifiedSub, pc'⟩
+  | none =>
+    -- Standard simplification (no region info)
+    let simplifiedSub : SymSub Reg := {
+      regs := fun r => simplifyLoadStoreExpr (b.sub.regs r)
+      mem := simplifyLoadStoreMem b.sub.mem
+    }
+    let simplifiedPC := simplifyLoadStorePC b.pc
+    match SymPC.simplifyConst simplifiedPC with
+    | none => none
+    | some pc' => some ⟨simplifiedSub, pc'⟩
 
 /-- Zero out non-projected registers (memory savings, safe when projection is closed). -/
 def zeroNonProjected {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg] [Hashable Reg]
@@ -1375,13 +1512,44 @@ private def parseHexAddr (s : String) : Option UInt64 :=
       else none) (some 0)
   |>.map UInt64.ofNat
 
+/-- Parse memory regions from JSON array.
+    Format: `[{"name": "...", "vaddr": "0x...", "size": N, "flags": "..."}, ...]` -/
+private def parseMemRegions (json : Lean.Json) : IO (Array MemRegion) := do
+  match json.getArr? with
+  | .error e => throw (IO.userError s!"memory_regions is not an array: {e}")
+  | .ok arr =>
+    let mut regions : Array MemRegion := #[]
+    for item in arr do
+      let name ← match item.getObjValAs? (α := String) "name" with
+        | .ok s => pure s
+        | .error e => throw (IO.userError s!"region missing name: {e}")
+      let vaddrStr ← match item.getObjValAs? (α := String) "vaddr" with
+        | .ok s => pure s
+        | .error e => throw (IO.userError s!"region missing vaddr: {e}")
+      let vaddr ← match parseHexAddr vaddrStr with
+        | some a => pure a
+        | none => throw (IO.userError s!"bad region vaddr: {vaddrStr}")
+      let size ← match item.getObjValAs? (α := Nat) "size" with
+        | .ok n => pure n
+        | .error e => throw (IO.userError s!"region missing size: {e}")
+      let flags ← match item.getObjValAs? (α := String) "flags" with
+        | .ok s => pure s
+        | .error _ => pure ""  -- flags optional
+      regions := regions.push ⟨name, vaddr, size, flags⟩
+    return regions
+
 /-- Load per-function specs from legacy JSON format.
-    Format: `{"functions": {"name": {"addr": "0x...", "size": N, "blocks": [...]}, ...}}` -/
-def loadFunctionsFromJSON (path : System.FilePath) : IO (Array FunctionSpec) := do
+    Format: `{"functions": {"name": {"addr": "0x...", "size": N, "blocks": [...]}, ...},
+              "memory_regions": [...]}` -/
+def loadFunctionsFromJSON (path : System.FilePath) : IO (Array FunctionSpec × Array MemRegion) := do
   let contents ← IO.FS.readFile path
   match Lean.Json.parse contents with
   | .error e => throw (IO.userError s!"JSON parse error in {path}: {e}")
   | .ok json =>
+    -- Parse memory regions (optional — absent in older JSON files)
+    let regions ← match json.getObjVal? "memory_regions" with
+      | .ok regionsJson => parseMemRegions regionsJson
+      | .error _ => pure #[]
     match json.getObjVal? "functions" with
     | .error _ => throw (IO.userError s!"JSON has no 'functions' key (not per-function format)")
     | .ok funcsJson =>
@@ -1402,7 +1570,7 @@ def loadFunctionsFromJSON (path : System.FilePath) : IO (Array FunctionSpec) := 
             | .ok bs => pure bs.toList
             | .error e => throw (IO.userError s!"Missing blocks for {name}: {e}")
           specs := specs.push ⟨name, addr, blocks⟩
-        return specs
+        return (specs, regions)
       | _ => throw (IO.userError s!"'functions' value is not an object")
 
 /-- Result of function discovery: specs + count of orphan blocks not in any symbol. -/
@@ -1510,7 +1678,8 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
     (maxIter : Nat) (log : String → IO Unit)
     (smtCache : IO.Ref SMTCache)
-    (initialFrontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]) :
+    (initialFrontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[])
+    (addrClassify : Option (AddrClassifier Reg) := none) :
     IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)))) := do
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
@@ -1570,7 +1739,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   let mut frontierSet : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {initBranch}
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   for b in initialFrontier do
-    match simplifyBranchFull b with
+    match simplifyBranchFull b addrClassify with
     | none => pure ()
     | some sb =>
       let zb := zeroNonProjected closedRegs ip_reg sb
@@ -1593,7 +1762,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     let mut simplified : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut droppedSimplify : Nat := 0
     for b in composed do
-      match simplifyBranchFull b with
+      match simplifyBranchFull b addrClassify with
       | none => droppedSimplify := droppedSimplify + 1
       | some sb => simplified := simplified.push (zeroNonProjected closedRegs ip_reg sb)
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
@@ -1754,7 +1923,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
         for b in summaryArr do
           for phi in closure do
             let lifted := substSymPC b.sub phi
-            let liftedSimplified := simplifyLoadStorePC lifted
+            let liftedSimplified := simplifyLoadStorePCOpt addrClassify lifted
             match SymPC.simplifyConst liftedSimplified with
             | none =>
               trivClosedPairs := trivClosedPairs + 1  -- false: unsatisfiable, trivially closed
@@ -1816,7 +1985,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
           for phi in closure do
             if dumpCount < 10 then
               let lifted := substSymPC b.sub phi
-              let liftedSimplified := simplifyLoadStorePC lifted
+              let liftedSimplified := simplifyLoadStorePCOpt addrClassify lifted
               match SymPC.simplifyConst liftedSimplified with
               | none => pure ()  -- trivial false
               | some .true => pure ()  -- trivial true
@@ -1883,9 +2052,17 @@ def splitBodyAndExpandCalls {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Re
 
 def stratifiedFixpoint
     (functions : Array FunctionSpec)
+    (regions : Array MemRegion := #[])
     (log : String → IO Unit) :
     IO (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))) := do
   let ip_reg := Amd64Reg.rip
+  -- Build address classifier from ELF memory regions.
+  -- rsp and rbp are stack registers — addresses relative to them are in the
+  -- stack region, which doesn't overlap any loaded ELF section.
+  let addrClassify : Option (AddrClassifier Amd64Reg) :=
+    if regions.size > 0 then
+      some (classifyAddr regions [Amd64Reg.rsp, Amd64Reg.rbp])
+    else none
   -- Parse all function blocks into raw body arrays
   let mut funcBlocks : Array (String × Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := #[]
   for func in functions do
@@ -1908,7 +2085,7 @@ def stratifiedFixpoint
   -- Use computeFunctionStabilization directly (returns branch array as summary).
   -- Don't double-run with computeStabilizationHS — that keeps two copies of deeply-nested
   -- symbolic branches alive simultaneously, causing OOM.
-  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log smtCache with
+  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log smtCache (addrClassify := addrClassify) with
   | some (k, summaryArr) =>
     let t1 ← IO.monoMsNow
     summaries := summaries.insert functions[0]!.entryAddr summaryArr
@@ -1942,7 +2119,7 @@ def stratifiedFixpoint
       log s!"    {fname}: split body {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, {branchesAdded} branches, {droppedExp} dropped)"
       -- Step 2: Run stabilization on non-call body, seeding call results as initial frontier
       let oldSummary := summaries.getD func.entryAddr #[]
-      match ← computeFunctionStabilization ip_reg nonCallBody {} 30 log smtCache (initialFrontier := callResults) with
+      match ← computeFunctionStabilization ip_reg nonCallBody {} 30 log smtCache (initialFrontier := callResults) (addrClassify := addrClassify) with
       | some (k, newSummary) =>
         let t1 ← IO.monoMsNow
         if newSummary.size != oldSummary.size then
@@ -3579,10 +3756,11 @@ def buildFuncEntries (functions : Array FunctionSpec) : Std.HashMap UInt64 Strin
 /-- Run the full pipeline on a set of function specs: fixpoint → detect → extract.
     The generic pipeline used by both legacy and file-based entry points.
     When golden prods are provided, structural comparison is run against them. -/
-def runPipeline (functions : Array FunctionSpec) (log : String → IO Unit)
+def runPipeline (functions : Array FunctionSpec) (regions : Array MemRegion := #[])
+    (log : String → IO Unit)
     (golden : Std.HashMap String (List (List String)) := goldenProds) : IO Unit := do
   log "=== Stratified Dispatch Loop Stabilization ==="
-  let summaries ← stratifiedFixpoint functions log
+  let summaries ← stratifiedFixpoint functions regions log
   let funcEntries := buildFuncEntries functions
   -- Parser detection
   let parserResult ← detectParser functions summaries log
@@ -3612,7 +3790,7 @@ def dispatchLoopEvalFromFiles (blocksJson : System.FilePath) (elfBinary : System
       log s!"  {f.name}: {f.blocks.length} blocks"
     if result.orphanCount > 0 then
       log s!"  WARNING: {result.orphanCount} blocks not in any function symbol range"
-    runPipeline result.functions log
+    runPipeline result.functions (log := log)
 
 /-- Standard log function: writes to both stdout and a log file. -/
 def mkLogger (logPath : System.FilePath) : IO (String → IO Unit) := do
@@ -3635,9 +3813,11 @@ def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
   | [jsonPath] =>
     -- Single arg: per-function JSON format
     log s!"Loading functions from {jsonPath}..."
-    let functions ← loadFunctionsFromJSON jsonPath
-    log s!"  {functions.size} functions loaded"
-    runPipeline functions log
+    let (functions, regions) ← loadFunctionsFromJSON jsonPath
+    log s!"  {functions.size} functions loaded, {regions.size} memory regions"
+    for r in regions do
+      log s!"    {r.name}: [0x{String.ofList (Nat.toDigits 16 r.vaddr.toNat)}, +{r.size}) {r.flags}"
+    runPipeline functions regions log
   | [] =>
     -- No args: print usage
     IO.eprintln "Usage: dispatchLoopEval <blocks.json> <elf-binary>"

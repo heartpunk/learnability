@@ -67,11 +67,11 @@ def runTestSubject (subject : TestSubject) (log : String → IO Unit) : IO TestR
   log s!"\n============================================================"
   log s!"Testing: {subject.name}"
   log s!"============================================================"
-  -- Load functions
-  let functions ← loadFunctionsFromJSON subject.jsonPath
-  log s!"  Loaded {functions.size} functions from {subject.jsonPath}"
+  -- Load functions and memory regions
+  let (functions, regions) ← loadFunctionsFromJSON subject.jsonPath
+  log s!"  Loaded {functions.size} functions, {regions.size} regions from {subject.jsonPath}"
   -- Run full pipeline with subject-specific golden grammar
-  runPipeline functions log subject.goldenProds
+  runPipeline functions regions log subject.goldenProds
   -- Return a basic result — the structural comparison is printed by runPipeline
   -- via structuralGoldenCompare. Here we just report success/failure.
   return {
