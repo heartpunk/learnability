@@ -710,6 +710,70 @@ def findSemClosedWitnesses {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     log s!"  [witnesses] smt_found={smtFound} violations={violations}"
   return results
 
+/-- Prefix all SMT variable names in an SMT-LIB string.
+    Replaces `reg_` with `{prefix}reg_` and `base_mem` with `{prefix}base_mem`. -/
+def prefixSMTVars (pfx : String) (smt : String) : String :=
+  smt.replace "reg_" (pfx ++ "reg_") |>.replace "base_mem" (pfx ++ "base_mem")
+
+/-- Check SemClosed per-pair using two-state CVC5 queries.
+    For each lifted PC, checks: if two states agree on all closure PCs,
+    do they agree on the lifted PC?
+
+    Query: (closure agreement ∧ lifted disagreement) is UNSAT?
+    UNSAT → SemClosed holds for this pair. -/
+def smtCheckSemClosedBatch {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    [Hashable Reg] [BEq Reg] [ToString Reg]
+    (liftedPCs : Array (SymPC Reg))
+    (closure : Array (SymPC Reg))
+    (log : String → IO Unit := fun _ => pure ())
+    (tmpFile : System.FilePath := ".lake/smt_semclosed.smt2") :
+    IO (Array Bool) := do
+  if liftedPCs.size == 0 then return #[]
+  -- Collect register names from ALL PCs (lifted + closure)
+  let mut regNames : Std.HashSet String := {}
+  let mut needsMem := false
+  for pc in liftedPCs do
+    regNames := SymPC.collectRegNames pc regNames
+    if SymPC.hasLoad pc then needsMem := true
+  for pc in closure do
+    regNames := SymPC.collectRegNames pc regNames
+    if SymPC.hasLoad pc then needsMem := true
+  -- Build two-state preamble: s1_ and s2_ prefixed variables
+  let mut preamble := "(set-logic QF_UFBV)\n"
+  for name in regNames do
+    preamble := preamble ++ s!"(declare-const s1_{name} (_ BitVec 64))\n"
+    preamble := preamble ++ s!"(declare-const s2_{name} (_ BitVec 64))\n"
+  if needsMem then
+    preamble := preamble ++ "(declare-sort Mem 0)\n"
+    preamble := preamble ++ "(declare-const s1_base_mem Mem)\n"
+    preamble := preamble ++ "(declare-const s2_base_mem Mem)\n"
+    for w in ["8", "16", "32", "64"] do
+      preamble := preamble ++ s!"(declare-fun load_{w} (Mem (_ BitVec 64)) (_ BitVec 64))\n"
+      preamble := preamble ++ s!"(declare-fun store_{w} (Mem (_ BitVec 64) (_ BitVec 64)) Mem)\n"
+  -- Build closure agreement assertions (persistent across push/pop)
+  let mut agreeAsserts := ""
+  for psi in closure do
+    let psiSMT := SymPC.toSMTLib psi
+    let s1Psi := prefixSMTVars "s1_" psiSMT
+    let s2Psi := prefixSMTVars "s2_" psiSMT
+    agreeAsserts := agreeAsserts ++ s!"(assert (= {s1Psi} {s2Psi}))\n"
+  -- Build incremental script: for each lifted PC, push/assert-disagree/check/pop
+  let mut script := preamble ++ agreeAsserts
+  for lifted in liftedPCs do
+    let liftedSMT := SymPC.toSMTLib lifted
+    let s1Lifted := prefixSMTVars "s1_" liftedSMT
+    let s2Lifted := prefixSMTVars "s2_" liftedSMT
+    script := script ++ "(push)\n"
+    script := script ++ s!"(assert (not (= {s1Lifted} {s2Lifted})))\n"
+    script := script ++ "(check-sat)\n"
+    script := script ++ "(pop)\n"
+  script := script ++ "(exit)\n"
+  IO.FS.writeFile tmpFile script
+  let smtOut ← IO.Process.output { cmd := "cvc5", args := #["--incremental", tmpFile.toString] }
+  let results := parseSMTResults smtOut.stdout
+  log s!"  [semclosed-smt] {liftedPCs.size} two-state queries, {results.filter id |>.size} pass"
+  return results
+
 /-! ## PC-Signature Equivalence Class Dedup
 
 Two branches with the same substitution and the same PC signature (which guard PCs
@@ -1737,6 +1801,38 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
           log s!"    [closedness] smt: {clTotalQueries} queries (hits={fwdHits + revHits} misses={clTotalQueries - fwdHits - revHits}), {closedBySMT.size} closed, {closednessViolations} violations"
         let isClosed := closednessViolations == 0
         log s!"    [closedness] closure closed: {if isClosed then "YES" else "NO"}, violations={closednessViolations}"
+      -- Diagnostic: dump closure PCs and non-closed lifted PCs for analysis
+      do
+        log s!"    [closure-diag] {closure.size} closure PCs:"
+        let mut ci : Nat := 0
+        for pc in closure do
+          log s!"      φ[{ci}]: {SymPC.toSMTLib pc}  (loads={SymPC.hasLoad pc})"
+          ci := ci + 1
+        -- Dump first few non-closed lifted PCs
+        let mut dumpCount : Nat := 0
+        let mut b_idx : Nat := 0
+        for b in summaryArr do
+          let mut phi_idx : Nat := 0
+          for phi in closure do
+            if dumpCount < 10 then
+              let lifted := substSymPC b.sub phi
+              let liftedSimplified := simplifyLoadStorePC lifted
+              match SymPC.simplifyConst liftedSimplified with
+              | none => pure ()  -- trivial false
+              | some .true => pure ()  -- trivial true
+              | some pc' =>
+                -- Check if it matches any closure member
+                let mut matched := false
+                for phi_j in closure do
+                  if phi_j == pc' then matched := true
+                unless matched do
+                  log s!"      NONCLOSED b[{b_idx}]×φ[{phi_idx}]: {SymPC.toSMTLib pc'}"
+                  log s!"        original guard: {SymPC.toSMTLib phi}"
+                  log s!"        loads={SymPC.hasLoad pc'}"
+                  dumpCount := dumpCount + 1
+            phi_idx := phi_idx + 1
+          b_idx := b_idx + 1
+        log s!"    [closure-diag] showed {dumpCount} non-closed lifted PCs (first 10)"
       return some (k, summaryArr)
     frontier := newBranches
   return none
