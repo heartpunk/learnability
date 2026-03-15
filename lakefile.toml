@@ -16,7 +16,7 @@ rev = "v4.27.0"
 [[require]]
 name = "cslib"
 scope = "leanprover"
-rev = "v4.27.0-rc1"
+rev = "2df5ad8"
 
 [[require]]
 name = "smt"
