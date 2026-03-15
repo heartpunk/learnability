@@ -416,7 +416,7 @@ def SymPC.toSMTLib {Reg : Type} [ToString Reg] : SymPC Reg → String
   | .not φ => s!"(not {SymPC.toSMTLib φ})"
 
 /-- Collect all register names appearing in a SymPC (for variable declarations). -/
-partial def SymExpr.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
+def SymExpr.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
     : SymExpr Reg → Std.HashSet String → Std.HashSet String
   | .const _, s => s
   | .reg r, s => s.insert s!"reg_{toString r}"
@@ -435,7 +435,7 @@ partial def SymExpr.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hasha
   | .shr64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
   | .load _ _ addr, s => SymExpr.collectRegNames addr s
 
-partial def SymPC.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
+def SymPC.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
     : SymPC Reg → Std.HashSet String → Std.HashSet String
   | .true, s => s
   | .eq l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
