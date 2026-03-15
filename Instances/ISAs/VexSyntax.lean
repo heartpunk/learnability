@@ -428,7 +428,12 @@ address and width gives `truncate w v` (the value masked to width bits). -/
 
 theorem read_write_same_w8 (M : ByteMem) (a v : UInt64) :
     ByteMem.read .w8 (ByteMem.write .w8 M a v) a = truncate .w8 v := by
-  sorry
+  simp only [ByteMem.read, ByteMem.write, ByteMem.read8, ByteMem.write8]
+  rw [readByte_writeByte_same]
+  apply UInt64.ext
+  simp [truncate, Width.mask]
+  rw [Nat.mod_eq_of_lt (by omega)]
+  exact (Nat.and_two_pow_sub_one_eq_mod v.toNat 8).symm
 
 theorem read_write_same_w16 (M : ByteMem) (a v : UInt64) :
     ByteMem.read .w16 (ByteMem.write .w16 M a v) a = truncate .w16 v := by
