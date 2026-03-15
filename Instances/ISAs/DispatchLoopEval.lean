@@ -318,9 +318,18 @@ def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymEx
 def simplifyLoadStoreMem {Reg : Type} [DecidableEq Reg] : SymMem Reg → SymMem Reg
   | .base => .base
   | .store w mem addr val =>
-    .store w (simplifyLoadStoreMem mem)
-            (simplifyLoadStoreExpr addr)
-            (simplifyLoadStoreExpr val)
+    let mem' := simplifyLoadStoreMem mem
+    let addr' := simplifyLoadStoreExpr addr
+    let val' := simplifyLoadStoreExpr val
+    -- Dead store elimination: if inner memory is a store at the same address
+    -- with the same width, the inner store is overwritten — skip it.
+    match mem' with
+    | .store w' innerMem storeAddr' _ =>
+      if w == w' && addr' == storeAddr' then
+        .store w innerMem addr' val'
+      else
+        .store w mem' addr' val'
+    | _ => .store w mem' addr' val'
 end
 
 /-- Simplify load-after-store patterns in a SymPC. -/
@@ -368,9 +377,18 @@ def simplifyLoadStoreMemR {Reg : Type} [DecidableEq Reg]
     (classify : AddrClassifier Reg) : SymMem Reg → SymMem Reg
   | .base => .base
   | .store w mem addr val =>
-    .store w (simplifyLoadStoreMemR classify mem)
-            (simplifyLoadStoreExprR classify addr)
-            (simplifyLoadStoreExprR classify val)
+    let mem' := simplifyLoadStoreMemR classify mem
+    let addr' := simplifyLoadStoreExprR classify addr
+    let val' := simplifyLoadStoreExprR classify val
+    -- Dead store elimination: if inner memory is a store at the same address
+    -- with the same width, the inner store is overwritten — skip it.
+    match mem' with
+    | .store w' innerMem storeAddr' _ =>
+      if w == w' && addr' == storeAddr' then
+        .store w innerMem addr' val'
+      else
+        .store w mem' addr' val'
+    | _ => .store w mem' addr' val'
 end
 
 /-- Region-aware PC simplification. -/
