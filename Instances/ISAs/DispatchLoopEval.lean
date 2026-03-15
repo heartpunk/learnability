@@ -71,7 +71,7 @@ expression chains that cause unbounded growth in iterative composition. -/
 /-! ## Expression Diagnostics -/
 
 mutual
-partial def exprNodeCount {Reg : Type} : SymExpr Reg → Nat
+def exprNodeCount {Reg : Type} : SymExpr Reg → Nat
   | .const _ => 1
   | .reg _ => 1
   | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x => 1 + exprNodeCount x
@@ -80,11 +80,11 @@ partial def exprNodeCount {Reg : Type} : SymExpr Reg → Nat
     1 + exprNodeCount a + exprNodeCount b
   | .load _ m addr => 1 + memNodeCount m + exprNodeCount addr
 
-partial def memNodeCount {Reg : Type} : SymMem Reg → Nat
+def memNodeCount {Reg : Type} : SymMem Reg → Nat
   | .base => 1
   | .store _ m addr val => 1 + memNodeCount m + exprNodeCount addr + exprNodeCount val
 
-partial def exprUnresolvedLoads {Reg : Type} : SymExpr Reg → Nat
+def exprUnresolvedLoads {Reg : Type} : SymExpr Reg → Nat
   | .const _ | .reg _ => 0
   | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x => exprUnresolvedLoads x
   | .sub32 a b | .shl32 a b | .add64 a b | .sub64 a b
@@ -92,11 +92,11 @@ partial def exprUnresolvedLoads {Reg : Type} : SymExpr Reg → Nat
     exprUnresolvedLoads a + exprUnresolvedLoads b
   | .load _ m addr => (match m with | .base => 0 | _ => 1) + memUnresolvedLoads m + exprUnresolvedLoads addr
 
-partial def memUnresolvedLoads {Reg : Type} : SymMem Reg → Nat
+def memUnresolvedLoads {Reg : Type} : SymMem Reg → Nat
   | .base => 0
   | .store _ m addr val => memUnresolvedLoads m + exprUnresolvedLoads addr + exprUnresolvedLoads val
 
-partial def exprSummary {Reg : Type} [ToString Reg] : SymExpr Reg → Nat → String
+def exprSummary {Reg : Type} [ToString Reg] : SymExpr Reg → Nat → String
   | .const v, _ => s!"C({v})"
   | .reg r, _ => s!"R({r})"
   | _, 0 => s!"..."
