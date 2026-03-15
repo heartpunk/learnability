@@ -379,7 +379,7 @@ def Width.toSMTWidth : Width → String
 
 mutual
 /-- Encode a SymExpr as an SMT-LIB2 bitvector expression (64-bit). -/
-partial def SymExpr.toSMTLib {Reg : Type} [ToString Reg] : SymExpr Reg → String
+def SymExpr.toSMTLib {Reg : Type} [ToString Reg] : SymExpr Reg → String
   | .const v => s!"(_ bv{v.toNat} 64)"
   | .reg r => s!"reg_{toString r}"
   | .low32 e => s!"((_ zero_extend 32) ((_ extract 31 0) {SymExpr.toSMTLib e}))"
@@ -398,7 +398,7 @@ partial def SymExpr.toSMTLib {Reg : Type} [ToString Reg] : SymExpr Reg → Strin
   | .load w m addr => s!"(load_{Width.toSMTWidth w} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr})"
 
 /-- Encode a SymMem as an SMT-LIB2 expression (uninterpreted sort). -/
-partial def SymMem.toSMTLib {Reg : Type} [ToString Reg] : SymMem Reg → String
+def SymMem.toSMTLib {Reg : Type} [ToString Reg] : SymMem Reg → String
   | .base => "base_mem"
   | .store w m addr val =>
     s!"(store_{Width.toSMTWidth w} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr} {SymExpr.toSMTLib val})"
@@ -406,7 +406,7 @@ end
 
 /-- Encode a SymPC as an SMT-LIB2 boolean formula.
     Uses unsigned comparison (bvult/bvule) matching evalSymPC semantics. -/
-partial def SymPC.toSMTLib {Reg : Type} [ToString Reg] : SymPC Reg → String
+def SymPC.toSMTLib {Reg : Type} [ToString Reg] : SymPC Reg → String
   | .true => "true"
   | .eq l r => s!"(= {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
   | .lt l r => s!"(bvult {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
