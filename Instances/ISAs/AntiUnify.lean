@@ -285,4 +285,92 @@ def TemplatePC.holeCount {Reg : Type} : TemplatePC Reg → Nat
 def TemplatePC.isParametric {Reg : Type} (t : TemplatePC Reg) : Bool :=
   t.holeCount > 0
 
+/-! ## Instantiation: apply hole substitutions to recover ground terms -/
+
+/-- A hole valuation: maps hole IDs to ground expressions. -/
+abbrev HoleVal (Reg : Type) := HoleId → SymExpr Reg
+
+mutual
+/-- Instantiate a template expression by replacing holes with ground exprs. -/
+def instantiateExpr {Reg : Type} (val : HoleVal Reg) : TemplateExpr Reg → SymExpr Reg
+  | .hole h => val h
+  | .const v => .const v
+  | .reg r => .reg r
+  | .low32 x => .low32 (instantiateExpr val x)
+  | .uext32 x => .uext32 (instantiateExpr val x)
+  | .sext8to32 x => .sext8to32 (instantiateExpr val x)
+  | .sext32to64 x => .sext32to64 (instantiateExpr val x)
+  | .sub32 a b => .sub32 (instantiateExpr val a) (instantiateExpr val b)
+  | .shl32 a b => .shl32 (instantiateExpr val a) (instantiateExpr val b)
+  | .add64 a b => .add64 (instantiateExpr val a) (instantiateExpr val b)
+  | .sub64 a b => .sub64 (instantiateExpr val a) (instantiateExpr val b)
+  | .xor64 a b => .xor64 (instantiateExpr val a) (instantiateExpr val b)
+  | .and64 a b => .and64 (instantiateExpr val a) (instantiateExpr val b)
+  | .or64 a b => .or64 (instantiateExpr val a) (instantiateExpr val b)
+  | .shl64 a b => .shl64 (instantiateExpr val a) (instantiateExpr val b)
+  | .shr64 a b => .shr64 (instantiateExpr val a) (instantiateExpr val b)
+  | .load w m a => .load w (instantiateMem val m) (instantiateExpr val a)
+
+/-- Instantiate a template memory by replacing holes. -/
+def instantiateMem {Reg : Type} (val : HoleVal Reg) : TemplateMem Reg → SymMem Reg
+  | .hole _ => .base  -- Memory holes degenerate to base (conservative)
+  | .base => .base
+  | .store w m a v => .store w (instantiateMem val m) (instantiateExpr val a) (instantiateExpr val v)
+end
+
+/-- Instantiate a template PC by replacing holes with ground exprs. -/
+def instantiatePC {Reg : Type} (val : HoleVal Reg) : TemplatePC Reg → SymPC Reg
+  | .hole _ => .true  -- PC holes degenerate to true (conservative)
+  | .true => .true
+  | .eq a b => .eq (instantiateExpr val a) (instantiateExpr val b)
+  | .lt a b => .lt (instantiateExpr val a) (instantiateExpr val b)
+  | .le a b => .le (instantiateExpr val a) (instantiateExpr val b)
+  | .and φ ψ => .and (instantiatePC val φ) (instantiatePC val ψ)
+  | .not φ => .not (instantiatePC val φ)
+
+/-! ## Correctness: embedding roundtrip
+
+The fundamental property: embedding a ground term into template space and
+then instantiating with ANY valuation recovers the original term.
+This is because embedded terms have no holes. -/
+
+mutual
+theorem instantiateExpr_embedExpr {Reg : Type} (val : HoleVal Reg) (e : SymExpr Reg) :
+    instantiateExpr val (embedExpr e) = e := by
+  match e with
+  | .const _ | .reg _ => rfl
+  | .low32 x => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val x]
+  | .uext32 x => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val x]
+  | .sext8to32 x => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val x]
+  | .sext32to64 x => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val x]
+  | .sub32 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .shl32 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .add64 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .sub64 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .xor64 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .and64 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .or64 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .shl64 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .shr64 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .load w m a => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateMem_embedMem val m]
+
+theorem instantiateMem_embedMem {Reg : Type} (val : HoleVal Reg) (m : SymMem Reg) :
+    instantiateMem val (embedMem m) = m := by
+  match m with
+  | .base => rfl
+  | .store w mem a v =>
+    simp [embedMem, instantiateMem, instantiateMem_embedMem val mem,
+          instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val v]
+end
+
+theorem instantiatePC_embedPC {Reg : Type} (val : HoleVal Reg) (pc : SymPC Reg) :
+    instantiatePC val (embedPC pc) = pc := by
+  match pc with
+  | .true => rfl
+  | .eq a b => simp [embedPC, instantiatePC, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .lt a b => simp [embedPC, instantiatePC, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .le a b => simp [embedPC, instantiatePC, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
+  | .and φ ψ => simp [embedPC, instantiatePC, instantiatePC_embedPC val φ, instantiatePC_embedPC val ψ]
+  | .not φ => simp [embedPC, instantiatePC, instantiatePC_embedPC val φ]
+
 end VexISA
