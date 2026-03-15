@@ -33,8 +33,10 @@ This file provides the connection:
 
 - **pyvex**: VEX IR lifting is faithful to x86-64 semantics
 - **CVC5**: SMT implication checks are sound (no axiom — hypothesized in proof chain)
-- **`partial def` termination**: Lean's `partial def` functions compute the
-  same results as their total equivalents
+- **`partial def` termination**: The remaining `partial def` functions
+  (`dfsExtractProds`, `ltsExtractProds`) are graph traversal utilities
+  with depth/visited parameters — not expression-level operations.
+  All SymExpr/SymMem/SymPC structural recursions are now total `def`.
 - **Simplification soundness**: `simplifyConst`, `simplifyLoadStoreExpr`,
   `simplifyLoadStorePC` preserve evaluation semantics
   (proved in `VexSimplificationSoundness.lean`)
