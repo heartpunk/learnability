@@ -309,7 +309,7 @@ solver is only invoked for genuinely novel signatures. -/
 
 mutual
 /-- Canonicalize a SymExpr: sort operands of commutative ops by hash. -/
-partial def canonicalizeExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → SymExpr Reg
+def canonicalizeExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → SymExpr Reg
   | .const v => .const v
   | .reg r => .reg r
   | .low32 x => .low32 (canonicalizeExpr x)
@@ -335,7 +335,7 @@ partial def canonicalizeExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → SymEx
   | .shr64 a b => .shr64 (canonicalizeExpr a) (canonicalizeExpr b)
   | .load w m addr => .load w (canonicalizeMem m) (canonicalizeExpr addr)
 /-- Canonicalize a SymMem: normalize expressions within stores. -/
-partial def canonicalizeMem {Reg : Type} [Hashable Reg] : SymMem Reg → SymMem Reg
+def canonicalizeMem {Reg : Type} [Hashable Reg] : SymMem Reg → SymMem Reg
   | .base => .base
   | .store w m addr val =>
     .store w (canonicalizeMem m) (canonicalizeExpr addr) (canonicalizeExpr val)
@@ -352,7 +352,7 @@ def reassembleAnd {Reg : Type} : List (SymPC Reg) → SymPC Reg
     - lt/le: canonicalize sub-expressions, keep direction
     - not(not(x)): eliminate double negation
     - and: flatten conjuncts, canonicalize each, sort by hash, right-associate -/
-partial def canonicalizePC {Reg : Type} [Hashable Reg] : SymPC Reg → SymPC Reg
+def canonicalizePC {Reg : Type} [Hashable Reg] : SymPC Reg → SymPC Reg
   | .true => .true
   | .eq a b =>
     let a' := canonicalizeExpr a; let b' := canonicalizeExpr b
@@ -362,9 +362,10 @@ partial def canonicalizePC {Reg : Type} [Hashable Reg] : SymPC Reg → SymPC Reg
   | .not (.not x) => canonicalizePC x
   | .not x => .not (canonicalizePC x)
   | .and φ ψ =>
-    let conjuncts := SymPC.conjuncts (.and φ ψ)
-    let canon := conjuncts.map canonicalizePC
-    let sorted := (canon.toArray.qsort (fun a b => (hash a) < (hash b))).toList
+    let φ' := canonicalizePC φ
+    let ψ' := canonicalizePC ψ
+    let conjuncts := SymPC.conjuncts φ' ++ SymPC.conjuncts ψ'
+    let sorted := (conjuncts.toArray.qsort (fun a b => (hash a) < (hash b))).toList
     reassembleAnd sorted
 
 instance : ToString Amd64Reg where
