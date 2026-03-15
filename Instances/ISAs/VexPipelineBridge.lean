@@ -330,4 +330,288 @@ structure PipelineTrustBoundaries (Reg : Type) [DecidableEq Reg] [Fintype Reg] w
 
 end EndToEnd
 
+/-! ## Phase 5b: Semantic Closure — Certified Pipeline Support
+
+Replaces syntactic `h_closed` with `SemClosed` (from SymExec/Refinement.lean).
+CVC5 finds witnesses (untrusted oracle), `bv_decide` verifies equivalences
+(kernel-checked). Nothing outside Lean's kernel is in the TCB. -/
+
+section SemanticClosureVex
+
+variable {Reg : Type}
+variable [DecidableEq Reg] [Fintype Reg]
+variable [∀ (s : ConcreteState Reg) (φ : SymPC Reg),
+  Decidable ((vexSummaryISA Reg).satisfies s φ)]
+
+/-- Two symbolic PCs are semantically equivalent: same truth value under all
+    concrete states. Used for bv_decide-based witness verification. -/
+def semEquivPC (pc1 pc2 : SymPC Reg) : Prop :=
+  ∀ (state : ConcreteState Reg), evalSymPC state pc1 = evalSymPC state pc2
+
+/-- Witness-based semantic closure: for each branch and closure PC, the lifted
+    PC is semantically equivalent to some closure member. CVC5 finds the
+    witness (untrusted), bv_decide verifies (kernel-checked). -/
+def WitnessSemClosed
+    (closure : Finset (SymPC Reg))
+    (model : Finset (Branch (SymSub Reg) (SymPC Reg))) : Prop :=
+  ∀ b ∈ model, ∀ φ ∈ closure,
+    ∃ φ' ∈ closure, semEquivPC (substSymPC b.sub φ) φ'
+
+set_option linter.unusedSectionVars false in
+/-- Syntactic closure trivially implies witness-based semantic closure:
+    take the lifted PC itself as the witness. -/
+theorem syntacticClosed_implies_witnessSemClosed
+    (closure : Finset (SymPC Reg))
+    (model : Finset (Branch (SymSub Reg) (SymPC Reg)))
+    (h : ∀ b ∈ model, ∀ φ ∈ closure,
+      (vexSummaryISA Reg).pc_lift b.sub φ ∈ closure) :
+    WitnessSemClosed closure model := by
+  intro b hb φ hφ
+  exact ⟨substSymPC b.sub φ, h b hb φ hφ, fun _ => rfl⟩
+
+set_option linter.unusedSectionVars false in
+/-- Witness-based semantic closure implies the generic SemClosed from
+    SymExec/Refinement.lean. The witness provides the bridge: states
+    agreeing on the witness agree on the lifted PC. -/
+theorem witnessSemClosed_implies_semClosed
+    (closure : Finset (SymPC Reg))
+    (model : Finset (Branch (SymSub Reg) (SymPC Reg)))
+    (h : WitnessSemClosed closure model) :
+    SemClosed (vexSummaryISA Reg) model closure := by
+  intro b hb φ hφ s₁ s₂ h_equiv
+  obtain ⟨φ', hφ'_mem, hφ'_equiv⟩ := h b hb φ hφ
+  constructor
+  · intro hsat
+    have h₁ : evalSymPC s₁ (substSymPC b.sub φ) = true := hsat
+    rw [hφ'_equiv] at h₁
+    have h₂ : evalSymPC s₂ φ' = true := (h_equiv φ' hφ'_mem).mp h₁
+    show evalSymPC s₂ (substSymPC b.sub φ) = true
+    rw [hφ'_equiv]; exact h₂
+  · intro hsat
+    have h₁ : evalSymPC s₂ (substSymPC b.sub φ) = true := hsat
+    rw [hφ'_equiv] at h₁
+    have h₂ : evalSymPC s₁ φ' = true := (h_equiv φ' hφ'_mem).mpr h₁
+    show evalSymPC s₁ (substSymPC b.sub φ) = true
+    rw [hφ'_equiv]; exact h₂
+
+/-- Body effect preserves PC-equivalence under semantic closure.
+    Variant of `dispatch_bodyEffect_pcEquiv` from VexDispatchLoop.lean. -/
+private theorem dispatch_bodyEffect_pcEquiv_sem
+    (loop : VexLoopSummary Reg) (allBlocks : Finset (Block Reg))
+    (closure : Finset (SymPC Reg))
+    (hStep : ∀ s, ∃ b ∈ allBlocks, loop.bodyEffect s ∈ execBlockSuccs b s)
+    (hAllBlocks : ∀ s blk, blk ∈ allBlocks →
+        (∃ σ ∈ lowerBlockSummaries blk, Summary.enabled σ s) →
+        loop.bodyEffect s ∈ execBlockSuccs blk s)
+    (h_contains : ∀ b ∈ branchingLoopModel loop (allBlocks.image (fun b => [b])),
+        b.pc ∈ closure)
+    (h_semClosed : SemClosed (vexSummaryISA Reg)
+        (branchingLoopModel loop (allBlocks.image (fun b => [b]))) closure)
+    {s₁ s₂ : ConcreteState Reg}
+    (hEquiv : (pcSetoidWith (vexSummaryISA Reg) closure).r s₁ s₂) :
+    (pcSetoidWith (vexSummaryISA Reg) closure).r
+      (loop.bodyEffect s₁) (loop.bodyEffect s₂) := by
+  set bodyPaths := allBlocks.image (fun b => [b])
+  obtain ⟨cls, ⟨hpath, hsummary, henabled₁, hsig₁⟩, happly₁, _⟩ :=
+    dispatch_bodyPathStepRealizable loop allBlocks closure hStep s₁
+  have hmem : summaryAsBranch cls.summary ∈ branchingLoopModel loop bodyPaths :=
+    summaryAsBranch_mem_branchingLoopModel loop hpath hsummary
+  have henabled₂ : Summary.enabled cls.summary s₂ :=
+    pcEquiv_branch_firesWith (isa := vexSummaryISA Reg)
+      (h_contains _ hmem) hEquiv henabled₁
+  have hsig₂ : pcSignatureWith (vexSummaryISA Reg) closure s₂ = cls.signature :=
+    (pcSignature_eq_of_equivWith (isa := vexSummaryISA Reg) hEquiv).symm.trans hsig₁
+  have hreal₂ : cls.Realizes bodyPaths closure s₂ :=
+    ⟨hpath, hsummary, henabled₂, hsig₂⟩
+  -- Key change: use SemClosed for successor PC-equivalence
+  have hequiv₁₂ := LiveBranchClass.pcEquiv_of_realizes
+    (cls := cls) ⟨hpath, hsummary, henabled₁, hsig₁⟩ hreal₂
+  have hsucc : (pcSetoidWith (vexSummaryISA Reg) closure).r
+      (Summary.apply cls.summary s₁) (Summary.apply cls.summary s₂) := by
+    simpa [Summary.apply, summaryAsBranch] using
+      pcEquiv_eval_sub_semClosed (isa := vexSummaryISA Reg)
+        (b := summaryAsBranch cls.summary)
+        hmem h_semClosed hequiv₁₂
+  rw [happly₁] at hsucc
+  have h_sound := dispatch_bodyBranchSound loop allBlocks hAllBlocks
+  have hmem_body : (summaryAsBranch cls.summary) ∈
+      (bodyBranchModel bodyPaths : Set (Branch (SymSub Reg) (SymPC Reg))) :=
+    Finset.mem_coe.mpr (Finset.mem_image.mpr
+      ⟨cls.summary, Finset.mem_biUnion.mpr ⟨cls.path, hpath, hsummary⟩, rfl⟩)
+  have happly₂ : Summary.apply cls.summary s₂ = loop.bodyEffect s₂ :=
+    h_sound (summaryAsBranch cls.summary) hmem_body s₂ henabled₂
+  rw [happly₂] at hsucc
+  exact hsucc
+
+set_option linter.unusedSectionVars false in
+/-- Extract base summary from composed path summary (local copy of private
+    helper from VexDispatchLoop.lean). -/
+private theorem enabled_base_of_composed'
+    {blk : Block Reg} {σ : Summary Reg}
+    {s : ConcreteState Reg}
+    (hσ : σ ∈ lowerBlockPathSummaries [blk])
+    (hEnabled : Summary.enabled σ s) :
+    ∃ τ ∈ lowerBlockSummaries blk, Summary.enabled τ s := by
+  simp only [lowerBlockPathSummaries, composeSummaryFinsets,
+    Finset.mem_biUnion, Finset.mem_image, Finset.mem_singleton] at hσ
+  obtain ⟨τ, hτMem, rid, hrid, hτCompose⟩ := hσ
+  subst hrid
+  refine ⟨τ, hτMem, ?_⟩
+  rw [← hτCompose] at hEnabled
+  simp only [Summary.compose, Summary.id, Summary.enabled,
+    satisfiesSymPC, evalSymPC, Bool.and_eq_true, substSymPC] at hEnabled ⊢
+  exact hEnabled.1
+
+/-- Dispatch loop branch-class stability under semantic closure.
+    The proof factors out the common core: once bodyEffect preserves
+    PC-equivalence (from `dispatch_bodyEffect_pcEquiv_sem`), the
+    orbit-cycling argument is identical to the syntactic version. -/
+theorem dispatch_branchClassesStable_sem
+    (loop : VexLoopSummary Reg) (allBlocks : Finset (Block Reg))
+    (closure : Finset (SymPC Reg))
+    (hStep : ∀ s, ∃ b ∈ allBlocks, loop.bodyEffect s ∈ execBlockSuccs b s)
+    (hAllBlocks : ∀ s blk, blk ∈ allBlocks →
+        (∃ σ ∈ lowerBlockSummaries blk, Summary.enabled σ s) →
+        loop.bodyEffect s ∈ execBlockSuccs blk s)
+    (h_contains : ∀ b ∈ branchingLoopModel loop (allBlocks.image (fun b => [b])),
+        b.pc ∈ closure)
+    (h_semClosed : SemClosed (vexSummaryISA Reg)
+        (branchingLoopModel loop (allBlocks.image (fun b => [b]))) closure) :
+    BranchClassesStable loop (allBlocks.image (fun b => [b])) closure
+      (Fintype.card (Quotient (pcSetoidWith (vexSummaryISA Reg) closure))) := by
+  set bodyPaths := allBlocks.image (fun b => [b])
+  -- Lift bodyEffect to the quotient via semantic closure
+  have hInv : ∀ s₁ s₂ : ConcreteState Reg,
+      (pcSetoidWith (vexSummaryISA Reg) closure).r s₁ s₂ →
+      (pcSetoidWith (vexSummaryISA Reg) closure).r
+        (loop.bodyEffect s₁) (loop.bodyEffect s₂) :=
+    fun _ _ h => dispatch_bodyEffect_pcEquiv_sem loop allBlocks closure
+      hStep hAllBlocks h_contains h_semClosed h
+  let qf : Quotient (pcSetoidWith (vexSummaryISA Reg) closure) →
+      Quotient (pcSetoidWith (vexSummaryISA Reg) closure) :=
+    Quotient.lift
+      (fun s => Quotient.mk (pcSetoidWith (vexSummaryISA Reg) closure) (loop.bodyEffect s))
+      (fun _ _ h => Quotient.sound (hInv _ _ h))
+  have hIter : ∀ n (s : ConcreteState Reg),
+      qf^[n] (Quotient.mk _ s) =
+        Quotient.mk (pcSetoidWith (vexSummaryISA Reg) closure)
+          (loop.bodyEffect^[n] s) := by
+    intro n; induction n with
+    | zero => intro s; rfl
+    | succ n ih =>
+      intro s
+      have h1 : qf (Quotient.mk (pcSetoidWith (vexSummaryISA Reg) closure) s) =
+          Quotient.mk (pcSetoidWith (vexSummaryISA Reg) closure) (loop.bodyEffect s) :=
+        Quotient.lift_mk _ _ _
+      calc qf^[n + 1] (Quotient.mk _ s)
+          = qf^[n] (qf (Quotient.mk _ s)) := rfl
+        _ = qf^[n] (Quotient.mk _ (loop.bodyEffect s)) := by rw [h1]
+        _ = Quotient.mk _ (loop.bodyEffect^[n] (loop.bodyEffect s)) := ih _
+        _ = Quotient.mk _ (loop.bodyEffect^[n + 1] s) := rfl
+  haveI : DecidableEq (Quotient (pcSetoidWith (vexSummaryISA Reg) closure)) :=
+    Classical.decEq _
+  intro s n hn
+  have h_orbit := finite_orbit_bound qf n (by omega)
+    (Quotient.mk (pcSetoidWith (vexSummaryISA Reg) closure) s)
+  rw [hIter n s] at h_orbit
+  rw [Finset.mem_image] at h_orbit
+  obtain ⟨m, hm_range, hm_eq⟩ := h_orbit
+  rw [hIter m s] at hm_eq
+  have hm_le : m ≤ Fintype.card
+      (Quotient (pcSetoidWith (vexSummaryISA Reg) closure)) := by
+    have := Finset.mem_range.mp hm_range; omega
+  have hEquiv : (pcSetoidWith (vexSummaryISA Reg) closure).r
+      (loop.bodyEffect^[n] s) (loop.bodyEffect^[m] s) :=
+    Quotient.exact hm_eq.symm
+  have hstep := dispatch_bodyPathStepRealizable loop allBlocks closure hStep
+  obtain ⟨cls, hcls_n⟩ := hstep (loop.bodyEffect^[n] s)
+  refine ⟨cls, m, hm_le, hcls_n, ?_⟩
+  obtain ⟨⟨hpath, hsummary, henabled_n, hsig_n⟩, happly_n, hexec_n⟩ := hcls_n
+  have hmem : summaryAsBranch cls.summary ∈ branchingLoopModel loop bodyPaths :=
+    summaryAsBranch_mem_branchingLoopModel loop hpath hsummary
+  have henabled_m : Summary.enabled cls.summary (loop.bodyEffect^[m] s) :=
+    pcEquiv_branch_firesWith (isa := vexSummaryISA Reg) (h_contains _ hmem) hEquiv henabled_n
+  have hsig_m : pcSignatureWith (vexSummaryISA Reg) closure (loop.bodyEffect^[m] s) =
+      cls.signature :=
+    (pcSignature_eq_of_equivWith (isa := vexSummaryISA Reg) hEquiv).symm.trans hsig_n
+  have hreal_m : cls.Realizes bodyPaths closure (loop.bodyEffect^[m] s) :=
+    ⟨hpath, hsummary, henabled_m, hsig_m⟩
+  have h_sound := dispatch_bodyBranchSound loop allBlocks hAllBlocks
+  have hmem_body : (summaryAsBranch cls.summary) ∈
+      (bodyBranchModel bodyPaths : Set (Branch (SymSub Reg) (SymPC Reg))) :=
+    Finset.mem_coe.mpr (Finset.mem_image.mpr
+      ⟨cls.summary, Finset.mem_biUnion.mpr ⟨cls.path, hpath, hsummary⟩, rfl⟩)
+  have happly_m : Summary.apply cls.summary (loop.bodyEffect^[m] s) =
+      loop.bodyEffect (loop.bodyEffect^[m] s) :=
+    h_sound (summaryAsBranch cls.summary) hmem_body _ henabled_m
+  have hpath_mem := hpath
+  rw [Finset.mem_image] at hpath_mem
+  obtain ⟨blk, hblk_mem, hblk_eq⟩ := hpath_mem
+  have hblk_path : cls.summary ∈ lowerBlockPathSummaries [blk] :=
+    hblk_eq ▸ hsummary
+  obtain ⟨τ, hτ_mem, hτ_enabled⟩ := enabled_base_of_composed' hblk_path henabled_m
+  have hexec_m_succ : loop.bodyEffect (loop.bodyEffect^[m] s) ∈
+      execBlockSuccs blk (loop.bodyEffect^[m] s) :=
+    hAllBlocks _ blk hblk_mem ⟨τ, hτ_mem, hτ_enabled⟩
+  have hexec_m : loop.bodyEffect (loop.bodyEffect^[m] s) ∈
+      execBlockPath cls.path (loop.bodyEffect^[m] s) :=
+    hblk_eq ▸ (execBlockPath_singleton blk _).symm ▸ hexec_m_succ
+  exact ⟨hreal_m, happly_m, hexec_m⟩
+
+end SemanticClosureVex
+
+/-! ## Phase 5c: End-to-End with Semantic Closure -/
+
+section EndToEndSem
+
+variable {Reg : Type} {Obs : Type}
+variable [DecidableEq Reg] [Fintype Reg]
+variable [∀ (s : ConcreteState Reg) (φ : SymPC Reg),
+  Decidable ((vexSummaryISA Reg).satisfies s φ)]
+
+/-- End-to-end pipeline correctness under semantic closure. -/
+theorem pipeline_extracted_model_adequate_sem
+    (program : Program Reg) (ip_reg : Reg)
+    (loop : VexLoopSummary Reg)
+    (Relevant : ConcreteState Reg → Prop)
+    (observe : ConcreteState Reg → Obs)
+    (allBlocks : Finset (Block Reg))
+    (closure : Finset (SymPC Reg))
+    (hStep : ∀ s, ∃ b ∈ allBlocks, loop.bodyEffect s ∈ execBlockSuccs b s)
+    (hAllBlocks : ∀ s blk, blk ∈ allBlocks →
+        (∃ σ ∈ lowerBlockSummaries blk, Summary.enabled σ s) →
+        loop.bodyEffect s ∈ execBlockSuccs blk s)
+    (h_contains : ∀ b ∈ branchingLoopModel loop (allBlocks.image (fun b => [b])),
+        b.pc ∈ closure)
+    (h_semClosed : SemClosed (vexSummaryISA Reg)
+        (branchingLoopModel loop (allBlocks.image (fun b => [b]))) closure)
+    (hsound : BranchingLoopWitnessSound
+      (whileLoopRegionSpec program ip_reg loop Relevant observe)
+      (allBlocks.image (fun b => [b]))
+      (Fintype.card (Quotient (pcSetoidWith (vexSummaryISA Reg) closure))))
+    (hobs : PCObserveInvariant closure observe) :
+    ∀ s o,
+      VexModelDenotesObs Relevant observe
+        (lowerPathFamilySummaries
+          (branchingLoopWitness (allBlocks.image (fun b => [b]))
+            (Fintype.card (Quotient (pcSetoidWith (vexSummaryISA Reg) closure)))))
+        s o ↔
+      (whileLoopRegionSpec program ip_reg loop Relevant observe).DenotesObs s o := by
+  have hcomplete : BranchingLoopWitnessComplete
+      (whileLoopRegionSpec program ip_reg loop Relevant observe)
+      (allBlocks.image (fun b => [b]))
+      (Fintype.card (Quotient (pcSetoidWith (vexSummaryISA Reg) closure))) := by
+    apply whileBranchingLoopWitnessComplete_of_branchClassesStable
+      program ip_reg loop Relevant observe _ closure
+    · exact hsound
+    · exact dispatch_bodyPathStepRealizable loop allBlocks closure hStep
+    · exact dispatch_branchClassesStable_sem loop allBlocks closure
+        hStep hAllBlocks h_contains h_semClosed
+    · exact hobs
+  exact extractedModel_of_witnessComplete
+    (LoopRegion (whileLoopRegionSpec program ip_reg loop Relevant observe))
+    _ hcomplete
+
+end EndToEndSem
+
 end VexISA
