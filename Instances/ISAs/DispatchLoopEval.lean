@@ -282,13 +282,32 @@ def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
         -- different regions, they can't alias — skip the store.
         match classify with
         | some clf =>
-          match (clf storeAddr, clf loadAddr) with
-          | (some sr, some lr) =>
-            if sr != lr then
-              resolveLoadFrom loadWidth innerMem loadAddr classify  -- different regions, skip
-            else
-              .load loadWidth mem loadAddr  -- same region, can't determine
-          | _ => .load loadWidth mem loadAddr  -- unclassifiable, conservative
+          -- Constant-vs-stack non-aliasing: a constant (link-time) address
+          -- can never alias a stack (runtime rsp/rbp-relative) address.
+          let constStackSkip :=
+            match loadAddr with
+            | .const _ =>
+              match clf storeAddr with
+              | some .stack => true
+              | _ => false
+            | _ => false
+          let stackConstSkip :=
+            match storeAddr with
+            | .const _ =>
+              match clf loadAddr with
+              | some .stack => true
+              | _ => false
+            | _ => false
+          if constStackSkip || stackConstSkip then
+            resolveLoadFrom loadWidth innerMem loadAddr classify  -- const/stack non-aliasing
+          else
+            match (clf storeAddr, clf loadAddr) with
+            | (some sr, some lr) =>
+              if sr != lr then
+                resolveLoadFrom loadWidth innerMem loadAddr classify  -- different regions, skip
+              else
+                .load loadWidth mem loadAddr  -- same region, can't determine
+            | _ => .load loadWidth mem loadAddr  -- unclassifiable, conservative
         | none => .load loadWidth mem loadAddr  -- no classifier, conservative
 
 mutual
