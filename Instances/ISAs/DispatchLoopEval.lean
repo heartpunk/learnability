@@ -178,7 +178,7 @@ def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
   | .base => .load loadWidth .base loadAddr
   | .store storeWidth innerMem storeAddr storeVal =>
     if loadWidth == storeWidth && loadAddr == storeAddr then
-      storeVal  -- MATCH: load reads what was just stored
+      .and64 storeVal (.const loadWidth.mask)  -- MATCH: truncate to width (read truncates)
     else
       match (storeAddr, loadAddr) with
       | (.const a, .const b) =>

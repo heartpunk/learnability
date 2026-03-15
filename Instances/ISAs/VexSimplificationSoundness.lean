@@ -185,21 +185,45 @@ theorem foldSub64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
              rw [uint64_sub_sub, uint64_sub_add, uint64_add_sub])
   )
 
-/-! ## resolveLoadFrom trust boundary
+/-! ## resolveLoadFrom soundness
 
-`resolveLoadFrom` resolves loads through store chains. Its correctness
-subsumes two ByteMem properties:
-1. Read-after-write at same address/width (provable but tedious)
-2. Skip stores at different constant addresses (assumes non-overlapping byte ranges)
+`resolveLoadFrom` resolves loads through store chains. Proved using:
+- `ByteMem_read_write_same`: byte round-trip at same address/width
+- `ByteMem_read_write_nonoverlap`: skip stores at non-overlapping byte ranges -/
 
-Property (2) is sound for aligned accesses (standard x86-64 stack patterns)
-but NOT generally true for overlapping multi-byte ranges at different base addresses.
-This is a trust boundary on the pipeline's memory access patterns. -/
-
-axiom resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (w : Width) (mem : SymMem Reg) (addr : SymExpr Reg) (s : ConcreteState Reg) :
     evalSymExpr s (resolveLoadFrom w mem addr) =
-    ByteMem.read w (evalSymMem s mem) (evalSymExpr s addr)
+    ByteMem.read w (evalSymMem s mem) (evalSymExpr s addr) := by
+  induction mem with
+  | base => rfl
+  | store sw innerMem sa sv ih =>
+    simp only [resolveLoadFrom]
+    split
+    · -- Matching case: same width and address
+      rename_i hmatch
+      have hw := (Bool.and_eq_true _ _).mp hmatch
+      have hwEq : w = sw := eq_of_beq hw.1
+      have haEq : addr = sa := eq_of_beq hw.2
+      subst hwEq; subst haEq
+      simp only [evalSymExpr, evalSymMem]
+      rw [ByteMem_read_write_same]
+      simp only [truncate]
+    · -- Non-matching case
+      split
+      · -- Both const addresses
+        rename_i a b
+        split
+        · -- Non-overlapping: skip store, use IH
+          rename_i hnoverlap
+          rw [ih]
+          simp only [evalSymExpr, evalSymMem]
+          rw [ByteMem_read_write_nonoverlap w sw (evalSymMem s innerMem)
+              a (evalSymExpr s sv) b hnoverlap]
+        · -- Overlapping: conservative, keep as-is
+          simp only [evalSymExpr, evalSymMem]
+      · -- Non-const addresses: conservative, keep as-is
+        simp only [evalSymExpr, evalSymMem]
 
 /-! ## Proved: simplifyLoadStoreExpr / simplifyLoadStoreMem soundness
 

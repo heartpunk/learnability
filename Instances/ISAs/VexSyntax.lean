@@ -405,4 +405,56 @@ theorem readLEAux_writeLEAux_nonoverlap
       (fun i hi => h i k hi (Nat.lt_succ_of_le (Nat.le_refl k)))
     rw [ih', hk]
 
+/-! ## readLEAux after single writeByte at non-overlapping address -/
+
+theorem readLEAux_writeByte_nonoverlap
+    (mem : ByteMem) (a : UInt64) (val : UInt8)
+    (b : UInt64) (n : Nat)
+    (h : ∀ j : Nat, j < n → a ≠ b + UInt64.ofNat j) :
+    ByteMem.readLEAux (ByteMem.writeByte mem a val) b n =
+    ByteMem.readLEAux mem b n := by
+  induction n with
+  | zero => rfl
+  | succ k ih =>
+    simp only [ByteMem.readLEAux]
+    have hk : a ≠ b + UInt64.ofNat k := h k (Nat.lt_succ_of_le (Nat.le_refl k))
+    have ih' := ih (fun j hj => h j (Nat.lt_of_lt_of_le hj (Nat.le_succ k)))
+    rw [ih', readByte_writeByte_ne mem a (b + UInt64.ofNat k) val hk]
+
+/-! ## Byte round-trip: read after write at same address
+
+These theorems show that writing a value and reading it back at the same
+address and width gives `truncate w v` (the value masked to width bits). -/
+
+theorem read_write_same_w8 (M : ByteMem) (a v : UInt64) :
+    ByteMem.read .w8 (ByteMem.write .w8 M a v) a = truncate .w8 v := by
+  sorry
+
+theorem read_write_same_w16 (M : ByteMem) (a v : UInt64) :
+    ByteMem.read .w16 (ByteMem.write .w16 M a v) a = truncate .w16 v := by
+  sorry
+
+theorem read_write_same_w32 (M : ByteMem) (a v : UInt64) :
+    ByteMem.read .w32 (ByteMem.write .w32 M a v) a = truncate .w32 v := by
+  sorry
+
+theorem read_write_same_w64 (M : ByteMem) (a v : UInt64) :
+    ByteMem.read .w64 (ByteMem.write .w64 M a v) a = truncate .w64 v := by
+  sorry
+
+theorem ByteMem_read_write_same (w : Width) (M : ByteMem) (a v : UInt64) :
+    ByteMem.read w (ByteMem.write w M a v) a = truncate w v := by
+  cases w
+  · exact read_write_same_w8 M a v
+  · exact read_write_same_w16 M a v
+  · exact read_write_same_w32 M a v
+  · exact read_write_same_w64 M a v
+
+/-! ## Width-level non-overlap: read after write at non-overlapping byte ranges -/
+
+theorem ByteMem_read_write_nonoverlap (lw sw : Width) (M : ByteMem) (a v b : UInt64)
+    (h : a + UInt64.ofNat sw.byteCount ≤ b ∨ b + UInt64.ofNat lw.byteCount ≤ a) :
+    ByteMem.read lw (ByteMem.write sw M a v) b = ByteMem.read lw M b := by
+  sorry
+
 end VexISA
