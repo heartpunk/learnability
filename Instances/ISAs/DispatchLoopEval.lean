@@ -1783,7 +1783,7 @@ def stripRipGuards {Reg : Type} [BEq Reg] (ip_reg : Reg) (pc : SymPC Reg) : SymP
   | c :: rest => rest.foldl .and c
 
 /-- Pretty-print a SymExpr concisely. -/
-partial def ppExpr : SymExpr Amd64Reg → String
+def ppExpr : SymExpr Amd64Reg → String
   | .const v =>
     let n := v.toNat
     if n ≥ 32 && n ≤ 126 then s!"'{Char.ofNat n}'"
@@ -1802,7 +1802,7 @@ partial def ppExpr : SymExpr Amd64Reg → String
   | _ => "..."
 
 /-- Pretty-print a SymPC atom as a character condition on rax. -/
-partial def ppCharCond (rax : Amd64Reg) : SymPC Amd64Reg → String
+def ppCharCond (rax : Amd64Reg) : SymPC Amd64Reg → String
   | .eq (.reg r) (.const c) =>
     if r == rax then
       let n := c.toNat
@@ -1863,14 +1863,14 @@ def printDFATable (log : String → IO Unit)
 /-! ## Production Extraction via Body CFG -/
 
 /-- Check if a SymExpr references the rsp register (for detecting call return-address stores). -/
-partial def exprUsesRSP : SymExpr Amd64Reg → Bool
+def exprUsesRSP : SymExpr Amd64Reg → Bool
   | .reg .rsp => true
   | .add64 a b | .sub64 a b => exprUsesRSP a || exprUsesRSP b
   | .load _ _ addr => exprUsesRSP addr
   | _ => false
 
 /-- Extract the constant return address pushed by a call instruction at [rsp - k]. -/
-partial def extractCallReturn (mem : SymMem Amd64Reg) : Option UInt64 :=
+def extractCallReturn (mem : SymMem Amd64Reg) : Option UInt64 :=
   match mem with
   | .base => none
   | .store _ inner addr (.const v) =>
@@ -1881,7 +1881,7 @@ partial def extractCallReturn (mem : SymMem Amd64Reg) : Option UInt64 :=
     Used to decode the character constants inside VEX-style signed-comparison expressions
     (e.g. sx32(lo32(lo32(const '/')))+2^63  →  '/').
     Returns Some v only if v is a printable ASCII char (32..126). -/
-partial def stripToCharConst : SymExpr Amd64Reg → Option UInt64
+def stripToCharConst : SymExpr Amd64Reg → Option UInt64
   | .const v => if v.toNat ≥ 32 && v.toNat ≤ 126 then some v else none
   | .low32 inner | .uext32 inner | .sext32to64 inner => stripToCharConst inner
   | .add64 a b => stripToCharConst a <|> stripToCharConst b
@@ -2200,7 +2200,7 @@ instance : ToString CharClass := ⟨CharClass.toString⟩
 
 /-- Extract a small constant from a wrapped SymExpr (strips sext, zext, low32, add64).
     Unlike stripToCharConst, accepts ALL constants < 256, not just printable. -/
-partial def stripToSmallConst : SymExpr Amd64Reg → Option UInt64
+def stripToSmallConst : SymExpr Amd64Reg → Option UInt64
   | .const v => if v.toNat < 256 then some v else none
   | .low32 inner | .uext32 inner | .sext8to32 inner | .sext32to64 inner =>
     stripToSmallConst inner
@@ -2211,7 +2211,7 @@ partial def stripToSmallConst : SymExpr Amd64Reg → Option UInt64
     variable rather than the global `sym` variable. The global `sym` is accessed
     through a chain of loads from constant addresses (e.g., load(mem, load(mem, 0x500030))).
     Local variables use register-relative addresses (e.g., load(mem, rbp-16)). -/
-partial def exprLoadsViaRegAddr : SymExpr Amd64Reg → Bool
+def exprLoadsViaRegAddr : SymExpr Amd64Reg → Bool
   | .load _ _ addr => addrUsesRegs addr
   | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => exprLoadsViaRegAddr e
   | .add64 a b | .sub64 a b | .xor64 a b | .and64 a b | .or64 a b
@@ -2554,7 +2554,7 @@ def extractRaxValueRaw (sub : SymSub Amd64Reg) : Option UInt64 :=
 
 /-- Resolve a SymExpr to a constant, substituting known rip value.
     Handles patterns like add64(reg(rip), const(offset)), const(v), etc. -/
-partial def resolveExprConst (ripVal : Option UInt64) : SymExpr Amd64Reg → Option UInt64
+def resolveExprConst (ripVal : Option UInt64) : SymExpr Amd64Reg → Option UInt64
   | .const v => some v
   | .reg .rip => ripVal
   | .add64 a b => do
@@ -2575,7 +2575,7 @@ partial def resolveExprConst (ripVal : Option UInt64) : SymExpr Amd64Reg → Opt
 /-- Extract (address, value) pairs from constant stores in a memory chain.
     Resolves RIP-relative addresses using the known rip value from the branch's PC guard.
     Returns array of (store_addr, stored_value). -/
-partial def extractConstStores (ripVal : Option UInt64) : SymMem Amd64Reg → Array (UInt64 × UInt64)
+def extractConstStores (ripVal : Option UInt64) : SymMem Amd64Reg → Array (UInt64 × UInt64)
   | .base => #[]
   | .store _w inner addr val =>
     let rest := extractConstStores ripVal inner
