@@ -1683,7 +1683,12 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)))) := do
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
-  let (closure, ripCount, dataCount) := extractClosure ip_reg bodyArr (dataOnly := true)
+  let (rawClosure, ripCount, dataCount) := extractClosure ip_reg bodyArr (dataOnly := true)
+  -- Simplify closure PCs with same region classifier used for lifted PCs,
+  -- so both sides of the closedness comparison are in the same normal form.
+  let closure := match addrClassify with
+    | some clf => rawClosure.map (simplifyLoadStorePCR clf)
+    | none => rawClosure
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
   current := current.insert initBranch
   -- initialFrontier seeded into current AFTER closedness check (needs projection)
