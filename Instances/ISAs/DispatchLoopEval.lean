@@ -612,6 +612,104 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
   -- Phase 3: unwrap
   return (results.map (fun r => r.getD false), hits)
 
+/-! ## Semantic Closedness Witness Finding
+
+Given a set of branches and a closure, find for each (branch, guard) pair
+a closure member that is semantically equivalent to the lifted guard.
+This is the untrusted CVC5 oracle — witnesses are verified by bv_decide
+at build time. CVC5 is NOT in the TCB. -/
+
+/-- Evidence for how a lifted PC relates to the closure. -/
+inductive SemClosedWitness where
+  | trivialFalse                  -- lifted PC simplified to unsatisfiable
+  | trivialTrue                   -- lifted PC simplified to tautology
+  | witness (closureIdx : Nat)    -- closure[closureIdx] is semantically equivalent
+  | noWitness                     -- no equivalent closure member found (violation)
+  deriving Repr, Inhabited
+
+/-- For each (branch, guard) pair, find a closure member semantically equivalent
+    to the lifted guard `substSymPC b.sub φ`. Uses CVC5 as an untrusted oracle.
+
+    Returns array of `(branch_idx, guard_idx, evidence)` triples covering all
+    `branches.size × closure.size` pairs. The evidence records HOW closedness
+    was established:
+    - `trivialFalse` / `trivialTrue`: simplified to constant (bv_decide verifies)
+    - `witness j`: `closure[j]` is semantically equivalent (bv_decide verifies)
+    - `noWitness`: no equivalent found (closedness violation) -/
+def findSemClosedWitnesses {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    [Hashable Reg] [BEq Reg] [ToString Reg]
+    (branches : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (closure : Array (SymPC Reg))
+    (smtCache : IO.Ref SMTCache)
+    (log : String → IO Unit := fun _ => pure ()) :
+    IO (Array (Nat × Nat × SemClosedWitness)) := do
+  let mut results : Array (Nat × Nat × SemClosedWitness) := #[]
+  -- Phase 1: Classify each pair (trivial / syntactic / needs SMT)
+  -- smtPCs collects simplified PCs needing SMT; smtMeta tracks their (b_idx, phi_idx)
+  let mut smtPCs : Array (SymPC Reg) := #[]
+  let mut smtMeta : Array (Nat × Nat) := #[]
+  let mut b_idx : Nat := 0
+  for b in branches do
+    let mut phi_idx : Nat := 0
+    for phi in closure do
+      let lifted := substSymPC b.sub phi
+      let liftedSimplified := simplifyLoadStorePC lifted
+      match SymPC.simplifyConst liftedSimplified with
+      | none =>
+        results := results.push (b_idx, phi_idx, .trivialFalse)
+      | some .true =>
+        results := results.push (b_idx, phi_idx, .trivialTrue)
+      | some pc' =>
+        -- Syntactic match against closure
+        let mut found := false
+        let mut j : Nat := 0
+        for phi_j in closure do
+          if !found && phi_j == pc' then
+            results := results.push (b_idx, phi_idx, .witness j)
+            found := true
+          j := j + 1
+        unless found do
+          smtPCs := smtPCs.push pc'
+          smtMeta := smtMeta.push (b_idx, phi_idx)
+      phi_idx := phi_idx + 1
+    b_idx := b_idx + 1
+  log s!"  [witnesses] total={branches.size * closure.size} trivial+syntactic={results.size} smt_candidates={smtPCs.size}"
+  -- Phase 2: Batch SMT equivalence check for remaining pairs.
+  -- For each candidate, check against ALL closure members in one batch.
+  -- Equivalence = forward implication + reverse implication.
+  if smtPCs.size > 0 then
+    let n := closure.size
+    let mut allFwdPairs : Array (SymPC Reg × SymPC Reg) := #[]
+    let mut allRevPairs : Array (SymPC Reg × SymPC Reg) := #[]
+    for pc' in smtPCs do
+      for phi_j in closure do
+        allFwdPairs := allFwdPairs.push (pc', phi_j)
+        allRevPairs := allRevPairs.push (phi_j, pc')
+    let (fwdResults, fwdHits) ← smtCheckImplCached smtCache allFwdPairs ".lake/smt_witness.smt2"
+    let (revResults, revHits) ← smtCheckImplCached smtCache allRevPairs ".lake/smt_witness.smt2"
+    log s!"  [witnesses] smt: {allFwdPairs.size * 2} queries (cache hits={fwdHits + revHits})"
+    -- Map results back: candidate i's closure comparisons are at [i*n .. (i+1)*n)
+    let mut smtFound : Nat := 0
+    for ci in [:smtPCs.size] do
+      if h_ci : ci < smtMeta.size then
+        let (bi, pi) := smtMeta[ci]
+        let base := ci * n
+        let mut witnessFound := false
+        for j in [:n] do
+          if !witnessFound then
+            let idx := base + j
+            if h1 : idx < fwdResults.size then
+              if h2 : idx < revResults.size then
+                if fwdResults[idx] && revResults[idx] then
+                  results := results.push (bi, pi, .witness j)
+                  witnessFound := true
+                  smtFound := smtFound + 1
+        unless witnessFound do
+          results := results.push (bi, pi, .noWitness)
+    let violations := smtPCs.size - smtFound
+    log s!"  [witnesses] smt_found={smtFound} violations={violations}"
+  return results
+
 /-! ## PC-Signature Equivalence Class Dedup
 
 Two branches with the same substitution and the same PC signature (which guard PCs
