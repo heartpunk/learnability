@@ -446,19 +446,19 @@ partial def SymPC.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashabl
 
 mutual
 /-- Check if a SymExpr mentions any memory loads. -/
-partial def SymExpr.hasLoad {Reg : Type} : SymExpr Reg → Bool
+def SymExpr.hasLoad {Reg : Type} : SymExpr Reg → Bool
   | .load _ _ _ => true
   | .const _ | .reg _ => false
   | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => SymExpr.hasLoad e
   | .sub32 l r | .shl32 l r | .add64 l r | .sub64 l r | .xor64 l r
   | .and64 l r | .or64 l r | .shl64 l r | .shr64 l r => SymExpr.hasLoad l || SymExpr.hasLoad r
 
-partial def SymMem.hasLoad {Reg : Type} : SymMem Reg → Bool
+def SymMem.hasLoad {Reg : Type} : SymMem Reg → Bool
   | .base => false
   | .store _ m addr val => SymMem.hasLoad m || SymExpr.hasLoad addr || SymExpr.hasLoad val
 end
 
-partial def SymPC.hasLoad {Reg : Type} : SymPC Reg → Bool
+def SymPC.hasLoad {Reg : Type} : SymPC Reg → Bool
   | .true => false
   | .eq l r | .lt l r | .le l r => SymExpr.hasLoad l || SymExpr.hasLoad r
   | .and φ ψ => SymPC.hasLoad φ || SymPC.hasLoad ψ
