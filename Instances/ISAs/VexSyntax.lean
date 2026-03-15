@@ -467,7 +467,17 @@ theorem read_write_same_w32 (M : ByteMem) (a v : UInt64) :
 
 theorem read_write_same_w64 (M : ByteMem) (a v : UInt64) :
     ByteMem.read .w64 (ByteMem.write .w64 M a v) a = truncate .w64 v := by
-  sorry
+  simp only [ByteMem.read, ByteMem.write, ByteMem.read64le, ByteMem.write64le, truncate, Width.mask]
+  simp only [ByteMem.writeLEAux, ByteMem.readLEAux]
+  simp (discharger := simp) only [readByte_writeByte_same, readByte_writeByte_ne]
+  -- Eliminate Nat round-trip: UInt64.ofNat (n % 256) → pure BitVec
+  simp only [UInt8.toNat_ofNat', ← Nat.and_two_pow_sub_one_eq_mod]
+  simp [UInt64.ofNat_toNat]
+  rw [← UInt64.toBitVec_inj]
+  simp only [UInt64.toBitVec_or, UInt64.toBitVec_and]
+  unfold UInt64.shiftLeft UInt64.shiftRight
+  simp [UInt64.mod]
+  bv_decide
 
 theorem ByteMem_read_write_same (w : Width) (M : ByteMem) (a v : UInt64) :
     ByteMem.read w (ByteMem.write w M a v) a = truncate w v := by
