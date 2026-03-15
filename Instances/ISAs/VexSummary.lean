@@ -293,6 +293,16 @@ theorem substSymMem_id {Reg : Type} [DecidableEq Reg] [Fintype Reg] (mem : SymMe
       simp [substSymMem, substSymMem_id, substSymExpr_id]
 end
 
+theorem substSymPC_id {Reg : Type} [DecidableEq Reg] [Fintype Reg] (pc : SymPC Reg) :
+    substSymPC SymSub.id pc = pc := by
+  induction pc with
+  | true => rfl
+  | eq l r => simp [substSymPC, substSymExpr_id]
+  | lt l r => simp [substSymPC, substSymExpr_id]
+  | le l r => simp [substSymPC, substSymExpr_id]
+  | and φ ψ ihφ ihψ => simp [substSymPC, ihφ, ihψ]
+  | not φ ih => simp [substSymPC, ih]
+
 mutual
 theorem substSymExpr_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub₁ sub₂ : SymSub Reg) (expr : SymExpr Reg) :
