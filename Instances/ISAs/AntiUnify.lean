@@ -142,17 +142,21 @@ def freshExprHole {Reg : Type}
   (.hole holeId,
    { nextHole := holeId + 1, subs := st.subs.push { left := l, right := r } })
 
-/-- Allocate a fresh hole for a diverging mem pair. -/
+/-- Allocate a fresh hole for a diverging mem pair.
+    Pushes a dummy entry to subs to maintain `nextHole = subs.size`. -/
 def freshMemHole {Reg : Type}
     (st : AUState Reg) : TemplateMem Reg × AUState Reg :=
   let holeId := st.nextHole
-  (.hole holeId, { st with nextHole := holeId + 1 })
+  (.hole holeId,
+   { nextHole := holeId + 1, subs := st.subs.push { left := .const 0, right := .const 0 } })
 
-/-- Allocate a fresh hole for a diverging PC pair. -/
+/-- Allocate a fresh hole for a diverging PC pair.
+    Pushes a dummy entry to subs to maintain `nextHole = subs.size`. -/
 def freshPCHole {Reg : Type}
     (st : AUState Reg) : TemplatePC Reg × AUState Reg :=
   let holeId := st.nextHole
-  (.hole holeId, { st with nextHole := holeId + 1 })
+  (.hole holeId,
+   { nextHole := holeId + 1, subs := st.subs.push { left := .const 0, right := .const 0 } })
 
 /-! ## Core anti-unification algorithm -/
 
@@ -440,21 +444,31 @@ theorem freshExprHole_extends {Reg : Type}
     · rfl
     · omega
 
-/-- freshMemHole extends the state (subs unchanged). -/
+/-- freshMemHole extends the state by one dummy entry. -/
 theorem freshMemHole_extends {Reg : Type}
     (st : AUState Reg) :
     AUState.Extends st (freshMemHole st).2 where
   nextHole_le := Nat.le_succ _
-  subs_prefix := by simp [freshMemHole]
-  subs_agree h h_lt := by simp [freshMemHole]
+  subs_prefix := by simp [freshMemHole, Array.size_push]
+  subs_agree h h_lt := by
+    simp [freshMemHole]
+    rw [Array.getElem_push]
+    split
+    · rfl
+    · omega
 
-/-- freshPCHole extends the state (subs unchanged). -/
+/-- freshPCHole extends the state by one dummy entry. -/
 theorem freshPCHole_extends {Reg : Type}
     (st : AUState Reg) :
     AUState.Extends st (freshPCHole st).2 where
   nextHole_le := Nat.le_succ _
-  subs_prefix := by simp [freshPCHole]
-  subs_agree h h_lt := by simp [freshPCHole]
+  subs_prefix := by simp [freshPCHole, Array.size_push]
+  subs_agree h h_lt := by
+    simp [freshPCHole]
+    rw [Array.getElem_push]
+    split
+    · rfl
+    · omega
 
 /-! ## Valuation agreement under state extension
 
@@ -588,5 +602,51 @@ theorem instantiateMem_val_agree {Reg : Type} {n : Nat}
            instantiateExpr_val_agree a h_below.2.1 h_agree,
            instantiateExpr_val_agree v h_below.2.2 h_agree⟩
 end
+
+/-! ## Generalization correctness: freshExprHole
+
+When `freshExprHole` creates a hole, the resulting state has the input
+terms at the hole index. -/
+
+/-- Well-formed state: nextHole tracks subs array size. -/
+def AUState.Aligned {Reg : Type} (st : AUState Reg) : Prop :=
+  st.nextHole = st.subs.size
+
+theorem AUState.Aligned.init {Reg : Type} :
+    AUState.Aligned (Reg := Reg) {} := rfl
+
+theorem freshExprHole_aligned {Reg : Type} (st : AUState Reg) (l r : SymExpr Reg)
+    (h_al : st.Aligned) : (freshExprHole st l r).2.Aligned := by
+  unfold AUState.Aligned at *; simp [freshExprHole, Array.size_push, h_al]
+
+theorem freshMemHole_aligned {Reg : Type} (st : AUState Reg)
+    (h_al : st.Aligned) : (freshMemHole st).2.Aligned := by
+  unfold AUState.Aligned at *; simp [freshMemHole, Array.size_push, h_al]
+
+theorem freshPCHole_aligned {Reg : Type} (st : AUState Reg)
+    (h_al : st.Aligned) : (freshPCHole st).2.Aligned := by
+  unfold AUState.Aligned at *; simp [freshPCHole, Array.size_push, h_al]
+
+theorem freshExprHole_left {Reg : Type}
+    (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
+    let result := freshExprHole st l r
+    instantiateExpr result.2.leftVal result.1 = l := by
+  show (fun h =>
+    if h_lt : h < (st.subs.push { left := l, right := r }).size
+    then ((st.subs.push { left := l, right := r })[h]).left
+    else .const 0) st.nextHole = l
+  rw [h_al]
+  simp [Array.size_push, Array.getElem_push]
+
+theorem freshExprHole_right {Reg : Type}
+    (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
+    let result := freshExprHole st l r
+    instantiateExpr result.2.rightVal result.1 = r := by
+  show (fun h =>
+    if h_lt : h < (st.subs.push { left := l, right := r }).size
+    then ((st.subs.push { left := l, right := r })[h]).right
+    else .const 0) st.nextHole = r
+  rw [h_al]
+  simp [Array.size_push, Array.getElem_push]
 
 end VexISA
