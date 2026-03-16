@@ -695,4 +695,26 @@ theorem freshMemHole_correct {Reg : Type}
   aligned h_al := freshMemHole_aligned st h_al
   extends_ := freshMemHole_extends st
 
+/-- State extension preserves left valuation for earlier holes.
+    If st₁ extends to st₂, then st₂.leftVal agrees with st₁.leftVal
+    on all holes < st₁.subs.size. -/
+theorem AUState.Extends.leftVal_agree {Reg : Type}
+    {st₁ st₂ : AUState Reg} (h_ext : AUState.Extends st₁ st₂)
+    (h : Nat) (h_lt : h < st₁.subs.size) :
+    st₂.leftVal h = st₁.leftVal h := by
+  unfold AUState.leftVal
+  have h_lt₂ := Nat.lt_of_lt_of_le h_lt h_ext.subs_prefix
+  simp [h_lt, h_lt₂]
+  exact congrArg HoleSub.left (h_ext.subs_agree h h_lt)
+
+/-- Same for right valuation. -/
+theorem AUState.Extends.rightVal_agree {Reg : Type}
+    {st₁ st₂ : AUState Reg} (h_ext : AUState.Extends st₁ st₂)
+    (h : Nat) (h_lt : h < st₁.subs.size) :
+    st₂.rightVal h = st₁.rightVal h := by
+  unfold AUState.rightVal
+  have h_lt₂ := Nat.lt_of_lt_of_le h_lt h_ext.subs_prefix
+  simp [h_lt, h_lt₂]
+  exact congrArg HoleSub.right (h_ext.subs_agree h h_lt)
+
 end VexISA
