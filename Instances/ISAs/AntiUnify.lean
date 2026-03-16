@@ -809,35 +809,46 @@ theorem antiUnifyMem_inv {Reg : Type} [DecidableEq Reg]
     ∀ tm st', antiUnifyMem st l r = some (tm, st') → AntiUnifyMemInv st st' tm := by
   intro tm st' h_some
   unfold antiUnifyMem at h_some
-  match l, r with
-  | .base, .base =>
-    simp at h_some; obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2
-    exact ⟨id, .refl st, fun _ => trivial⟩
-  | .store w1 m1 a1 v1, .store w2 m2 a2 v2 =>
-    by_cases hw : (w1 == w2)
-    · simp [hw] at h_some
-      match h_sub : antiUnifyMem st m1 m2 with
-      | none => simp [h_sub] at h_some
-      | some (sub_tm, sub_st) =>
-        simp [h_sub] at h_some
-        obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2
-        have ihm := antiUnifyMem_inv st m1 m2 sub_tm sub_st h_sub
-        have iha := antiUnifyExpr_inv sub_st a1 a2
-        have ihv := antiUnifyExpr_inv (antiUnifyExpr sub_st a1 a2).2 v1 v2
-        exact ⟨fun h => ihv.aligned (iha.aligned (ihm.aligned h)),
-               ihm.extends_.trans (iha.extends_.trans ihv.extends_),
-               fun h_al =>
-                 ⟨TemplateMem.holesBelow_mono _ (ihm.holesBelow h_al)
-                    (iha.extends_.trans ihv.extends_).subs_prefix,
-                  TemplateExpr.holesBelow_mono _ (iha.holesBelow (ihm.aligned h_al))
-                    ihv.extends_.subs_prefix,
-                  ihv.holesBelow (iha.aligned (ihm.aligned h_al))⟩⟩
-    · simp [hw] at h_some
-  | .base, .store .. => simp at h_some
-  | .store .., .base => simp at h_some
+  cases l with
+  | base =>
+    cases r with
+    | base =>
+      simp at h_some; obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2
+      exact ⟨id, .refl st, fun _ => trivial⟩
+    | store => simp at h_some
+  | store w1 m1 a1 v1 =>
+    cases r with
+    | base => simp at h_some
+    | store w2 m2 a2 v2 =>
+      by_cases hw : (w1 == w2)
+      · simp [hw] at h_some
+        match h_sub : antiUnifyMem st m1 m2 with
+        | none => simp [h_sub] at h_some
+        | some (sub_tm, sub_st) =>
+          simp [h_sub] at h_some
+          obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2
+          have ihm := antiUnifyMem_inv st m1 m2 sub_tm sub_st h_sub
+          have iha := antiUnifyExpr_inv sub_st a1 a2
+          have ihv := antiUnifyExpr_inv (antiUnifyExpr sub_st a1 a2).2 v1 v2
+          exact ⟨fun h => ihv.aligned (iha.aligned (ihm.aligned h)),
+                 ihm.extends_.trans (iha.extends_.trans ihv.extends_),
+                 fun h_al =>
+                   ⟨TemplateMem.holesBelow_mono _ (ihm.holesBelow h_al)
+                      (iha.extends_.trans ihv.extends_).subs_prefix,
+                    TemplateExpr.holesBelow_mono _ (iha.holesBelow (ihm.aligned h_al))
+                      ihv.extends_.subs_prefix,
+                    ihv.holesBelow (iha.aligned (ihm.aligned h_al))⟩⟩
+      · simp [hw] at h_some
   termination_by (sizeOf l, sizeOf r)
   decreasing_by
-    sorry
+    simp_wf
+    -- After simp_wf: goal is Prod.Lex (sizeOf m1, sizeOf m2) (sizeOf l, sizeOf r)
+    -- where l = .store w1 m1 a1 v1 (from cases). But WF captures l before cases.
+    -- We have l✝ in context equated to .store w1 m1 a1 v1 by cases.
+    -- Need to unfold sizeOf l via the equation hypothesis.
+    subst_vars
+    simp [VexISA.SymMem.store.sizeOf_spec]
+    omega
 end
 
 -- Extract individual theorems
