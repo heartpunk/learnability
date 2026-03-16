@@ -894,17 +894,50 @@ theorem antiUnifyExpr_extends {Reg : Type} [DecidableEq Reg]
     AUState.Extends st (antiUnifyExpr st l r).2 :=
   (antiUnifyExpr_inv st l r).extends_
 
--- Main correctness theorems (proof is the final milestone):
+mutual
 theorem antiUnifyExpr_left {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
-    let (t, st') := antiUnifyExpr st l r
-    instantiateExpr st'.leftVal t = l := by
+    instantiateExpr (antiUnifyExpr st l r).2.leftVal (antiUnifyExpr st l r).1 = l := by
+  unfold antiUnifyExpr
+  split
+  · -- l == r
+    exact instantiateExpr_embedExpr _ l
+  · rename_i h_neq
+    split
+    all_goals first
+    -- Unary cases
+    | (rename_i a b
+       simp [instantiateExpr]
+       exact antiUnifyExpr_left st a b h_al)
+    -- Binary cases
+    | (rename_i a1 a2 b1 b2
+       simp [instantiateExpr]
+       constructor
+       · -- first sub-term: need to transport through state extension
+         rw [instantiateExpr_extends_left (antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2).extends_
+             _ ((antiUnifyExpr_inv st a1 b1).holesBelow h_al)]
+         exact antiUnifyExpr_left st a1 b1 h_al
+       · exact antiUnifyExpr_left _ a2 b2 (antiUnifyExpr_aligned st a1 b1 h_al))
+    -- .load with matching width
+    | (rename_i w1 m1 a1 w2 m2 a2
+       split
+       · simp [instantiateExpr]
+         exact ⟨sorry, antiUnifyExpr_left _ a1 a2 ((antiUnifyMem_inv st m1 m2).aligned h_al)⟩
+       · exact freshExprHole_left st _ _ h_al)
+    -- catch-all
+    | exact freshExprHole_left st _ _ h_al
+  termination_by (sizeOf l, sizeOf r)
+
+theorem antiUnifyMem_left {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymMem Reg) (h_al : st.Aligned) :
+    instantiateMem (antiUnifyMem st l r).2.leftVal (antiUnifyMem st l r).1 = l := by
   sorry
+  termination_by (sizeOf l, sizeOf r)
+end
 
 theorem antiUnifyExpr_right {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
-    let (t, st') := antiUnifyExpr st l r
-    instantiateExpr st'.rightVal t = r := by
+    instantiateExpr (antiUnifyExpr st l r).2.rightVal (antiUnifyExpr st l r).1 = r := by
   sorry
 
 /-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
