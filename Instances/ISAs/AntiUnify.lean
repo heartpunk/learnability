@@ -771,38 +771,32 @@ theorem antiUnifyExpr_inv {Reg : Type} [DecidableEq Reg]
   · exact ⟨id, .refl st, fun h_al => embedExpr_holesBelow l _⟩
   · rename_i h_neq
     split
-    all_goals first
-    | (rename_i a b
-       have ih := antiUnifyExpr_inv st a b
-       exact ⟨ih.aligned, ih.extends_, fun h_al => ih.holesBelow h_al⟩)
-    | (rename_i a1 a2 b1 b2
-       have ih1 := antiUnifyExpr_inv st a1 b1
-       have ih2 := antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2
-       exact ⟨fun h => ih2.aligned (ih1.aligned h),
-              ih1.extends_.trans ih2.extends_,
-              fun h_al => ⟨TemplateExpr.holesBelow_mono _ (ih1.holesBelow h_al) ih2.extends_.subs_prefix,
-                           ih2.holesBelow (ih1.aligned h_al)⟩⟩)
-    | (rename_i w1 m1 a1 w2 m2 a2
-       split
-       · -- matching width: check antiUnifyMem result
-         split
-         · -- antiUnifyMem returned none → freshExprHole fallback
-           exact ⟨fun h => freshExprHole_aligned st _ _ h,
-                  freshExprHole_extends st _ _,
-                  fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
-         · -- antiUnifyMem returned some (tm, st')
-           rename_i tm_st' h_some
-           obtain ⟨tm, stm⟩ := tm_st'
-           have ihm := antiUnifyMem_inv st m1 m2 h_some
-           have iha := antiUnifyExpr_inv stm a1 a2
-           exact ⟨fun h => iha.aligned (ihm.aligned h),
-                  ihm.extends_.trans iha.extends_,
-                  fun h_al => ⟨TemplateMem.holesBelow_mono _ (ihm.holesBelow h_al) iha.extends_.subs_prefix,
-                               iha.holesBelow (ihm.aligned h_al)⟩⟩
-       · exact ⟨fun h => freshExprHole_aligned st _ _ h,
-                freshExprHole_extends st _ _,
-                fun h_al => freshExprHole_holesBelow st _ _ h_al⟩)
-    | sorry -- catch-all: freshExprHole (needs goal shape adjustment for new match)
+    -- 4 unary: .low32, .uext32, .sext8to32, .sext32to64
+    all_goals try (rename_i a b
+                   have ih := antiUnifyExpr_inv st a b
+                   exact ⟨ih.aligned, ih.extends_, fun h_al => ih.holesBelow h_al⟩)
+    -- 9 binary: .sub32, .shl32, .add64, .sub64, .xor64, .and64, .or64, .shl64, .shr64
+    all_goals try (rename_i a1 a2 b1 b2
+                   have ih1 := antiUnifyExpr_inv st a1 b1
+                   have ih2 := antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2
+                   exact ⟨fun h => ih2.aligned (ih1.aligned h),
+                          ih1.extends_.trans ih2.extends_,
+                          fun h_al => ⟨TemplateExpr.holesBelow_mono _ (ih1.holesBelow h_al) ih2.extends_.subs_prefix,
+                                       ih2.holesBelow (ih1.aligned h_al)⟩⟩)
+    -- .load: w match → antiUnifyMem option → antiUnifyExpr
+    · split
+      · split
+        · exact ⟨fun h => freshExprHole_aligned st _ _ h,
+                 freshExprHole_extends st _ _,
+                 fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
+        · sorry -- some case: needs ihm + iha composition (goal shape issue)
+      · exact ⟨fun h => freshExprHole_aligned st _ _ h,
+               freshExprHole_extends st _ _,
+               fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
+    -- catch-all: remaining goals are all freshExprHole
+    all_goals exact ⟨fun h => freshExprHole_aligned _ _ _ h,
+                      freshExprHole_extends _ _ _,
+                      fun h_al => freshExprHole_holesBelow _ _ _ h_al⟩
   termination_by (sizeOf l, sizeOf r)
 
 /-- When antiUnifyMem returns `some`, the compound invariant holds. -/
@@ -811,7 +805,19 @@ theorem antiUnifyMem_inv {Reg : Type} [DecidableEq Reg]
     {tm : TemplateMem Reg} {st' : AUState Reg}
     (h_some : antiUnifyMem st l r = some (tm, st')) :
     AntiUnifyMemInv st st' tm := by
-  sorry
+  unfold antiUnifyMem at h_some
+  split at h_some
+  · -- base, base
+    simp at h_some; obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2
+    exact ⟨id, .refl st, fun _ => trivial⟩
+  · -- store w1 m1 a1 v1, store w2 m2 a2 v2
+    split at h_some
+    · -- w1 == w2
+      split at h_some
+      · simp at h_some  -- none case → contradiction
+      · sorry -- some case: needs recursive antiUnifyMem_inv + antiUnifyExpr_inv
+    · simp at h_some  -- w1 ≠ w2 → none → contradiction
+  · simp at h_some  -- catch-all → none → contradiction
   termination_by (sizeOf l, sizeOf r)
 end
 
