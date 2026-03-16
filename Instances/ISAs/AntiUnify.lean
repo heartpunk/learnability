@@ -739,6 +739,53 @@ theorem instantiateExpr_extends_right {Reg : Type}
 
 -- For the full mutual induction, we need holesBelow for antiUnifyExpr output.
 -- Statement (proof is the next milestone):
+-- holesBelow for freshExprHole
+theorem freshExprHole_holesBelow {Reg : Type}
+    (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
+    (freshExprHole st l r).1.holesBelow (freshExprHole st l r).2.subs.size := by
+  unfold AUState.Aligned at h_al
+  simp [freshExprHole, TemplateExpr.holesBelow, Array.size_push, h_al]
+
+-- holesBelow for freshMemHole
+theorem freshMemHole_holesBelow {Reg : Type}
+    (st : AUState Reg) (h_al : st.Aligned) :
+    (freshMemHole st).1.holesBelow (freshMemHole st).2.subs.size := by
+  unfold AUState.Aligned at h_al
+  simp [freshMemHole, TemplateMem.holesBelow, Array.size_push, h_al]
+
+-- holesBelow monotonicity: if holes below n and n ≤ m, then holes below m
+mutual
+theorem TemplateExpr.holesBelow_mono {Reg : Type} {n m : Nat}
+    (t : TemplateExpr Reg) (h : t.holesBelow n) (h_le : n ≤ m) :
+    t.holesBelow m := by
+  match t with
+  | .hole h' => exact Nat.lt_of_lt_of_le h h_le
+  | .const _ | .reg _ => trivial
+  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x =>
+    exact TemplateExpr.holesBelow_mono x h h_le
+  | .sub32 a b | .shl32 a b | .add64 a b | .sub64 a b
+  | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b =>
+    exact ⟨TemplateExpr.holesBelow_mono a h.1 h_le,
+           TemplateExpr.holesBelow_mono b h.2 h_le⟩
+  | .load _ m' a =>
+    exact ⟨TemplateMem.holesBelow_mono m' h.1 h_le,
+           TemplateExpr.holesBelow_mono a h.2 h_le⟩
+
+theorem TemplateMem.holesBelow_mono {Reg : Type} {n m : Nat}
+    (t : TemplateMem Reg) (h : t.holesBelow n) (h_le : n ≤ m) :
+    t.holesBelow m := by
+  match t with
+  | .hole h' => exact Nat.lt_of_lt_of_le h h_le
+  | .base => trivial
+  | .store _ m' a v =>
+    exact ⟨TemplateMem.holesBelow_mono m' h.1 h_le,
+           TemplateExpr.holesBelow_mono a h.2.1 h_le,
+           TemplateExpr.holesBelow_mono v h.2.2 h_le⟩
+end
+
+-- The mutual holesBelow + aligned preservation theorems.
+-- These require mutual well-founded induction matching antiUnifyExpr/Mem.
+-- For now we state them and prove after the tooling is in place.
 theorem antiUnifyExpr_holesBelow {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
     let (t, st') := antiUnifyExpr st l r
