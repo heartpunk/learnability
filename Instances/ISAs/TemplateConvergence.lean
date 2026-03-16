@@ -161,4 +161,54 @@ theorem semClosed_of_templateClosure {Reg : Type} [DecidableEq Reg] [Fintype Reg
   exact templateClosed_preserves_lifted isa.satisfies model Ψ h_tclosed
     b hb T hT v s₁ s₂ (h_pcSetoid_refines s₁ s₂ h_equiv)
 
+/-! ## End-to-end: template closure → quotient bisimulation
+
+Wires `semClosed_of_templateClosure` into `quotientBisimulationSem` from
+SymExec/Refinement.lean, giving the full bisimulation result from
+template-level hypotheses. -/
+
+/-- End-to-end theorem: template closure yields a finite quotient bisimulation.
+
+    Given:
+    - A productive, target-bounded oracle with a complete target
+    - A template set Ψ that is closed under target substitutions
+    - A ground closure whose PCs are all template instances
+    - pcSetoidWith-equivalence refines template equivalence
+    - pc_lift = substSymPC (true for VexISA by definition)
+
+    Produces: a finite abstract system cross-bisimilar to the concrete system,
+    with at most `2^|closure|` states. This is the template-based analog of
+    `quotientBisimulationSem`, avoiding syntactic PC closure entirely. -/
+theorem quotientBisimulationTemplate {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    [DecidableEq (SymSub Reg)]
+    {State : Type*}
+    (oracle : BranchOracle (SymSub Reg) (SymPC Reg) State)
+    [h_dec : ∀ (s : State) (φ : SymPC Reg), Decidable (oracle.isa.satisfies s φ)]
+    (target : Finset (Branch (SymSub Reg) (SymPC Reg)))
+    (closure : Finset (SymPC Reg))
+    (Ψ : Set (TemplatePC Reg))
+    (h_contains : ∀ b ∈ target, b.pc ∈ closure)
+    (h_tclosed : TemplateClosed target Ψ)
+    (h_closure_inst : ∀ φ ∈ closure, ∃ T ∈ Ψ, ∃ v : HoleVal Reg, φ = instantiatePC v T)
+    (h_pcSetoid_refines : ∀ s₁ s₂ : State,
+      (pcSetoidWith oracle.isa closure).r s₁ s₂ →
+      TemplateEquiv Ψ oracle.isa.satisfies s₁ s₂)
+    (h_lift_eq : ∀ (σ : SymSub Reg) (φ : SymPC Reg),
+      oracle.isa.pc_lift σ φ = substSymPC σ φ)
+    (h_productive : oracle.Productive target)
+    (h_bounded : oracle.TargetBounded target)
+    (h_target_complete : BranchModel.Complete oracle.isa
+      (↑target : Set (Branch (SymSub Reg) (SymPC Reg))) oracle.behavior) :
+    ∃ n, n ≤ target.card ∧
+      CrossBisimulation
+        (Quotient.mk (pcSetoidWith oracle.isa closure))
+        oracle.behavior
+        (abstractBehaviorWith oracle.isa (oracleSequence oracle n) closure) ∧
+      Fintype.card (Quotient (pcSetoidWith oracle.isa closure)) ≤
+        2 ^ closure.card :=
+  quotientBisimulationSem oracle target closure h_contains
+    (semClosed_of_templateClosure oracle.isa target closure Ψ
+      h_tclosed h_closure_inst h_pcSetoid_refines h_lift_eq)
+    h_productive h_bounded h_target_complete
+
 end VexISA
