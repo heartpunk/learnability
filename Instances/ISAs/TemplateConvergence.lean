@@ -2,11 +2,12 @@ import Instances.ISAs.AntiUnify
 import SymExec.Refinement
 
 /-!
-# Template Convergence
+# Template Convergence — Mechanism for Constructing Certificates
 
-Connects template closure (from anti-unification) to semantic closure
-(from SymExec/Refinement.lean), enabling quotient bisimulation WITHOUT
-requiring syntactic PC closure.
+Templates are a MECHANISM for constructing dispatch structure certificates,
+not a standalone bisimulation theorem. The pipeline uses anti-unification
+to discover the predicate basis and template closure to verify structural
+stability.
 
 ## The problem
 
@@ -15,19 +16,25 @@ Ground PC closure explodes (7 → 59 → 475 → 3935 PCs per round) because
 syntax. But the SEMANTIC partition stabilizes much earlier: only 23
 branches with stable template structure.
 
-## The solution
+## Template closure as mechanism
 
 Template closure is closed BY CONSTRUCTION: holes are inert under
 `substTemplatePC`, so applying a branch substitution to a template
 gives a template (same shape, different hole value). The bridge theorem
-(`substSymPC_instantiatePC`) connects this to ground-level `pc_lift`,
-giving `SemClosed` via template equivalence.
+(`substSymPC_instantiatePC`) connects this to ground-level `pc_lift`.
 
-## Key theorem
+The correct end-to-end path is: template closure → value determination →
+SemClosed → DispatchStructureCertificate → bisimulation. Templates are
+a tool for DISCHARGING the SemClosed hypothesis, not a replacement for it.
 
-`templateClosed_preserves_lifted`: if template set Ψ is closed under
-model substitutions, then template-equivalent states agree on all
-lifted PCs of template instances.
+## Key theorems
+
+- `templateClosed_preserves_lifted`: tool lemma — template-equivalent
+  states agree on all lifted PCs of template instances.
+- `substSymPC_matchingPC`: substitution preserves matching structure.
+- `semClosed_of_valueDetermined`: structured reduction — if basis PCs are
+  template instances and lifted instances are value-determined by the basis,
+  then SemClosed holds. (Added in separate commit.)
 -/
 
 set_option autoImplicit false
@@ -54,7 +61,11 @@ def AllInstancesOf {Reg : Type}
 
 /-- Template equivalence: states agree on all instances of all templates in Ψ.
     This is an INFINITE relation (quantifies over all valuations), unlike
-    `pcSetoidWith` which is finite (quantifies over a finite closure). -/
+    `pcSetoidWith` which is finite (quantifies over a finite closure).
+
+    Used as a tool for proving SemClosed in restricted cases (e.g.,
+    equality-dispatch where guards pin register values), not as a
+    standalone bisimulation condition. -/
 def TemplateEquiv {Reg : Type} {State : Type*}
     (Ψ : Set (TemplatePC Reg))
     (sat : State → SymPC Reg → Prop) (s₁ s₂ : State) : Prop :=
@@ -65,9 +76,12 @@ def TemplateEquiv {Reg : Type} {State : Type*}
 /-- If Ψ is template-closed under model, then template-equivalent states
     agree on all lifted PCs of template instances.
 
-    This is the key theorem: it shows that template closure gives the
-    SEMANTIC consequence needed for bisimulation, even when syntactic
-    closure (pc_lift b.sub φ ∈ closure) fails.
+    This is a TOOL LEMMA for constructing certificates: it shows that
+    template closure gives the semantic consequence needed for SemClosed,
+    even when syntactic closure (pc_lift b.sub φ ∈ closure) fails.
+
+    Used by `semClosed_of_valueDetermined` to discharge the value
+    determination hypothesis for equality-dispatch loops.
 
     Proof: substSymPC b.sub (instantiatePC v T)
          = instantiatePC v' (substTemplatePC b.sub T)    [bridge]
@@ -118,97 +132,5 @@ theorem substSymPC_matchingPC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .and _ _, .true | .and _ _, .eq _ _ | .and _ _, .lt _ _ | .and _ _, .le _ _ | .and _ _, .not _
   | .not _, .true | .not _, .eq _ _ | .not _, .lt _ _ | .not _, .le _ _ | .not _, .and _ _ =>
     simp [MatchingPC] at h
-
-/-! ## Template closure → SemClosed
-
-The connection from template-level reasoning to the existing proof chain.
-`SemClosed` requires: for every b ∈ model, φ ∈ closure, if states agree
-on closure PCs then they agree on `pc_lift b.sub φ`. Template closure
-gives this when the closure PCs are instances of templates in Ψ and
-pcSetoidWith-equivalence implies template equivalence. -/
-
-/-- Template closure + coverage implies semantic closure.
-
-    Hypotheses:
-    - `h_tclosed`: Ψ is closed under model substitutions
-    - `h_closure_inst`: every closure PC is a template instance
-    - `h_pcSetoid_refines`: pcSetoidWith-equivalence implies template equivalence
-      (the closure contains enough ground PCs to determine template truth values)
-
-    The last hypothesis is the crux: it says the finite quotient induced by
-    the closure is at least as fine as the infinite template quotient. This
-    holds when the closure PCs span enough valuations of each template's holes
-    to distinguish all template-inequivalent state pairs. -/
-theorem semClosed_of_templateClosure {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    {State : Type*}
-    (isa : SymbolicISA (SymSub Reg) (SymPC Reg) State)
-    (model : Finset (Branch (SymSub Reg) (SymPC Reg)))
-    (closure : Finset (SymPC Reg))
-    (Ψ : Set (TemplatePC Reg))
-    (h_tclosed : TemplateClosed model Ψ)
-    (h_closure_inst : ∀ φ ∈ closure, ∃ T ∈ Ψ, ∃ v : HoleVal Reg, φ = instantiatePC v T)
-    (h_pcSetoid_refines : ∀ s₁ s₂ : State,
-      (pcSetoidWith isa closure).r s₁ s₂ → TemplateEquiv Ψ isa.satisfies s₁ s₂)
-    (h_lift_eq : ∀ (σ : SymSub Reg) (φ : SymPC Reg),
-      isa.pc_lift σ φ = substSymPC σ φ)
-    : SemClosed isa model closure := by
-  intro b hb φ hφ s₁ s₂ h_equiv
-  -- φ is a template instance
-  obtain ⟨T, hT, v, hφ_eq⟩ := h_closure_inst φ hφ
-  -- pc_lift b.sub φ = substSymPC b.sub (instantiatePC v T)
-  rw [h_lift_eq, hφ_eq]
-  -- Apply the core theorem
-  exact templateClosed_preserves_lifted isa.satisfies model Ψ h_tclosed
-    b hb T hT v s₁ s₂ (h_pcSetoid_refines s₁ s₂ h_equiv)
-
-/-! ## End-to-end: template closure → quotient bisimulation
-
-Wires `semClosed_of_templateClosure` into `quotientBisimulationSem` from
-SymExec/Refinement.lean, giving the full bisimulation result from
-template-level hypotheses. -/
-
-/-- End-to-end theorem: template closure yields a finite quotient bisimulation.
-
-    Given:
-    - A productive, target-bounded oracle with a complete target
-    - A template set Ψ that is closed under target substitutions
-    - A ground closure whose PCs are all template instances
-    - pcSetoidWith-equivalence refines template equivalence
-    - pc_lift = substSymPC (true for VexISA by definition)
-
-    Produces: a finite abstract system cross-bisimilar to the concrete system,
-    with at most `2^|closure|` states. This is the template-based analog of
-    `quotientBisimulationSem`, avoiding syntactic PC closure entirely. -/
-theorem quotientBisimulationTemplate {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    [DecidableEq (SymSub Reg)]
-    {State : Type*}
-    (oracle : BranchOracle (SymSub Reg) (SymPC Reg) State)
-    [h_dec : ∀ (s : State) (φ : SymPC Reg), Decidable (oracle.isa.satisfies s φ)]
-    (target : Finset (Branch (SymSub Reg) (SymPC Reg)))
-    (closure : Finset (SymPC Reg))
-    (Ψ : Set (TemplatePC Reg))
-    (h_contains : ∀ b ∈ target, b.pc ∈ closure)
-    (h_tclosed : TemplateClosed target Ψ)
-    (h_closure_inst : ∀ φ ∈ closure, ∃ T ∈ Ψ, ∃ v : HoleVal Reg, φ = instantiatePC v T)
-    (h_pcSetoid_refines : ∀ s₁ s₂ : State,
-      (pcSetoidWith oracle.isa closure).r s₁ s₂ →
-      TemplateEquiv Ψ oracle.isa.satisfies s₁ s₂)
-    (h_lift_eq : ∀ (σ : SymSub Reg) (φ : SymPC Reg),
-      oracle.isa.pc_lift σ φ = substSymPC σ φ)
-    (h_productive : oracle.Productive target)
-    (h_bounded : oracle.TargetBounded target)
-    (h_target_complete : BranchModel.Complete oracle.isa
-      (↑target : Set (Branch (SymSub Reg) (SymPC Reg))) oracle.behavior) :
-    ∃ n, n ≤ target.card ∧
-      CrossBisimulation
-        (Quotient.mk (pcSetoidWith oracle.isa closure))
-        oracle.behavior
-        (abstractBehaviorWith oracle.isa (oracleSequence oracle n) closure) ∧
-      Fintype.card (Quotient (pcSetoidWith oracle.isa closure)) ≤
-        2 ^ closure.card :=
-  quotientBisimulationSem oracle target closure h_contains
-    (semClosed_of_templateClosure oracle.isa target closure Ψ
-      h_tclosed h_closure_inst h_pcSetoid_refines h_lift_eq)
-    h_productive h_bounded h_target_complete
 
 end VexISA
