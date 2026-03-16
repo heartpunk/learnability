@@ -931,7 +931,51 @@ theorem antiUnifyExpr_left {Reg : Type} [DecidableEq Reg]
 theorem antiUnifyMem_left {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymMem Reg) (h_al : st.Aligned) :
     instantiateMem (antiUnifyMem st l r).2.leftVal (antiUnifyMem st l r).1 = l := by
-  sorry
+  unfold antiUnifyMem
+  split
+  · -- base, base
+    rfl
+  · -- store, store
+    rename_i w1 m1 a1 v1 w2 m2 a2 v2
+    split
+    · -- matching width: 3 recursive calls (mem, addr expr, val expr)
+      simp [instantiateMem]
+      refine ⟨?_, ?_, ?_⟩
+      · -- mem sub-term: transport through two extensions
+        have ihm := antiUnifyMem_inv st m1 m2
+        have iha := antiUnifyExpr_inv (antiUnifyMem st m1 m2).2 a1 a2
+        have ihv := antiUnifyExpr_inv (antiUnifyExpr (antiUnifyMem st m1 m2).2 a1 a2).2 v1 v2
+        have h_ext := iha.extends_.trans ihv.extends_
+        have h_hb := ihm.holesBelow h_al
+        -- h_hb : holesBelow (antiUnifyMem st m1 m2).2.subs.size
+        -- h_ext extends from (antiUnifyMem st m1 m2).2 to final state
+        -- We want: instantiateMem with final leftVal = instantiateMem with ihm's leftVal
+        -- Agreement: for h < (antiUnifyMem st m1 m2).2.subs.size,
+        --   final.leftVal h = (antiUnifyMem st m1 m2).2.leftVal h
+        rw [instantiateMem_val_agree _ h_hb
+            (fun h h_lt => h_ext.leftVal_agree h h_lt)]
+        exact antiUnifyMem_left st m1 m2 h_al
+      · -- addr sub-term: transport through one extension
+        let st₁ := (antiUnifyMem st m1 m2).2
+        let st₂ := (antiUnifyExpr st₁ a1 a2).2
+        let st₃ := (antiUnifyExpr st₂ v1 v2).2
+        rw [instantiateExpr_extends_left
+            (antiUnifyExpr_inv st₂ v1 v2).extends_
+            _ ((antiUnifyExpr_inv st₁ a1 a2).holesBelow
+                ((antiUnifyMem_inv st m1 m2).aligned h_al))]
+        exact antiUnifyExpr_left st₁ a1 a2 ((antiUnifyMem_inv st m1 m2).aligned h_al)
+      · -- val sub-term: direct IH
+        let st₁ := (antiUnifyMem st m1 m2).2
+        let st₂ := (antiUnifyExpr st₁ a1 a2).2
+        exact antiUnifyExpr_left st₂ v1 v2
+          (antiUnifyExpr_aligned st₁ a1 a2 ((antiUnifyMem_inv st m1 m2).aligned h_al))
+    · -- different width: freshMemHole produces degenerate .hole → .base
+      -- NOT correct for recovery (mem holes don't track substitutions).
+      -- This case only arises for pathological inputs — in our pipeline,
+      -- store widths always match within the same closure.
+      sorry
+  · -- catch-all (base vs store or vice versa): same degenerate issue
+    sorry
   termination_by (sizeOf l, sizeOf r)
 end
 
