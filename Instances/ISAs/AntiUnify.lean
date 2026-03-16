@@ -1058,7 +1058,8 @@ theorem antiUnifyPC_left {Reg : Type} [DecidableEq Reg]
   unfold antiUnifyPC
   split
   · exact instantiatePC_embedPC _ l
-  · split
+  · rename_i h_neq
+    split
     · rfl  -- .true, .true
     -- .eq, .lt, .le: all same pattern (2 expr sub-terms)
     all_goals try (rename_i a1 a2 b1 b2; simp [instantiatePC]; constructor
@@ -1068,7 +1069,14 @@ theorem antiUnifyPC_left {Reg : Type} [DecidableEq Reg]
                      exact antiUnifyExpr_left st a1 b1 h_al
                    · exact antiUnifyExpr_left _ a2 b2 (antiUnifyExpr_aligned st a1 b1 h_al))
     -- remaining: .and, .not, catch-all
-    all_goals sorry
+    · sorry -- .and (next commit)
+    · rename_i a b -- .not
+      show instantiatePC
+        (antiUnifyPC st a b).2.leftVal
+        (.not (antiUnifyPC st a b).1) = .not a
+      simp [instantiatePC]
+      exact antiUnifyPC_left st a b h_al
+    · sorry -- catch-all (needs MatchingPC)
   termination_by (sizeOf l, sizeOf r)
 
 /-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
