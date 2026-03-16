@@ -1340,8 +1340,10 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   let dedupSubHash (sub : SymSub Reg) : UInt64 := projHashOf sub
   let initSigKey : SigDedupKey Reg := ⟨initBranch.sub, initSig⟩
   sigSeen := sigSeen.insert initSigKey
+  let mut previousFrontier : Array (Branch (SymSub Reg) (SymPC Reg) × Nat) := #[]
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
+    previousFrontier := frontier
     let (composed, pairsComposed, skipped, dropped) :=
       composeBranchArrayIndexed ip_reg bodyArr (frontier.map (·.1))
     -- Inline dedup: exact-match via HashSet + signature-class via sigSeen
