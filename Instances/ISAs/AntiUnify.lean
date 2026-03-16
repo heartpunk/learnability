@@ -895,6 +895,63 @@ theorem antiUnifyMem_inv {Reg : Type} [DecidableEq Reg]
     all_goals (simp_wf; subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
 end
 
+/-- Compound invariant for antiUnifyPC: alignment, extension, holesBelow. -/
+structure AntiUnifyPCInv {Reg : Type} (st st' : AUState Reg)
+    (t : TemplatePC Reg) : Prop where
+  aligned : st.Aligned → st'.Aligned
+  extends_ : AUState.Extends st st'
+  holesBelow : st.Aligned → t.holesBelow st'.subs.size
+
+theorem antiUnifyPC_inv {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymPC Reg) :
+    AntiUnifyPCInv st (antiUnifyPC st l r).2 (antiUnifyPC st l r).1 := by
+  unfold antiUnifyPC
+  split
+  · exact ⟨id, .refl st, fun _ => embedPC_holesBelow l _⟩
+  · rename_i h_neq
+    split
+    · -- .true, .true
+      exact ⟨id, .refl st, fun _ => trivial⟩
+    -- .eq, .lt, .le: 2 expr sub-terms
+    all_goals try (rename_i a1 a2 b1 b2
+                   have ih1 := antiUnifyExpr_inv st a1 b1
+                   have ih2 := antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2
+                   exact ⟨fun h => ih2.aligned (ih1.aligned h),
+                          ih1.extends_.trans ih2.extends_,
+                          fun h_al => ⟨TemplateExpr.holesBelow_mono _ (ih1.holesBelow h_al) ih2.extends_.subs_prefix,
+                                       ih2.holesBelow (ih1.aligned h_al)⟩⟩)
+    -- .and: 2 recursive PC sub-terms
+    · rename_i a1 a2 b1 b2
+      have ih1 := antiUnifyPC_inv st a1 b1
+      have ih2 := antiUnifyPC_inv (antiUnifyPC st a1 b1).2 a2 b2
+      exact ⟨fun h => ih2.aligned (ih1.aligned h),
+             ih1.extends_.trans ih2.extends_,
+             fun h_al => ⟨TemplatePC.holesBelow_mono _ (ih1.holesBelow h_al) ih2.extends_.subs_prefix,
+                          ih2.holesBelow (ih1.aligned h_al)⟩⟩
+    -- .not: 1 recursive PC sub-term
+    · rename_i a b
+      have ih := antiUnifyPC_inv st a b
+      exact ⟨ih.aligned, ih.extends_, fun h_al => ih.holesBelow h_al⟩
+    -- catch-all: embedPC .true, state unchanged
+    all_goals exact ⟨id, .refl st, fun _ => embedPC_holesBelow .true _⟩
+  termination_by (sizeOf l, sizeOf r)
+
+-- Extract PC invariant projections
+theorem antiUnifyPC_aligned {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymPC Reg) (h_al : st.Aligned) :
+    (antiUnifyPC st l r).2.Aligned :=
+  (antiUnifyPC_inv st l r).aligned h_al
+
+theorem antiUnifyPC_holesBelow {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymPC Reg) (h_al : st.Aligned) :
+    (antiUnifyPC st l r).1.holesBelow (antiUnifyPC st l r).2.subs.size :=
+  (antiUnifyPC_inv st l r).holesBelow h_al
+
+theorem antiUnifyPC_extends {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymPC Reg) :
+    AUState.Extends st (antiUnifyPC st l r).2 :=
+  (antiUnifyPC_inv st l r).extends_
+
 -- Extract individual theorems
 theorem antiUnifyExpr_holesBelow {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
