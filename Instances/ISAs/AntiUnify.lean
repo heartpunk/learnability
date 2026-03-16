@@ -1069,7 +1069,17 @@ theorem antiUnifyPC_left {Reg : Type} [DecidableEq Reg]
                      exact antiUnifyExpr_left st a1 b1 h_al
                    · exact antiUnifyExpr_left _ a2 b2 (antiUnifyExpr_aligned st a1 b1 h_al))
     -- remaining: .and, .not, catch-all
-    · sorry -- .and (next commit)
+    · rename_i a1 a2 b1 b2 -- .and
+      show instantiatePC
+        (antiUnifyPC (antiUnifyPC st a1 b1).2 a2 b2).2.leftVal
+        (.and (antiUnifyPC st a1 b1).1 (antiUnifyPC (antiUnifyPC st a1 b1).2 a2 b2).1) =
+        .and a1 a2
+      simp [instantiatePC]; constructor
+      · rw [instantiatePC_extends_left
+            (antiUnifyPC_inv (antiUnifyPC st a1 b1).2 a2 b2).extends_
+            _ ((antiUnifyPC_inv st a1 b1).holesBelow h_al)]
+        exact antiUnifyPC_left st a1 b1 h_al
+      · exact antiUnifyPC_left _ a2 b2 (antiUnifyPC_aligned st a1 b1 h_al)
     · rename_i a b -- .not
       show instantiatePC
         (antiUnifyPC st a b).2.leftVal
