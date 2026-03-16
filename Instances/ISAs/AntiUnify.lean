@@ -160,7 +160,7 @@ mutual
 /-- Anti-unify two SymExpr terms. Returns (template, updated state).
     When root constructors match, recurse structurally.
     When they differ, introduce a fresh hole. -/
-partial def antiUnifyExpr {Reg : Type} [DecidableEq Reg]
+def antiUnifyExpr {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymExpr Reg) : TemplateExpr Reg × AUState Reg :=
   if l == r then
     (embedExpr l, st)
@@ -207,9 +207,10 @@ partial def antiUnifyExpr {Reg : Type} [DecidableEq Reg]
         let (ta, st'') := antiUnifyExpr st' a1 a2; (.load w1 tm ta, st'')
       else freshExprHole st l r
     | _, _ => freshExprHole st l r
+  termination_by (sizeOf l, sizeOf r)
 
 /-- Anti-unify two SymMem terms. -/
-partial def antiUnifyMem {Reg : Type} [DecidableEq Reg]
+def antiUnifyMem {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymMem Reg) : TemplateMem Reg × AUState Reg :=
   match l, r with
   | .base, .base => (.base, st)
@@ -221,9 +222,10 @@ partial def antiUnifyMem {Reg : Type} [DecidableEq Reg]
       (.store w1 tm ta tv, st''')
     else freshMemHole st
   | _, _ => freshMemHole st
+  termination_by (sizeOf l, sizeOf r)
 
 /-- Anti-unify two SymPC terms. -/
-partial def antiUnifyPC {Reg : Type} [DecidableEq Reg]
+def antiUnifyPC {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymPC Reg) : TemplatePC Reg × AUState Reg :=
   if l == r then (embedPC l, st)
   else
@@ -244,6 +246,7 @@ partial def antiUnifyPC {Reg : Type} [DecidableEq Reg]
     | .not a, .not b =>
       let (t, st') := antiUnifyPC st a b; (.not t, st')
     | _, _ => freshPCHole st
+  termination_by (sizeOf l, sizeOf r)
 end
 
 /-! ## Top-level API -/
