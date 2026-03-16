@@ -903,4 +903,58 @@ theorem antiUnify_right {Reg : Type} [DecidableEq Reg]
     instantiatePC (fun h => if h_lt : h < subs.size then (subs[h]).right else .const 0) template = r := by
   sorry
 
+/-! ## Template substitution: apply a SymSub to a template
+
+Holes pass through unchanged. Non-hole sub-expressions get substituted
+as normal SymExpr/SymMem terms via the existing substSymExpr/substSymMem. -/
+
+mutual
+def substTemplateExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) : TemplateExpr Reg → TemplateExpr Reg
+  | .hole h => .hole h  -- holes are inert under substitution
+  | .const v => embedExpr (substSymExpr σ (.const v))
+  | .reg r => embedExpr (substSymExpr σ (.reg r))
+  | .low32 x => .low32 (substTemplateExpr σ x)
+  | .uext32 x => .uext32 (substTemplateExpr σ x)
+  | .sext8to32 x => .sext8to32 (substTemplateExpr σ x)
+  | .sext32to64 x => .sext32to64 (substTemplateExpr σ x)
+  | .sub32 a b => .sub32 (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .shl32 a b => .shl32 (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .add64 a b => .add64 (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .sub64 a b => .sub64 (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .xor64 a b => .xor64 (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .and64 a b => .and64 (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .or64 a b => .or64 (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .shl64 a b => .shl64 (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .shr64 a b => .shr64 (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .load w m a => .load w (substTemplateMem σ m) (substTemplateExpr σ a)
+
+def substTemplateMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) : TemplateMem Reg → TemplateMem Reg
+  | .base => embedMem (substSymMem σ .base)
+  | .store w m a v => .store w (substTemplateMem σ m) (substTemplateExpr σ a) (substTemplateExpr σ v)
+end
+
+def substTemplatePC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) : TemplatePC Reg → TemplatePC Reg
+  | .hole h => .hole h
+  | .true => .true
+  | .eq a b => .eq (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .lt a b => .lt (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .le a b => .le (substTemplateExpr σ a) (substTemplateExpr σ b)
+  | .and φ ψ => .and (substTemplatePC σ φ) (substTemplatePC σ ψ)
+  | .not φ => .not (substTemplatePC σ φ)
+
+/-! ## Left distributivity: σ(t₁ ↓ t₂) = σt₁ ↓ σt₂
+
+The key property for SemClosed: lifting a template through a branch
+substitution gives back a template. Proved by structural induction. -/
+
+-- Statement (proof is the goal):
+theorem leftDistributivity_PC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) (pc₁ pc₂ : SymPC Reg) :
+    substTemplatePC σ (antiUnifyPC {} pc₁ pc₂).1 =
+    (antiUnifyPC {} (substSymPC σ pc₁) (substSymPC σ pc₂)).1 := by
+  sorry
+
 end VexISA
