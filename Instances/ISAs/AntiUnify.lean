@@ -401,4 +401,192 @@ def AUState.rightVal {Reg : Type} (st : AUState Reg) : HoleVal Reg :=
   fun h =>
     if h_lt : h < st.subs.size then (st.subs[h]).right else .const 0
 
+/-! ## State monotonicity
+
+Anti-unification only extends the state: `nextHole` grows monotonically and
+`subs` only gets appended to. This is the key invariant for the correctness
+proof: holes created by earlier recursive calls remain valid in later states. -/
+
+/-- State extension: st₂ extends st₁ (subs only appended, nextHole only grows). -/
+structure AUState.Extends {Reg : Type} (st₁ st₂ : AUState Reg) : Prop where
+  nextHole_le : st₁.nextHole ≤ st₂.nextHole
+  subs_prefix : st₁.subs.size ≤ st₂.subs.size
+  subs_agree : ∀ (h : Nat), (h_lt : h < st₁.subs.size) →
+    st₂.subs[h]'(Nat.lt_of_lt_of_le h_lt subs_prefix) = st₁.subs[h]
+
+theorem AUState.Extends.refl {Reg : Type} (st : AUState Reg) :
+    AUState.Extends st st :=
+  ⟨Nat.le_refl _, Nat.le_refl _, fun _ _ => rfl⟩
+
+theorem AUState.Extends.trans {Reg : Type} {st₁ st₂ st₃ : AUState Reg}
+    (h₁₂ : AUState.Extends st₁ st₂) (h₂₃ : AUState.Extends st₂ st₃) :
+    AUState.Extends st₁ st₃ where
+  nextHole_le := Nat.le_trans h₁₂.nextHole_le h₂₃.nextHole_le
+  subs_prefix := Nat.le_trans h₁₂.subs_prefix h₂₃.subs_prefix
+  subs_agree h h_lt := by
+    rw [h₂₃.subs_agree h (Nat.lt_of_lt_of_le h_lt h₁₂.subs_prefix)]
+    exact h₁₂.subs_agree h h_lt
+
+/-- freshExprHole extends the state by exactly one entry. -/
+theorem freshExprHole_extends {Reg : Type}
+    (st : AUState Reg) (l r : SymExpr Reg) :
+    AUState.Extends st (freshExprHole st l r).2 where
+  nextHole_le := Nat.le_succ _
+  subs_prefix := by simp [freshExprHole, Array.size_push]
+  subs_agree h h_lt := by
+    simp [freshExprHole]
+    rw [Array.getElem_push]
+    split
+    · rfl
+    · omega
+
+/-- freshMemHole extends the state (subs unchanged). -/
+theorem freshMemHole_extends {Reg : Type}
+    (st : AUState Reg) :
+    AUState.Extends st (freshMemHole st).2 where
+  nextHole_le := Nat.le_succ _
+  subs_prefix := by simp [freshMemHole]
+  subs_agree h h_lt := by simp [freshMemHole]
+
+/-- freshPCHole extends the state (subs unchanged). -/
+theorem freshPCHole_extends {Reg : Type}
+    (st : AUState Reg) :
+    AUState.Extends st (freshPCHole st).2 where
+  nextHole_le := Nat.le_succ _
+  subs_prefix := by simp [freshPCHole]
+  subs_agree h h_lt := by simp [freshPCHole]
+
+/-! ## Valuation agreement under state extension
+
+If all holes in a template were created before state extension,
+then instantiation with the old vs new state gives the same result. -/
+
+mutual
+/-- All holes in a template expression have ID < n. -/
+def TemplateExpr.holesBelow {Reg : Type} (n : Nat) : TemplateExpr Reg → Prop
+  | .hole h => h < n
+  | .const _ | .reg _ => True
+  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x => x.holesBelow n
+  | .sub32 a b | .shl32 a b | .add64 a b | .sub64 a b
+  | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b =>
+    a.holesBelow n ∧ b.holesBelow n
+  | .load _ m a => TemplateMem.holesBelow n m ∧ a.holesBelow n
+
+def TemplateMem.holesBelow {Reg : Type} (n : Nat) : TemplateMem Reg → Prop
+  | .hole h => h < n
+  | .base => True
+  | .store _ m a v => m.holesBelow n ∧ TemplateExpr.holesBelow n a ∧ TemplateExpr.holesBelow n v
+end
+
+def TemplatePC.holesBelow {Reg : Type} (n : Nat) : TemplatePC Reg → Prop
+  | .hole h => h < n
+  | .true => True
+  | .eq a b | .lt a b | .le a b => a.holesBelow n ∧ b.holesBelow n
+  | .and φ ψ => φ.holesBelow n ∧ ψ.holesBelow n
+  | .not φ => φ.holesBelow n
+
+mutual
+/-- Embedded expressions have no holes (all holes below 0). -/
+theorem embedExpr_holesBelow {Reg : Type} (e : SymExpr Reg) (n : Nat) :
+    (embedExpr e).holesBelow n := by
+  match e with
+  | .const _ | .reg _ => trivial
+  | .low32 x => exact embedExpr_holesBelow x n
+  | .uext32 x => exact embedExpr_holesBelow x n
+  | .sext8to32 x => exact embedExpr_holesBelow x n
+  | .sext32to64 x => exact embedExpr_holesBelow x n
+  | .sub32 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .shl32 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .add64 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .sub64 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .xor64 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .and64 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .or64 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .shl64 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .shr64 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .load _ m a => exact ⟨embedMem_holesBelow m n, embedExpr_holesBelow a n⟩
+
+theorem embedMem_holesBelow {Reg : Type} (m : SymMem Reg) (n : Nat) :
+    (embedMem m).holesBelow n := by
+  match m with
+  | .base => trivial
+  | .store _ mem a v =>
+    exact ⟨embedMem_holesBelow mem n, embedExpr_holesBelow a n, embedExpr_holesBelow v n⟩
+end
+
+mutual
+/-- If two valuations agree on all holes below n, instantiation agrees on
+    templates with holes below n. -/
+theorem instantiateExpr_val_agree {Reg : Type} {n : Nat}
+    {val₁ val₂ : HoleVal Reg} (t : TemplateExpr Reg)
+    (h_below : t.holesBelow n)
+    (h_agree : ∀ h, h < n → val₁ h = val₂ h) :
+    instantiateExpr val₁ t = instantiateExpr val₂ t := by
+  match t with
+  | .hole h => exact h_agree h h_below
+  | .const _ | .reg _ => rfl
+  | .low32 x =>
+    simp [instantiateExpr]; exact instantiateExpr_val_agree x h_below h_agree
+  | .uext32 x =>
+    simp [instantiateExpr]; exact instantiateExpr_val_agree x h_below h_agree
+  | .sext8to32 x =>
+    simp [instantiateExpr]; exact instantiateExpr_val_agree x h_below h_agree
+  | .sext32to64 x =>
+    simp [instantiateExpr]; exact instantiateExpr_val_agree x h_below h_agree
+  | .sub32 a b =>
+    simp [instantiateExpr]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .shl32 a b =>
+    simp [instantiateExpr]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .add64 a b =>
+    simp [instantiateExpr]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .sub64 a b =>
+    simp [instantiateExpr]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .xor64 a b =>
+    simp [instantiateExpr]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .and64 a b =>
+    simp [instantiateExpr]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .or64 a b =>
+    simp [instantiateExpr]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .shl64 a b =>
+    simp [instantiateExpr]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .shr64 a b =>
+    simp [instantiateExpr]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .load _ m a =>
+    simp [instantiateExpr]
+    exact ⟨instantiateMem_val_agree m h_below.1 h_agree,
+           instantiateExpr_val_agree a h_below.2 h_agree⟩
+
+theorem instantiateMem_val_agree {Reg : Type} {n : Nat}
+    {val₁ val₂ : HoleVal Reg} (t : TemplateMem Reg)
+    (h_below : t.holesBelow n)
+    (h_agree : ∀ h, h < n → val₁ h = val₂ h) :
+    instantiateMem val₁ t = instantiateMem val₂ t := by
+  match t with
+  | .hole _ => rfl
+  | .base => rfl
+  | .store _ m a v =>
+    simp [instantiateMem]
+    exact ⟨instantiateMem_val_agree m h_below.1 h_agree,
+           instantiateExpr_val_agree a h_below.2.1 h_agree,
+           instantiateExpr_val_agree v h_below.2.2 h_agree⟩
+end
+
 end VexISA
