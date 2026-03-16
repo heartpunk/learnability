@@ -953,6 +953,26 @@ theorem antiUnifyMem_left {Reg : Type} [DecidableEq Reg]
   decreasing_by all_goals (simp_wf; subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
 end
 
+/-- antiUnifyPC produces a valid left generalization. -/
+theorem antiUnifyPC_left {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymPC Reg) (h_al : st.Aligned) :
+    instantiatePC (antiUnifyPC st l r).2.leftVal (antiUnifyPC st l r).1 = l := by
+  unfold antiUnifyPC
+  split
+  · exact instantiatePC_embedPC _ l
+  · split
+    · rfl  -- .true, .true
+    -- .eq, .lt, .le: all same pattern (2 expr sub-terms)
+    all_goals try (rename_i a1 a2 b1 b2; simp [instantiatePC]; constructor
+                   · rw [instantiateExpr_extends_left
+                         (antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2).extends_
+                         _ ((antiUnifyExpr_inv st a1 b1).holesBelow h_al)]
+                     exact antiUnifyExpr_left st a1 b1 h_al
+                   · exact antiUnifyExpr_left _ a2 b2 (antiUnifyExpr_aligned st a1 b1 h_al))
+    -- remaining: .and, .not, catch-all
+    all_goals sorry
+  termination_by (sizeOf l, sizeOf r)
+
 /-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
     The template instantiated with left substitutions = left input. -/
 theorem antiUnify_left {Reg : Type} [DecidableEq Reg]
