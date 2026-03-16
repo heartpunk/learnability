@@ -784,19 +784,24 @@ theorem antiUnifyExpr_inv {Reg : Type} [DecidableEq Reg]
                           fun h_al => ⟨TemplateExpr.holesBelow_mono _ (ih1.holesBelow h_al) ih2.extends_.subs_prefix,
                                        ih2.holesBelow (ih1.aligned h_al)⟩⟩)
     -- .load: w match → antiUnifyMem option → antiUnifyExpr
-    · split
+    · rename_i w1 m1 a1 w2 m2 a2
+      split
       · -- w1 == w2: case split on antiUnifyMem result
-        cases h_mem : antiUnifyMem st _ _ with
+        cases h_mem : antiUnifyMem st m1 m2 with
         | none =>
-          -- antiUnifyMem returned none → function uses freshExprHole
           simp [h_mem]
           exact ⟨fun h => freshExprHole_aligned st _ _ h,
                  freshExprHole_extends st _ _,
                  fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
         | some val =>
           obtain ⟨tm, stm⟩ := val
-          sorry -- needs antiUnifyMem_inv + antiUnifyExpr_inv composition
-                -- blocker: l/r args inaccessible after cases on Option match
+          simp [h_mem]
+          have ihm := antiUnifyMem_inv st m1 m2 tm stm h_mem
+          have iha := antiUnifyExpr_inv stm a1 a2
+          exact ⟨fun h => iha.aligned (ihm.aligned h),
+                 ihm.extends_.trans iha.extends_,
+                 fun h_al => ⟨TemplateMem.holesBelow_mono _ (ihm.holesBelow h_al) iha.extends_.subs_prefix,
+                              iha.holesBelow (ihm.aligned h_al)⟩⟩
       · exact ⟨fun h => freshExprHole_aligned st _ _ h,
                freshExprHole_extends st _ _,
                fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
@@ -846,14 +851,7 @@ theorem antiUnifyMem_inv {Reg : Type} [DecidableEq Reg]
       · simp [hw] at h_some
   termination_by (sizeOf l, sizeOf r)
   decreasing_by
-    simp_wf
-    -- After simp_wf: goal is Prod.Lex (sizeOf m1, sizeOf m2) (sizeOf l, sizeOf r)
-    -- where l = .store w1 m1 a1 v1 (from cases). But WF captures l before cases.
-    -- We have l✝ in context equated to .store w1 m1 a1 v1 by cases.
-    -- Need to unfold sizeOf l via the equation hypothesis.
-    subst_vars
-    simp [VexISA.SymMem.store.sizeOf_spec]
-    omega
+    all_goals (simp_wf; subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
 end
 
 -- Extract individual theorems
