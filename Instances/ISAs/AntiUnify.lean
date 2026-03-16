@@ -75,9 +75,10 @@ instance {Reg : Type} : Nonempty (TemplateMem Reg) := ⟨.base⟩
 instance {Reg : Type} : Inhabited (TemplateExpr Reg) := ⟨.const 0⟩
 instance {Reg : Type} : Inhabited (TemplateMem Reg) := ⟨.base⟩
 
-/-- A template PC: like SymPC but with holes in sub-expressions. -/
+/-- A template PC: like SymPC but with holes in sub-expressions.
+    No PC-level holes — when PC constructors don't match, the result
+    is the trivial generalization `.true`. -/
 inductive TemplatePC (Reg : Type) where
-  | hole : HoleId → TemplatePC Reg
   | true : TemplatePC Reg
   | eq : TemplateExpr Reg → TemplateExpr Reg → TemplatePC Reg
   | lt : TemplateExpr Reg → TemplateExpr Reg → TemplatePC Reg
@@ -143,13 +144,6 @@ def freshExprHole {Reg : Type}
   (.hole holeId,
    { nextHole := holeId + 1, subs := st.subs.push { left := l, right := r } })
 
-/-- Allocate a fresh hole for a diverging PC pair.
-    Pushes a dummy entry to subs to maintain `nextHole = subs.size`. -/
-def freshPCHole {Reg : Type}
-    (st : AUState Reg) : TemplatePC Reg × AUState Reg :=
-  let holeId := st.nextHole
-  (.hole holeId,
-   { nextHole := holeId + 1, subs := st.subs.push { left := .const 0, right := .const 0 } })
 
 /-! ## Core anti-unification algorithm -/
 
@@ -248,7 +242,7 @@ def antiUnifyPC {Reg : Type} [DecidableEq Reg]
       let (t2, st'') := antiUnifyPC st' a2 b2; (.and t1 t2, st'')
     | .not a, .not b =>
       let (t, st') := antiUnifyPC st a b; (.not t, st')
-    | _, _ => freshPCHole st
+    | _, _ => (embedPC .true, st)
   termination_by (sizeOf l, sizeOf r)
 end
 
@@ -281,7 +275,6 @@ def TemplateMem.holeCount {Reg : Type} : TemplateMem Reg → Nat
 end
 
 def TemplatePC.holeCount {Reg : Type} : TemplatePC Reg → Nat
-  | .hole _ => 1
   | .true => 0
   | .eq a b | .lt a b | .le a b => a.holeCount + b.holeCount
   | .and φ ψ => φ.holeCount + ψ.holeCount
@@ -322,9 +315,8 @@ def instantiateMem {Reg : Type} (val : HoleVal Reg) : TemplateMem Reg → SymMem
   | .store w m a v => .store w (instantiateMem val m) (instantiateExpr val a) (instantiateExpr val v)
 end
 
-/-- Instantiate a template PC by replacing holes with ground exprs. -/
+/-- Instantiate a template PC by replacing expr holes within it. -/
 def instantiatePC {Reg : Type} (val : HoleVal Reg) : TemplatePC Reg → SymPC Reg
-  | .hole _ => .true  -- PC holes degenerate to true (conservative)
   | .true => .true
   | .eq a b => .eq (instantiateExpr val a) (instantiateExpr val b)
   | .lt a b => .lt (instantiateExpr val a) (instantiateExpr val b)
@@ -441,18 +433,6 @@ theorem freshExprHole_extends {Reg : Type}
     · rfl
     · omega
 
-/-- freshPCHole extends the state by one dummy entry. -/
-theorem freshPCHole_extends {Reg : Type}
-    (st : AUState Reg) :
-    AUState.Extends st (freshPCHole st).2 where
-  nextHole_le := Nat.le_succ _
-  subs_prefix := by simp [freshPCHole, Array.size_push]
-  subs_agree h h_lt := by
-    simp [freshPCHole]
-    rw [Array.getElem_push]
-    split
-    · rfl
-    · omega
 
 /-! ## Valuation agreement under state extension
 
@@ -476,7 +456,6 @@ def TemplateMem.holesBelow {Reg : Type} (n : Nat) : TemplateMem Reg → Prop
 end
 
 def TemplatePC.holesBelow {Reg : Type} (n : Nat) : TemplatePC Reg → Prop
-  | .hole h => h < n
   | .true => True
   | .eq a b | .lt a b | .le a b => a.holesBelow n ∧ b.holesBelow n
   | .and φ ψ => φ.holesBelow n ∧ ψ.holesBelow n
@@ -601,9 +580,6 @@ theorem freshExprHole_aligned {Reg : Type} (st : AUState Reg) (l r : SymExpr Reg
     (h_al : st.Aligned) : (freshExprHole st l r).2.Aligned := by
   unfold AUState.Aligned at *; simp [freshExprHole, Array.size_push, h_al]
 
-theorem freshPCHole_aligned {Reg : Type} (st : AUState Reg)
-    (h_al : st.Aligned) : (freshPCHole st).2.Aligned := by
-  unfold AUState.Aligned at *; simp [freshPCHole, Array.size_push, h_al]
 
 theorem freshExprHole_left {Reg : Type}
     (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
@@ -1023,7 +999,6 @@ end
 
 def substTemplatePC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (σ : SymSub Reg) : TemplatePC Reg → TemplatePC Reg
-  | .hole h => .hole h
   | .true => .true
   | .eq a b => .eq (substTemplateExpr σ a) (substTemplateExpr σ b)
   | .lt a b => .lt (substTemplateExpr σ a) (substTemplateExpr σ b)
