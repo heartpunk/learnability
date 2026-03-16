@@ -1051,9 +1051,100 @@ theorem antiUnifyMem_left {Reg : Type} [DecidableEq Reg]
   decreasing_by all_goals (simp_wf; subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
 end
 
-/-- antiUnifyPC produces a valid left generalization. -/
+mutual
+theorem antiUnifyExpr_right {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
+    instantiateExpr (antiUnifyExpr st l r).2.rightVal (antiUnifyExpr st l r).1 = r := by
+  unfold antiUnifyExpr
+  split
+  · exact instantiateExpr_embedExpr _ r
+  · rename_i h_neq
+    split
+    -- Unary cases
+    all_goals try (rename_i a b; simp [instantiateExpr]
+                   exact antiUnifyExpr_right st a b h_al)
+    -- Binary cases
+    all_goals try (rename_i a1 a2 b1 b2; simp [instantiateExpr]; constructor
+                   · rw [instantiateExpr_extends_right
+                         (antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2).extends_
+                         _ ((antiUnifyExpr_inv st a1 b1).holesBelow h_al)]
+                     exact antiUnifyExpr_right st a1 b1 h_al
+                   · exact antiUnifyExpr_right _ a2 b2 (antiUnifyExpr_aligned st a1 b1 h_al))
+    -- .load
+    · rename_i w1 m1 a1 w2 m2 a2
+      split
+      · cases h_mem : antiUnifyMem st m1 m2 with
+        | none => simp [h_mem]; exact freshExprHole_right st _ _ h_al
+        | some val =>
+          obtain ⟨tm, stm⟩ := val
+          simp [h_mem, instantiateExpr]
+          have ihm := antiUnifyMem_inv st m1 m2 tm stm h_mem
+          constructor
+          · rw [instantiateMem_val_agree _ (ihm.holesBelow h_al)
+                (fun h h_lt => (antiUnifyExpr_inv stm a1 a2).extends_.rightVal_agree h h_lt)]
+            exact antiUnifyMem_right st m1 m2 h_al tm stm h_mem
+          · exact antiUnifyExpr_right stm a1 a2 (ihm.aligned h_al)
+      · exact freshExprHole_right st _ _ h_al
+    -- catch-all
+    all_goals exact freshExprHole_right _ _ _ h_al
+  termination_by (sizeOf l, sizeOf r)
+
+theorem antiUnifyMem_right {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymMem Reg) (h_al : st.Aligned) :
+    ∀ tm st', antiUnifyMem st l r = some (tm, st') →
+    instantiateMem st'.rightVal tm = r := by
+  intro tm st' h_some
+  unfold antiUnifyMem at h_some
+  cases l with
+  | base =>
+    cases r with
+    | base => simp at h_some; obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2; rfl
+    | store => simp at h_some
+  | store w1 m1 a1 v1 =>
+    cases r with
+    | base => simp at h_some
+    | store w2 m2 a2 v2 =>
+      by_cases hw : (w1 == w2)
+      · simp [hw] at h_some
+        match h_sub : antiUnifyMem st m1 m2 with
+        | none => simp [h_sub] at h_some
+        | some (sub_tm, sub_st) =>
+          simp [h_sub] at h_some
+          obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2
+          have ihm := antiUnifyMem_inv st m1 m2 sub_tm sub_st h_sub
+          have iha := antiUnifyExpr_inv sub_st a1 a2
+          have ihv := antiUnifyExpr_inv (antiUnifyExpr sub_st a1 a2).2 v1 v2
+          simp [instantiateMem]
+          refine ⟨?_, ?_, ?_⟩
+          · rw [instantiateMem_val_agree _ (ihm.holesBelow h_al)
+                (fun h h_lt => (iha.extends_.trans ihv.extends_).rightVal_agree h h_lt)]
+            exact antiUnifyMem_right st m1 m2 h_al sub_tm sub_st h_sub
+          · rw [instantiateExpr_extends_right ihv.extends_
+                _ (iha.holesBelow (ihm.aligned h_al))]
+            exact antiUnifyExpr_right sub_st a1 a2 (ihm.aligned h_al)
+          · exact antiUnifyExpr_right _ v1 v2
+              (antiUnifyExpr_aligned sub_st a1 a2 (ihm.aligned h_al))
+      · simp [hw] at h_some
+  termination_by (sizeOf l, sizeOf r)
+  decreasing_by all_goals (simp_wf; subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
+end
+
+/-- Two SymPC terms have matching top-level constructors, recursively.
+    This holds when both terms originate from the same branch condition
+    (varying only in sub-expression values, not structure). -/
+def MatchingPC {Reg : Type} : SymPC Reg → SymPC Reg → Prop
+  | .true, .true => True
+  | .eq _ _, .eq _ _ => True
+  | .lt _ _, .lt _ _ => True
+  | .le _ _, .le _ _ => True
+  | .and a1 a2, .and b1 b2 => MatchingPC a1 b1 ∧ MatchingPC a2 b2
+  | .not a, .not b => MatchingPC a b
+  | _, _ => False
+
+/-- antiUnifyPC produces a valid left generalization (under MatchingPC). -/
 theorem antiUnifyPC_left {Reg : Type} [DecidableEq Reg]
-    (st : AUState Reg) (l r : SymPC Reg) (h_al : st.Aligned) :
+    (st : AUState Reg) (l r : SymPC Reg) (h_al : st.Aligned)
+    (h_match : MatchingPC l r) :
     instantiatePC (antiUnifyPC st l r).2.leftVal (antiUnifyPC st l r).1 = l := by
   unfold antiUnifyPC
   split
@@ -1068,8 +1159,8 @@ theorem antiUnifyPC_left {Reg : Type} [DecidableEq Reg]
                          _ ((antiUnifyExpr_inv st a1 b1).holesBelow h_al)]
                      exact antiUnifyExpr_left st a1 b1 h_al
                    · exact antiUnifyExpr_left _ a2 b2 (antiUnifyExpr_aligned st a1 b1 h_al))
-    -- remaining: .and, .not, catch-all
-    · rename_i a1 a2 b1 b2 -- .and
+    -- .and: 2 recursive PC sub-terms
+    · rename_i a1 a2 b1 b2
       show instantiatePC
         (antiUnifyPC (antiUnifyPC st a1 b1).2 a2 b2).2.leftVal
         (.and (antiUnifyPC st a1 b1).1 (antiUnifyPC (antiUnifyPC st a1 b1).2 a2 b2).1) =
@@ -1078,32 +1169,75 @@ theorem antiUnifyPC_left {Reg : Type} [DecidableEq Reg]
       · rw [instantiatePC_extends_left
             (antiUnifyPC_inv (antiUnifyPC st a1 b1).2 a2 b2).extends_
             _ ((antiUnifyPC_inv st a1 b1).holesBelow h_al)]
-        exact antiUnifyPC_left st a1 b1 h_al
-      · exact antiUnifyPC_left _ a2 b2 (antiUnifyPC_aligned st a1 b1 h_al)
-    · rename_i a b -- .not
+        exact antiUnifyPC_left st a1 b1 h_al h_match.1
+      · exact antiUnifyPC_left _ a2 b2 (antiUnifyPC_aligned st a1 b1 h_al) h_match.2
+    -- .not: 1 recursive PC sub-term
+    · rename_i a b
       show instantiatePC
         (antiUnifyPC st a b).2.leftVal
         (.not (antiUnifyPC st a b).1) = .not a
       simp [instantiatePC]
-      exact antiUnifyPC_left st a b h_al
-    · sorry -- catch-all (needs MatchingPC)
+      exact antiUnifyPC_left st a b h_al h_match
+    -- catch-all: MatchingPC is False for mismatched constructors
+    · exfalso; exact absurd h_match (by cases l <;> cases r <;> simp [MatchingPC] <;> assumption)
   termination_by (sizeOf l, sizeOf r)
 
-/-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
+/-- antiUnifyPC produces a valid right generalization (under MatchingPC). -/
+theorem antiUnifyPC_right {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymPC Reg) (h_al : st.Aligned)
+    (h_match : MatchingPC l r) :
+    instantiatePC (antiUnifyPC st l r).2.rightVal (antiUnifyPC st l r).1 = r := by
+  unfold antiUnifyPC
+  split
+  · exact instantiatePC_embedPC _ r
+  · rename_i h_neq
+    split
+    · rfl  -- .true, .true
+    -- .eq, .lt, .le: all same pattern (2 expr sub-terms)
+    all_goals try (rename_i a1 a2 b1 b2; simp [instantiatePC]; constructor
+                   · rw [instantiateExpr_extends_right
+                         (antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2).extends_
+                         _ ((antiUnifyExpr_inv st a1 b1).holesBelow h_al)]
+                     exact antiUnifyExpr_right st a1 b1 h_al
+                   · exact antiUnifyExpr_right _ a2 b2 (antiUnifyExpr_aligned st a1 b1 h_al))
+    -- .and: 2 recursive PC sub-terms
+    · rename_i a1 a2 b1 b2
+      show instantiatePC
+        (antiUnifyPC (antiUnifyPC st a1 b1).2 a2 b2).2.rightVal
+        (.and (antiUnifyPC st a1 b1).1 (antiUnifyPC (antiUnifyPC st a1 b1).2 a2 b2).1) =
+        .and b1 b2
+      simp [instantiatePC]; constructor
+      · rw [instantiatePC_extends_right
+            (antiUnifyPC_inv (antiUnifyPC st a1 b1).2 a2 b2).extends_
+            _ ((antiUnifyPC_inv st a1 b1).holesBelow h_al)]
+        exact antiUnifyPC_right st a1 b1 h_al h_match.1
+      · exact antiUnifyPC_right _ a2 b2 (antiUnifyPC_aligned st a1 b1 h_al) h_match.2
+    -- .not: 1 recursive PC sub-term
+    · rename_i a b
+      show instantiatePC
+        (antiUnifyPC st a b).2.rightVal
+        (.not (antiUnifyPC st a b).1) = .not b
+      simp [instantiatePC]
+      exact antiUnifyPC_right st a b h_al h_match
+    -- catch-all: MatchingPC is False for mismatched constructors
+    · exfalso; exact absurd h_match (by cases l <;> cases r <;> simp [MatchingPC] <;> assumption)
+  termination_by (sizeOf l, sizeOf r)
+
+/-- TOP-LEVEL THEOREM: antiUnify produces a valid left generalization.
     The template instantiated with left substitutions = left input. -/
 theorem antiUnify_left {Reg : Type} [DecidableEq Reg]
-    (l r : SymPC Reg) :
+    (l r : SymPC Reg) (h_match : MatchingPC l r) :
     let (template, subs) := antiUnify l r
-    instantiatePC (fun h => if h_lt : h < subs.size then (subs[h]).left else .const 0) template = l := by
-  sorry
+    instantiatePC (fun h => if h_lt : h < subs.size then (subs[h]).left else .const 0) template = l :=
+  antiUnifyPC_left {} l r rfl h_match
 
-/-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
+/-- TOP-LEVEL THEOREM: antiUnify produces a valid right generalization.
     The template instantiated with right substitutions = right input. -/
 theorem antiUnify_right {Reg : Type} [DecidableEq Reg]
-    (l r : SymPC Reg) :
+    (l r : SymPC Reg) (h_match : MatchingPC l r) :
     let (template, subs) := antiUnify l r
-    instantiatePC (fun h => if h_lt : h < subs.size then (subs[h]).right else .const 0) template = r := by
-  sorry
+    instantiatePC (fun h => if h_lt : h < subs.size then (subs[h]).right else .const 0) template = r :=
+  antiUnifyPC_right {} l r rfl h_match
 
 /-! ## Template substitution: apply a SymSub to a template
 
