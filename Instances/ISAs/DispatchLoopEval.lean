@@ -1478,18 +1478,38 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   let initSigKey : SigDedupKey Reg := ⟨initBranch.sub, initSig⟩
   sigSeen := sigSeen.insert initSigKey
   let mut previousFrontier : Array (Branch (SymSub Reg) (SymPC Reg) × Nat) := #[]
+  -- Template-based dedup: activated when explosion is detected
+  let mut templates : Array (TemplatePC Reg) := #[]
+  let mut templatesActive := false
+  let explosionThreshold : Nat := 3  -- trigger when composed > threshold × frontier
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     previousFrontier := frontier
     let (composed, pairsComposed, skipped, dropped) :=
       composeBranchArrayIndexed ip_reg bodyArr (frontier.map (·.1))
+    -- Template extraction: detect explosion and extract templates
+    let mut templateCollapsed : Nat := 0
+    if !templatesActive && previousFrontier.size > 0 &&
+       composed.size > explosionThreshold * previousFrontier.size then
+      -- Explosion detected: anti-unify consecutive-round PCs to find templates
+      let pcPairsForAU := pairFrontierPCs previousFrontier composed
+      let newTemplates := extractTemplatesFromPairs pcPairsForAU
+      if newTemplates.size > 0 then
+        templates := templates ++ newTemplates
+        templatesActive := true
+        let totalHoles := newTemplates.foldl (fun acc t => acc + t.holeCount) 0
+        log s!"    TEMPLATES ACTIVATED: {newTemplates.size} templates, {totalHoles} total holes (explosion: {composed.size} > {explosionThreshold}×{previousFrontier.size})"
     -- Inline dedup: exact-match via HashSet + signature-class via sigSeen
+    -- Template dedup runs first when active (before signature dedup)
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg) × Nat) := #[]
     let mut dupes : Nat := 0
     let mut sigCollapsed : Nat := 0
     for (b, bodyIdx) in composed do
       if current.contains b then
         dupes := dupes + 1
+      else if templatesActive && isTemplateInstance templates b.pc then
+        -- PC matches a known template — collapse (don't add to frontier)
+        templateCollapsed := templateCollapsed + 1
       else
         -- Check signature-class dedup (uses projection hash if closed)
         let sig := computePCSignature closure b.pc
@@ -1552,7 +1572,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       frontierSubsNoRip := frontierSubsNoRip.insert (hash noRipSub)
       -- Project sub onto closed projection registers
       projectedSubs := projectedSubs.insert (projHashOf b.sub)
-    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} |distinct_subs|={frontierSubs.size} |no_rip|={frontierSubsNoRip.size} |proj|={projectedSubs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} pruned={prunedCount} compose={t_prune_start - t_start}ms prune={t_end - t_prune_start}ms total={t_end - t_start}ms"
+    log s!"  K={k}: |S|={current.size} |frontier|={frontier.size} |new|={newBranches.size} |distinct_subs|={frontierSubs.size} |no_rip|={frontierSubsNoRip.size} |proj|={projectedSubs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped} dupes={dupes} sig_collapsed={sigCollapsed} pruned={prunedCount} templates_active={templatesActive} n_templates={templates.size} template_collapsed={templateCollapsed} compose={t_prune_start - t_start}ms prune={t_end - t_prune_start}ms total={t_end - t_start}ms"
     if newBranches.size == 0 then
       return some (k, current.size)
     frontier := newBranches
