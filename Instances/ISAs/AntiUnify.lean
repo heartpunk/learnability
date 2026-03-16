@@ -673,4 +673,26 @@ structure AntiUnifyMemCorrect {Reg : Type} (st : AUState Reg)
   aligned : st.Aligned → st'.Aligned
   extends_ : AUState.Extends st st'
 
+/-! ## Correctness proof via well-founded induction
+
+The main theorem: antiUnifyExpr/Mem produce valid generalizations.
+We prove this by well-founded induction on (sizeOf l + sizeOf r),
+matching the termination measure of the functions. -/
+
+/-- freshExprHole produces a correct result (base case for diverging terms). -/
+theorem freshExprHole_correct {Reg : Type}
+    (st : AUState Reg) (l r : SymExpr Reg) :
+    AntiUnifyExprCorrect st l r (freshExprHole st l r).1 (freshExprHole st l r).2 where
+  aligned h_al := freshExprHole_aligned st l r h_al
+  extends_ := freshExprHole_extends st l r
+  left_correct h_al := freshExprHole_left st l r h_al
+  right_correct h_al := freshExprHole_right st l r h_al
+
+/-- freshMemHole produces a correct result. -/
+theorem freshMemHole_correct {Reg : Type}
+    (st : AUState Reg) (l r : SymMem Reg) :
+    AntiUnifyMemCorrect st l r (freshMemHole st).1 (freshMemHole st).2 where
+  aligned h_al := freshMemHole_aligned st h_al
+  extends_ := freshMemHole_extends st
+
 end VexISA
