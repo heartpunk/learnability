@@ -836,7 +836,8 @@ theorem antiUnifyMem_inv {Reg : Type} [DecidableEq Reg]
   | .base, .store .. => simp at h_some
   | .store .., .base => simp at h_some
   termination_by (sizeOf l, sizeOf r)
-  decreasing_by all_goals sorry
+  decreasing_by
+    sorry
 end
 
 -- Extract individual theorems
