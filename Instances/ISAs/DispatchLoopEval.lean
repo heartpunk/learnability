@@ -1022,6 +1022,28 @@ def extractClosure {Reg : Type} [BEq Reg] [BEq (SymPC Reg)] [Hashable (SymPC Reg
           result := result.push c
   return (result, ripCount, dataCount)
 
+/-- Check h_contains: every branch's PC is determined by the closure.
+    Verifies that all top-level conjuncts of each b.pc appear in the closure.
+    This is the computational check for the abstract `h_contains` hypothesis
+    (see `evalSymPC_of_conjunctsInClosure` in VexPipelineBridge.lean for soundness).
+    Returns (allPassed, failureCount, ripMisses, dataMisses). -/
+def checkHContains {Reg : Type} [DecidableEq Reg] [BEq Reg] [Hashable (SymPC Reg)]
+    (ip_reg : Reg) (branches : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (closure : Array (SymPC Reg)) : Bool × Nat × Nat × Nat := Id.run do
+  let closureSet : Std.HashSet (SymPC Reg) :=
+    closure.foldl (fun s pc => s.insert pc) {}
+  let mut ripMisses : Nat := 0
+  let mut dataMisses : Nat := 0
+  for b in branches do
+    for c in SymPC.conjuncts b.pc do
+      unless closureSet.contains c do
+        if isRipGuardPC ip_reg c then
+          ripMisses := ripMisses + 1
+        else
+          dataMisses := dataMisses + 1
+  let total := ripMisses + dataMisses
+  return (total == 0, total, ripMisses, dataMisses)
+
 /-- Compute the PC signature of a branch w.r.t. a closure.
     Returns a list of bools: for each guard PC in the closure, does the branch's
     PC syntactically imply it?
@@ -2138,6 +2160,19 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     if newBranches.size == 0 then
       -- Collect all branches as array for the summary
       let summaryArr := current.toArray
+      -- h_contains check: every body branch PC's conjuncts are in the closure.
+      -- Note: h_contains is about branchingLoopModel (= original body block
+      -- summaries), NOT the composed fixpoint (summaryArr). The body branches'
+      -- conjuncts are in the full closure by construction (extractClosure).
+      -- Uses full closure (data + rip) since the abstract theory doesn't
+      -- distinguish between guard types.
+      do
+        let (fullClosure, _, _) := extractClosure ip_reg bodyArr (dataOnly := false)
+        let (fullPass, _, _, dataMissesF) := checkHContains ip_reg bodyArr fullClosure
+        if fullPass then
+          log s!"    [h_contains] PASS ({bodyArr.size} body branches, {fullClosure.size} closure PCs)"
+        else
+          log s!"    [h_contains] FAIL: {dataMissesF} data misses ({bodyArr.size} body branches)"
       -- Task 1B: Closure closedness verification.
       -- For each branch b in summaryArr and each data guard PC phi in closure:
       --   lifted = substSymPC b.sub phi  (the pc_lift from VexSummary/VexCompTree)

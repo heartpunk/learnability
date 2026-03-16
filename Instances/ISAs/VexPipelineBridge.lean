@@ -614,4 +614,96 @@ theorem pipeline_extracted_model_adequate_sem
 
 end EndToEndSem
 
+/-! ## Phase 6: h_contains via Conjunct Containment
+
+The pipeline's closure consists of atomic conjuncts (individual guard PCs).
+Branch PCs are conjunctions of these conjuncts. The abstract framework
+requires `b.pc ∈ closure`, but the pipeline checks the weaker (but
+equivalent-for-VexISA) property: all conjuncts of `b.pc` are in closure.
+
+This section proves the VexISA-specific theorem that conjunct containment
+suffices for the properties that `h_contains` provides:
+- PC-equivalent states agree on branch enablement
+- Branch PCs are determined by the closure partition
+
+The key insight: `SymPC.conjuncts` flattens `.and` but NOT `.not` or
+atomic comparisons. So each leaf of the conjunction tree is in the closure,
+and `evalSymPC` distributes over `&&` for `.and`. -/
+
+section HContainsConjuncts
+
+variable {Reg : Type}
+variable [DecidableEq Reg] [Fintype Reg]
+
+/-- Bool equality from iff on `= true`. -/
+private theorem bool_eq_of_true_iff {a b : Bool}
+    (h : (a = true) ↔ (b = true)) : a = b := by
+  cases a <;> cases b <;> simp_all
+
+/-- If all conjuncts of a PC are in the closure, then pcEquiv-equivalent
+    states evaluate the PC identically.
+
+    This is the VexISA-specific theorem that allows `h_contains` to be
+    checked at the conjunct level (via `checkHContains` in DispatchLoopEval.lean)
+    rather than requiring each full branch PC to be literally in the closure.
+
+    Proof: structural induction on `pc`.
+    - Atomic cases (eq/lt/le/not/true): the PC is its own sole conjunct,
+      so it's in the closure, and pcEquiv gives the iff directly.
+    - `.and φ ψ`: conjuncts are `conjuncts φ ++ conjuncts ψ`, so the IH
+      applies to each sub-PC, and `evalSymPC` distributes over `&&`. -/
+theorem evalSymPC_of_conjunctsInClosure
+    (closure : Finset (SymPC Reg))
+    (pc : SymPC Reg)
+    (h : ∀ c ∈ SymPC.conjuncts pc, c ∈ closure)
+    {s₁ s₂ : ConcreteState Reg}
+    (h_equiv : (pcSetoidWith (vexSummaryISA Reg) closure).r s₁ s₂) :
+    evalSymPC s₁ pc = evalSymPC s₂ pc := by
+  induction pc with
+  | true => rfl
+  | eq l r =>
+    have hm : SymPC.eq l r ∈ closure := h _ (List.Mem.head _)
+    exact bool_eq_of_true_iff (h_equiv _ hm)
+  | lt l r =>
+    have hm : SymPC.lt l r ∈ closure := h _ (List.Mem.head _)
+    exact bool_eq_of_true_iff (h_equiv _ hm)
+  | le l r =>
+    have hm : SymPC.le l r ∈ closure := h _ (List.Mem.head _)
+    exact bool_eq_of_true_iff (h_equiv _ hm)
+  | and φ ψ ih₁ ih₂ =>
+    simp only [evalSymPC]
+    have hφ : ∀ c ∈ SymPC.conjuncts φ, c ∈ closure :=
+      fun c hc => h c (List.mem_append_left _ hc)
+    have hψ : ∀ c ∈ SymPC.conjuncts ψ, c ∈ closure :=
+      fun c hc => h c (List.mem_append_right _ hc)
+    rw [ih₁ hφ, ih₂ hψ]
+  | not φ _ =>
+    have hm : SymPC.not φ ∈ closure := h _ (List.Mem.head _)
+    exact bool_eq_of_true_iff (h_equiv _ hm)
+
+/-- Conjunct containment implies the same property as `h_contains`:
+    PC-equivalent states agree on branch enablement.
+
+    This is the VexISA-specific bridge from the computational check
+    (`checkHContains` passes) to the abstract hypothesis that
+    `pipeline_implies_branchClassesStable` and related theorems require.
+
+    The abstract `h_contains` requires `b.pc ∈ closure` literally.
+    This theorem shows that the weaker conjunct-containment check
+    provides the same guarantee for VexISA: if all conjuncts of `b.pc`
+    are in the closure, then `pcEquiv`-equivalent states agree on `b.pc`. -/
+theorem h_contains_via_conjuncts
+    (closure : Finset (SymPC Reg))
+    {s₁ s₂ : ConcreteState Reg}
+    (h_equiv : (pcSetoidWith (vexSummaryISA Reg) closure).r s₁ s₂)
+    {b : Branch (SymSub Reg) (SymPC Reg)}
+    (h_conjs : ∀ c ∈ SymPC.conjuncts b.pc, c ∈ closure)
+    (h_fires : (vexSummaryISA Reg).satisfies s₁ b.pc) :
+    (vexSummaryISA Reg).satisfies s₂ b.pc := by
+  simp only [vexSummaryISA, satisfiesSymPC] at *
+  rw [evalSymPC_of_conjunctsInClosure closure b.pc h_conjs h_equiv] at h_fires
+  exact h_fires
+
+end HContainsConjuncts
+
 end VexISA
