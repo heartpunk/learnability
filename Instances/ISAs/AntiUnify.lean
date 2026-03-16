@@ -376,4 +376,29 @@ theorem instantiatePC_embedPC {Reg : Type} (val : HoleVal Reg) (pc : SymPC Reg) 
   | .and φ ψ => simp [embedPC, instantiatePC, instantiatePC_embedPC val φ, instantiatePC_embedPC val ψ]
   | .not φ => simp [embedPC, instantiatePC, instantiatePC_embedPC val φ]
 
+/-! ## Generalization correctness
+
+The core theorem: `antiUnify` produces a valid generalization.
+Given `(template, subs) = antiUnify l r`:
+- `instantiateExpr (leftVal subs) template = l`  (left projection)
+- `instantiateExpr (rightVal subs) template = r`  (right projection)
+
+where `leftVal subs h = subs[h]!.left` and `rightVal subs h = subs[h]!.right`.
+
+This is the property that makes anti-unification a GENERALIZATION:
+the template with the left substitution recovers the left input,
+and similarly for the right. Combined with most-specificity (which
+follows from the algorithm only introducing holes when necessary),
+this makes it a least general generalization (LGG). -/
+
+/-- Extract left valuation from AU state: hole h ↦ subs[h].left. -/
+def AUState.leftVal {Reg : Type} (st : AUState Reg) : HoleVal Reg :=
+  fun h =>
+    if h_lt : h < st.subs.size then (st.subs[h]).left else .const 0
+
+/-- Extract right valuation from AU state: hole h ↦ subs[h].right. -/
+def AUState.rightVal {Reg : Type} (st : AUState Reg) : HoleVal Reg :=
+  fun h =>
+    if h_lt : h < st.subs.size then (st.subs[h]).right else .const 0
+
 end VexISA
