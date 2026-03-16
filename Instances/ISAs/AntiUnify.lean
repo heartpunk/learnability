@@ -985,10 +985,60 @@ theorem antiUnifyMem_left {Reg : Type} [DecidableEq Reg]
   termination_by (sizeOf l, sizeOf r)
 end
 
+mutual
 theorem antiUnifyExpr_right {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
     instantiateExpr (antiUnifyExpr st l r).2.rightVal (antiUnifyExpr st l r).1 = r := by
-  sorry
+  unfold antiUnifyExpr
+  split
+  · -- l == r: embedExpr l, and l = r
+    rename_i h_eq; have := (beq_iff_eq.mp h_eq : l = r)
+    rw [← this]; exact instantiateExpr_embedExpr _ l
+  · rename_i h_neq
+    split
+    all_goals first
+    -- Unary cases
+    | (rename_i a b
+       simp [instantiateExpr]
+       exact antiUnifyExpr_right st a b h_al)
+    -- Binary cases
+    | (rename_i a1 a2 b1 b2
+       simp [instantiateExpr]
+       constructor
+       · rw [instantiateExpr_extends_right (antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2).extends_
+             _ ((antiUnifyExpr_inv st a1 b1).holesBelow h_al)]
+         exact antiUnifyExpr_right st a1 b1 h_al
+       · exact antiUnifyExpr_right _ a2 b2 (antiUnifyExpr_aligned st a1 b1 h_al))
+    -- .load with matching width
+    | (rename_i w1 m1 a1 w2 m2 a2
+       split
+       · simp [instantiateExpr]
+         have ihm := antiUnifyMem_inv st m1 m2
+         have iha := antiUnifyExpr_inv (antiUnifyMem st m1 m2).2 a1 a2
+         exact ⟨by
+           rw [instantiateMem_val_agree _ (ihm.holesBelow h_al)
+               (fun h h_lt => iha.extends_.rightVal_agree h h_lt)]
+           exact antiUnifyMem_right st m1 m2 h_al,
+           antiUnifyExpr_right _ a1 a2 (ihm.aligned h_al)⟩
+       · exact freshExprHole_right st _ _ h_al)
+    -- catch-all: symmetric to antiUnifyExpr_left catch-all
+    | sorry
+  termination_by (sizeOf l, sizeOf r)
+
+theorem antiUnifyMem_right {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymMem Reg) (h_al : st.Aligned) :
+    instantiateMem (antiUnifyMem st l r).2.rightVal (antiUnifyMem st l r).1 = r := by
+  unfold antiUnifyMem
+  split
+  · rfl
+  · rename_i w1 m1 a1 v1 w2 m2 a2 v2
+    split
+    · -- matching width store: same pattern as antiUnifyMem_left
+      sorry
+    · sorry  -- degenerate mem hole (different width)
+  · sorry    -- degenerate mem hole (base vs store)
+  termination_by (sizeOf l, sizeOf r)
+end
 
 /-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
     The template instantiated with left substitutions = left input. -/
