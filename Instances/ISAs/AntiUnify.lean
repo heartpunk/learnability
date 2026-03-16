@@ -783,20 +783,116 @@ theorem TemplateMem.holesBelow_mono {Reg : Type} {n m : Nat}
            TemplateExpr.holesBelow_mono v h.2.2 h_le⟩
 end
 
--- The mutual holesBelow + aligned preservation theorems.
--- These require mutual well-founded induction matching antiUnifyExpr/Mem.
--- For now we state them and prove after the tooling is in place.
+-- Compound property: holesBelow + aligned + extends, for mutual induction
+structure AntiUnifyExprInv {Reg : Type} (st st' : AUState Reg)
+    (t : TemplateExpr Reg) : Prop where
+  aligned : st.Aligned → st'.Aligned
+  extends_ : AUState.Extends st st'
+  holesBelow : st.Aligned → t.holesBelow st'.subs.size
+
+structure AntiUnifyMemInv {Reg : Type} (st st' : AUState Reg)
+    (t : TemplateMem Reg) : Prop where
+  aligned : st.Aligned → st'.Aligned
+  extends_ : AUState.Extends st st'
+  holesBelow : st.Aligned → t.holesBelow st'.subs.size
+
+mutual
+theorem antiUnifyExpr_inv {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymExpr Reg) :
+    AntiUnifyExprInv st (antiUnifyExpr st l r).2 (antiUnifyExpr st l r).1 := by
+  unfold antiUnifyExpr
+  split
+  · -- l == r
+    exact ⟨id, .refl st, fun h_al => embedExpr_holesBelow l _⟩
+  · -- structural cases
+    rename_i h_neq
+    split
+    all_goals first
+    -- Unary cases: .low32, .uext32, .sext8to32, .sext32to64
+    | (rename_i a b
+       have ih := antiUnifyExpr_inv st a b
+       exact ⟨ih.aligned, ih.extends_, fun h_al => ih.holesBelow h_al⟩)
+    -- Binary cases: .sub32, .shl32, .add64, .sub64, .xor64, .and64, .or64, .shl64, .shr64
+    | (rename_i a1 a2 b1 b2
+       have ih1 := antiUnifyExpr_inv st a1 b1
+       have ih2 := antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2
+       exact ⟨fun h => ih2.aligned (ih1.aligned h),
+              ih1.extends_.trans ih2.extends_,
+              fun h_al => ⟨TemplateExpr.holesBelow_mono _ (ih1.holesBelow h_al) ih2.extends_.subs_prefix,
+                           ih2.holesBelow (ih1.aligned h_al)⟩⟩)
+    -- .load with matching width
+    | (rename_i w1 m1 a1 w2 m2 a2
+       split
+       · have ihm := antiUnifyMem_inv st m1 m2
+         have iha := antiUnifyExpr_inv (antiUnifyMem st m1 m2).2 a1 a2
+         exact ⟨fun h => iha.aligned (ihm.aligned h),
+                ihm.extends_.trans iha.extends_,
+                fun h_al => ⟨TemplateMem.holesBelow_mono _ (ihm.holesBelow h_al) iha.extends_.subs_prefix,
+                             iha.holesBelow (ihm.aligned h_al)⟩⟩
+       · exact ⟨fun h => freshExprHole_aligned st _ _ h,
+                freshExprHole_extends st _ _,
+                fun h_al => freshExprHole_holesBelow st _ _ h_al⟩)
+    -- catch-all (different constructors)
+    | exact ⟨fun h => freshExprHole_aligned st _ _ h,
+             freshExprHole_extends st _ _,
+             fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
+  termination_by (sizeOf l, sizeOf r)
+
+theorem antiUnifyMem_inv {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymMem Reg) :
+    AntiUnifyMemInv st (antiUnifyMem st l r).2 (antiUnifyMem st l r).1 := by
+  unfold antiUnifyMem
+  split
+  · -- base, base
+    exact ⟨id, .refl st, fun _ => trivial⟩
+  · -- store, store
+    rename_i w1 m1 a1 v1 w2 m2 a2 v2
+    split
+    · -- matching width
+      have ihm := antiUnifyMem_inv st m1 m2
+      have iha := antiUnifyExpr_inv (antiUnifyMem st m1 m2).2 a1 a2
+      have ihv := antiUnifyExpr_inv (antiUnifyExpr (antiUnifyMem st m1 m2).2 a1 a2).2 v1 v2
+      exact ⟨fun h => ihv.aligned (iha.aligned (ihm.aligned h)),
+             ihm.extends_.trans (iha.extends_.trans ihv.extends_),
+             fun h_al =>
+               ⟨TemplateMem.holesBelow_mono _ (ihm.holesBelow h_al)
+                  (iha.extends_.trans ihv.extends_).subs_prefix,
+                TemplateExpr.holesBelow_mono _ (iha.holesBelow (ihm.aligned h_al))
+                  ihv.extends_.subs_prefix,
+                ihv.holesBelow (iha.aligned (ihm.aligned h_al))⟩⟩
+    · -- different width
+      exact ⟨fun h => freshMemHole_aligned st h,
+             freshMemHole_extends st,
+             fun h_al => freshMemHole_holesBelow st h_al⟩
+  · -- catch-all
+    exact ⟨fun h => freshMemHole_aligned st h,
+           freshMemHole_extends st,
+           fun h_al => freshMemHole_holesBelow st h_al⟩
+  termination_by (sizeOf l, sizeOf r)
+end
+
+-- Extract individual theorems from the compound invariant
 theorem antiUnifyExpr_holesBelow {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
     let (t, st') := antiUnifyExpr st l r
-    t.holesBelow st'.subs.size := by
-  sorry
+    t.holesBelow st'.subs.size :=
+  (antiUnifyExpr_inv st l r).holesBelow h_al
 
 theorem antiUnifyMem_holesBelow {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymMem Reg) (h_al : st.Aligned) :
     let (t, st') := antiUnifyMem st l r
-    t.holesBelow st'.subs.size := by
-  sorry
+    t.holesBelow st'.subs.size :=
+  (antiUnifyMem_inv st l r).holesBelow h_al
+
+theorem antiUnifyExpr_aligned {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
+    (antiUnifyExpr st l r).2.Aligned :=
+  (antiUnifyExpr_inv st l r).aligned h_al
+
+theorem antiUnifyExpr_extends {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymExpr Reg) :
+    AUState.Extends st (antiUnifyExpr st l r).2 :=
+  (antiUnifyExpr_inv st l r).extends_
 
 -- Main correctness theorems (proof is the final milestone):
 theorem antiUnifyExpr_left {Reg : Type} [DecidableEq Reg]
