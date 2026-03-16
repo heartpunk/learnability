@@ -574,6 +574,33 @@ theorem instantiateMem_val_agree {Reg : Type} {n : Nat}
            instantiateExpr_val_agree v h_below.2.2 h_agree⟩
 end
 
+theorem instantiatePC_val_agree {Reg : Type} {n : Nat}
+    {val₁ val₂ : HoleVal Reg} (t : TemplatePC Reg)
+    (h_below : t.holesBelow n)
+    (h_agree : ∀ h, h < n → val₁ h = val₂ h) :
+    instantiatePC val₁ t = instantiatePC val₂ t := by
+  match t with
+  | .true => rfl
+  | .eq a b =>
+    simp [instantiatePC]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .lt a b =>
+    simp [instantiatePC]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .le a b =>
+    simp [instantiatePC]
+    exact ⟨instantiateExpr_val_agree a h_below.1 h_agree,
+           instantiateExpr_val_agree b h_below.2 h_agree⟩
+  | .and φ ψ =>
+    simp [instantiatePC]
+    exact ⟨instantiatePC_val_agree φ h_below.1 h_agree,
+           instantiatePC_val_agree ψ h_below.2 h_agree⟩
+  | .not φ =>
+    simp [instantiatePC]
+    exact instantiatePC_val_agree φ h_below h_agree
+
 /-! ## Generalization correctness: freshExprHole
 
 When `freshExprHole` creates a hole, the resulting state has the input
@@ -688,6 +715,21 @@ theorem instantiateExpr_extends_right {Reg : Type}
     (t : TemplateExpr Reg) (h_below : t.holesBelow st₁.subs.size) :
     instantiateExpr st₂.rightVal t = instantiateExpr st₁.rightVal t :=
   instantiateExpr_val_agree t h_below (fun h h_lt => h_ext.rightVal_agree h h_lt)
+
+/-- If template PC holes are below st₁.subs.size and st₁ extends to st₂,
+    left instantiation is invariant. -/
+theorem instantiatePC_extends_left {Reg : Type}
+    {st₁ st₂ : AUState Reg} (h_ext : AUState.Extends st₁ st₂)
+    (t : TemplatePC Reg) (h_below : t.holesBelow st₁.subs.size) :
+    instantiatePC st₂.leftVal t = instantiatePC st₁.leftVal t :=
+  instantiatePC_val_agree t h_below (fun h h_lt => h_ext.leftVal_agree h h_lt)
+
+/-- Same for right instantiation. -/
+theorem instantiatePC_extends_right {Reg : Type}
+    {st₁ st₂ : AUState Reg} (h_ext : AUState.Extends st₁ st₂)
+    (t : TemplatePC Reg) (h_below : t.holesBelow st₁.subs.size) :
+    instantiatePC st₂.rightVal t = instantiatePC st₁.rightVal t :=
+  instantiatePC_val_agree t h_below (fun h h_lt => h_ext.rightVal_agree h h_lt)
 
 /-- antiUnifyExpr output has holes below st'.subs.size when state is aligned.
     This is needed for the inductive step: sub-results from the first
