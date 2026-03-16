@@ -133,4 +133,63 @@ theorem substSymPC_matchingPC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .not _, .true | .not _, .eq _ _ | .not _, .lt _ _ | .not _, .le _ _ | .not _, .and _ _ =>
     simp [MatchingPC] at h
 
+/-! ## Restricted class theorem: value determination → SemClosed
+
+For equality-dispatch loops where branch guards pin register values,
+template closure implies pullback closure (SemClosed). This is the theorem
+that connects pre-extraction domain knowledge ("this is a dispatch loop")
+to the formal certificate.
+
+The proof uses:
+1. Basis-instantiation decomposition — every basis PC is a template instance
+2. Value determination — equality guards pin register values, making
+   substituted expressions determined by basis truth values
+
+Literature: this is the "exact predicate abstraction" case (Cimatti et al. 2010)
+where the predicate basis happens to be pullback-closed because the dispatch
+structure pins the relevant register values.
+
+Key hypotheses needed beyond template closure:
+- h_basis_inst: basis PCs are template instances
+- h_value_determined: for each branch, the guard's truth determines
+  the register values that feed into the substitution
+
+See notes/template-bisimulation-proof-architecture.md for the full analysis.
+See notes/pullback-closure-full-synthesis.md for the literature grounding. -/
+
+/-- Reduction: if basis PCs are template instances and lifted template
+    instances are value-determined by the basis, then SemClosed holds.
+
+    This is the structured reduction for dispatch loops. The h_value_determined
+    hypothesis IS the semantic content — for equality-dispatch, it holds because
+    guards pin register values. The theorem just rewrites SemClosed through
+    the basis-instantiation decomposition.
+
+    NOT sorry'd — the hypothesis is explicit, not hidden. -/
+theorem semClosed_of_valueDetermined {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    {State : Type*}
+    (isa : SymbolicISA (SymSub Reg) (SymPC Reg) State)
+    (model : Finset (Branch (SymSub Reg) (SymPC Reg)))
+    (basis : Finset (SymPC Reg))
+    (Ψ : Set (TemplatePC Reg))
+    (h_basis_inst : ∀ φ ∈ basis, ∃ T ∈ Ψ, ∃ v : HoleVal Reg, φ = instantiatePC v T)
+    (h_lift_eq : ∀ (σ : SymSub Reg) (φ : SymPC Reg),
+      isa.pc_lift σ φ = substSymPC σ φ)
+    /- Value determination: for each branch, partition-equivalent states
+       produce the same truth value on lifted template instances.
+       This is the semantic condition that equality-dispatch satisfies
+       (guards pin register values → substituted expressions determined). -/
+    (h_value_determined : ∀ b ∈ model, ∀ T ∈ Ψ, ∀ v : HoleVal Reg,
+      instantiatePC v T ∈ basis →
+      ∀ s₁ s₂ : State,
+        (pcSetoidWith isa basis).r s₁ s₂ →
+        isa.satisfies s₁ (substSymPC b.sub (instantiatePC v T)) ↔
+        isa.satisfies s₂ (substSymPC b.sub (instantiatePC v T)))
+    : SemClosed isa model basis := by
+  intro b hb φ hφ s₁ s₂ h_equiv
+  obtain ⟨T, hT, v, hφ_eq⟩ := h_basis_inst φ hφ
+  subst hφ_eq
+  rw [h_lift_eq]
+  exact h_value_determined b hb T hT v hφ s₁ s₂ h_equiv
+
 end VexISA
