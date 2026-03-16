@@ -1309,6 +1309,189 @@ Options for SemClosed:
 1. Prove instantiation recovery (antiUnifyExpr_left/right) — current approach
 2. Remove == optimization and prove left distributivity
 3. Prove a weaker refinement property sufficient for SemClosed
--/
+
+We implement option 3 below: the bridge theorem shows substitution distributes
+over instantiation, which suffices for SemClosed via TemplateConvergence. -/
+
+/-! ### Embedding commutes with substitution
+
+`embedExpr (substSymExpr σ e) = substTemplateExpr σ (embedExpr e)` and
+similarly for memory. Connects ground-level substitution to template-level
+substitution on embedded (hole-free) terms. -/
+
+mutual
+theorem embedExpr_substSymExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) (e : SymExpr Reg) :
+    embedExpr (substSymExpr σ e) = substTemplateExpr σ (embedExpr e) := by
+  match e with
+  | .const _ | .reg _ => rfl
+  | .low32 x => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ x]
+  | .uext32 x => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ x]
+  | .sext8to32 x => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ x]
+  | .sext32to64 x => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ x]
+  | .sub32 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
+  | .shl32 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
+  | .add64 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
+  | .sub64 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
+  | .xor64 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
+  | .and64 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
+  | .or64 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
+  | .shl64 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
+  | .shr64 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
+  | .load w m a => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedMem_substSymMem σ m]
+
+theorem embedMem_substSymMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) (m : SymMem Reg) :
+    embedMem (substSymMem σ m) = substTemplateMem σ (embedMem m) := by
+  match m with
+  | .base => rfl
+  | .store w mem a v =>
+    simp [substSymMem, embedMem, substTemplateMem,
+          embedMem_substSymMem σ mem, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ v]
+end
+
+/-! ### Template substitution preserves hole structure
+
+Holes are inert under `substTemplateExpr/Mem/PC`, so hole IDs don't change.
+Non-hole leaf positions become `embedExpr (substSymExpr σ e)` which has
+`holesBelow n` for any `n` (by `embedExpr_holesBelow`). -/
+
+mutual
+theorem substTemplateExpr_holesBelow {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) (t : TemplateExpr Reg) (n : Nat)
+    (h : t.holesBelow n) : (substTemplateExpr σ t).holesBelow n := by
+  match t with
+  | .hole _ => exact h
+  | .const _ => exact embedExpr_holesBelow _ n
+  | .reg _ => exact embedExpr_holesBelow _ n
+  | .low32 x => exact substTemplateExpr_holesBelow σ x n h
+  | .uext32 x => exact substTemplateExpr_holesBelow σ x n h
+  | .sext8to32 x => exact substTemplateExpr_holesBelow σ x n h
+  | .sext32to64 x => exact substTemplateExpr_holesBelow σ x n h
+  | .sub32 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .shl32 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .add64 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .sub64 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .xor64 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .and64 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .or64 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .shl64 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .shr64 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .load _ m a => exact ⟨substTemplateMem_holesBelow σ m n h.1, substTemplateExpr_holesBelow σ a n h.2⟩
+
+theorem substTemplateMem_holesBelow {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) (t : TemplateMem Reg) (n : Nat)
+    (h : t.holesBelow n) : (substTemplateMem σ t).holesBelow n := by
+  match t with
+  | .base => exact embedMem_holesBelow _ n
+  | .store _ m a v =>
+    exact ⟨substTemplateMem_holesBelow σ m n h.1,
+           substTemplateExpr_holesBelow σ a n h.2.1,
+           substTemplateExpr_holesBelow σ v n h.2.2⟩
+end
+
+theorem substTemplatePC_holesBelow {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) (t : TemplatePC Reg) (n : Nat)
+    (h : t.holesBelow n) : (substTemplatePC σ t).holesBelow n := by
+  match t with
+  | .true => trivial
+  | .eq a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .lt a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .le a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
+  | .and φ ψ => exact ⟨substTemplatePC_holesBelow σ φ n h.1, substTemplatePC_holesBelow σ ψ n h.2⟩
+  | .not φ => exact substTemplatePC_holesBelow σ φ n h
+
+/-! ### The bridge theorem: substitution distributes over instantiation
+
+The main result: `substSymPC σ (instantiatePC v T) = instantiatePC v' (substTemplatePC σ T)`
+where `v' h = substSymExpr σ (v h)`. This connects ground-level pc_lift
+(= substSymPC for VexISA) to template-level substitution, enabling SemClosed
+via template closure instead of syntactic PC closure. -/
+
+mutual
+theorem substSymExpr_instantiateExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) (v : HoleVal Reg) (t : TemplateExpr Reg) :
+    substSymExpr σ (instantiateExpr v t) =
+    instantiateExpr (fun h => substSymExpr σ (v h)) (substTemplateExpr σ t) := by
+  match t with
+  | .hole _ => rfl
+  | .const _ =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr, instantiateExpr_embedExpr]
+  | .reg _ =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr, instantiateExpr_embedExpr]
+  | .low32 x =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr, substSymExpr_instantiateExpr σ v x]
+  | .uext32 x =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr, substSymExpr_instantiateExpr σ v x]
+  | .sext8to32 x =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr, substSymExpr_instantiateExpr σ v x]
+  | .sext32to64 x =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr, substSymExpr_instantiateExpr σ v x]
+  | .sub32 a b =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .shl32 a b =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .add64 a b =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .sub64 a b =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .xor64 a b =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .and64 a b =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .or64 a b =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .shl64 a b =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .shr64 a b =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .load w m a =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr,
+          substSymExpr_instantiateExpr σ v a, substSymMem_instantiateMem σ v m]
+
+theorem substSymMem_instantiateMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) (v : HoleVal Reg) (t : TemplateMem Reg) :
+    substSymMem σ (instantiateMem v t) =
+    instantiateMem (fun h => substSymExpr σ (v h)) (substTemplateMem σ t) := by
+  match t with
+  | .base =>
+    simp [instantiateMem, substSymMem, substTemplateMem, instantiateMem_embedMem]
+  | .store w m a val =>
+    simp [instantiateMem, substSymMem, substTemplateMem,
+          substSymMem_instantiateMem σ v m,
+          substSymExpr_instantiateExpr σ v a,
+          substSymExpr_instantiateExpr σ v val]
+end
+
+theorem substSymPC_instantiatePC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (σ : SymSub Reg) (v : HoleVal Reg) (t : TemplatePC Reg) :
+    substSymPC σ (instantiatePC v t) =
+    instantiatePC (fun h => substSymExpr σ (v h)) (substTemplatePC σ t) := by
+  match t with
+  | .true => rfl
+  | .eq a b =>
+    simp [instantiatePC, substSymPC, substTemplatePC,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .lt a b =>
+    simp [instantiatePC, substSymPC, substTemplatePC,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .le a b =>
+    simp [instantiatePC, substSymPC, substTemplatePC,
+          substSymExpr_instantiateExpr σ v a, substSymExpr_instantiateExpr σ v b]
+  | .and φ ψ =>
+    simp [instantiatePC, substSymPC, substTemplatePC,
+          substSymPC_instantiatePC σ v φ, substSymPC_instantiatePC σ v ψ]
+  | .not φ =>
+    simp [instantiatePC, substSymPC, substTemplatePC,
+          substSymPC_instantiatePC σ v φ]
 
 end VexISA
