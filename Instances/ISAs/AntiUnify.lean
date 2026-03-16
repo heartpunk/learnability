@@ -945,16 +945,18 @@ def substTemplatePC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .and φ ψ => .and (substTemplatePC σ φ) (substTemplatePC σ ψ)
   | .not φ => .not (substTemplatePC σ φ)
 
-/-! ## Left distributivity: σ(t₁ ↓ t₂) = σt₁ ↓ σt₂
+/-! ## Left distributivity: NOT provable as stated
 
-The key property for SemClosed: lifting a template through a branch
-substitution gives back a template. Proved by structural induction. -/
+σ(t₁ ↓ t₂) = σt₁ ↓ σt₂ is a known algebraic property of the
+mathematical LGG (Eder 1985, Palamidessi 1990). However, our
+algorithmic antiUnifyPC uses an `== ` fast path that breaks this:
+if pc₁ ≠ pc₂ but substSymPC σ pc₁ == substSymPC σ pc₂, the LHS
+has a hole but the RHS doesn't.
 
--- Statement (proof is the goal):
-theorem leftDistributivity_PC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (σ : SymSub Reg) (pc₁ pc₂ : SymPC Reg) :
-    substTemplatePC σ (antiUnifyPC {} pc₁ pc₂).1 =
-    (antiUnifyPC {} (substSymPC σ pc₁) (substSymPC σ pc₂)).1 := by
-  sorry
+Options for SemClosed:
+1. Prove instantiation recovery (antiUnifyExpr_left/right) — current approach
+2. Remove == optimization and prove left distributivity
+3. Prove a weaker refinement property sufficient for SemClosed
+-/
 
 end VexISA
