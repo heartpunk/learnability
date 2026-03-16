@@ -2,6 +2,7 @@ import Instances.ISAs.VexCompTree
 import Instances.ISAs.VexProofCompression
 import Instances.ISAs.VexIRParser
 import Instances.ISAs.ElfSymbolTable
+import Instances.ISAs.AntiUnify
 import Lean.Data.Json
 
 set_option autoImplicit false
@@ -1259,6 +1260,142 @@ def composeAndDedupParallel {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashab
   let totalPairs := bodyArr.size * frontierArr.size
   let skipped := totalPairs - totalComposed
   return (newBranches, cur, totalComposed, skipped, totalDropped, dupes)
+
+/-! ## Template extraction and matching for anti-unification-based dedup
+
+When the ground PC closure explodes, anti-unify consecutive-round PCs to
+extract templates. PCs that are instances of a known template can be collapsed,
+since they represent the same "shape" with different data values (holes). -/
+
+/-- Pair PCs from previous and current frontier by body branch index.
+    Groups both arrays by body index, then produces (old, new) pairs
+    within each group. Only pairs PCs that share the same body index
+    AND the same substitution hash (to avoid pairing unrelated paths). -/
+def pairFrontierPCs {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
+    (previous current : Array (Branch (SymSub Reg) (SymPC Reg) × Nat))
+    : Array (SymPC Reg × SymPC Reg) := Id.run do
+  -- Build index: bodyIdx → array of PCs (with sub hash for filtering)
+  let mut prevByBody : Std.HashMap Nat (Array (SymPC Reg × UInt64)) := {}
+  for (b, bodyIdx) in previous do
+    let arr := prevByBody.getD bodyIdx #[]
+    prevByBody := prevByBody.insert bodyIdx (arr.push (b.pc, hash b.sub))
+  let mut pairs : Array (SymPC Reg × SymPC Reg) := #[]
+  for (b, bodyIdx) in current do
+    let subH := hash b.sub
+    if let some prevPCs := prevByBody.get? bodyIdx then
+      for (prevPC, prevSubH) in prevPCs do
+        -- Only pair PCs from branches with the same sub hash
+        if prevSubH == subH && prevPC != b.pc then
+          pairs := pairs.push (prevPC, b.pc)
+  return pairs
+
+/-- Extract templates from PC pairs via anti-unification.
+    Filters trivial (0-hole) results — those are just identical PCs
+    and don't help with dedup. -/
+def extractTemplatesFromPairs {Reg : Type} [DecidableEq Reg]
+    (pairs : Array (SymPC Reg × SymPC Reg))
+    : Array (TemplatePC Reg) := Id.run do
+  let mut templates : Array (TemplatePC Reg) := #[]
+  for (l, r) in pairs do
+    let (tpc, _) := VexISA.antiUnify l r
+    if tpc.isParametric then
+      templates := templates.push tpc
+  return templates
+
+mutual
+/-- Match a template expression against a ground expression.
+    Returns `some bindings` if the ground expression is an instance of the
+    template, where `bindings` maps hole IDs to ground sub-expressions.
+    Returns `none` on mismatch. -/
+def matchTemplateExpr {Reg : Type} [DecidableEq Reg]
+    (bindings : Std.HashMap HoleId (SymExpr Reg))
+    (t : TemplateExpr Reg) (e : SymExpr Reg)
+    : Option (Std.HashMap HoleId (SymExpr Reg)) :=
+  match t with
+  | .hole h =>
+    match bindings.get? h with
+    | some existing => if existing == e then some bindings else none
+    | none => some (bindings.insert h e)
+  | .const v => match e with | .const v' => if v == v' then some bindings else none | _ => none
+  | .reg r => match e with | .reg r' => if r == r' then some bindings else none | _ => none
+  | .low32 tx => match e with | .low32 ex => matchTemplateExpr bindings tx ex | _ => none
+  | .uext32 tx => match e with | .uext32 ex => matchTemplateExpr bindings tx ex | _ => none
+  | .sext8to32 tx => match e with | .sext8to32 ex => matchTemplateExpr bindings tx ex | _ => none
+  | .sext32to64 tx => match e with | .sext32to64 ex => matchTemplateExpr bindings tx ex | _ => none
+  | .sub32 ta tb => match e with
+    | .sub32 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .shl32 ta tb => match e with
+    | .shl32 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .add64 ta tb => match e with
+    | .add64 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .sub64 ta tb => match e with
+    | .sub64 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .xor64 ta tb => match e with
+    | .xor64 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .and64 ta tb => match e with
+    | .and64 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .or64 ta tb => match e with
+    | .or64 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .shl64 ta tb => match e with
+    | .shl64 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .shr64 ta tb => match e with
+    | .shr64 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .load tw tm ta => match e with
+    | .load ew em ea =>
+      if tw == ew then
+        (matchTemplateMem bindings tm em).bind (matchTemplateExpr · ta ea)
+      else none
+    | _ => none
+
+/-- Match a template memory against a ground memory. -/
+def matchTemplateMem {Reg : Type} [DecidableEq Reg]
+    (bindings : Std.HashMap HoleId (SymExpr Reg))
+    (t : TemplateMem Reg) (m : SymMem Reg)
+    : Option (Std.HashMap HoleId (SymExpr Reg)) :=
+  match t, m with
+  | .base, .base => some bindings
+  | .store tw tm ta tv, .store ew em ea ev =>
+    if tw == ew then
+      (matchTemplateMem bindings tm em).bind fun b1 =>
+      (matchTemplateExpr b1 ta ea).bind fun b2 =>
+      matchTemplateExpr b2 tv ev
+    else none
+  | _, _ => none
+end
+
+/-- Match a template PC against a ground PC.
+    Returns `some bindings` if the ground PC is an instance of the template. -/
+def matchTemplatePC {Reg : Type} [DecidableEq Reg]
+    (bindings : Std.HashMap HoleId (SymExpr Reg))
+    (t : TemplatePC Reg) (pc : SymPC Reg)
+    : Option (Std.HashMap HoleId (SymExpr Reg)) :=
+  match t, pc with
+  | .true, .true => some bindings
+  | .eq ta tb, .eq ea eb =>
+    (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+  | .lt ta tb, .lt ea eb =>
+    (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+  | .le ta tb, .le ea eb =>
+    (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+  | .and tφ tψ, .and eφ eψ =>
+    (matchTemplatePC bindings tφ eφ).bind (matchTemplatePC · tψ eψ)
+  | .not tφ, .not eφ => matchTemplatePC bindings tφ eφ
+  | _, _ => none
+
+/-- Check if a ground PC matches any known template (is an instance).
+    Tries each template in order, returns true on first match. -/
+def isTemplateInstance {Reg : Type} [DecidableEq Reg]
+    (templates : Array (TemplatePC Reg)) (pc : SymPC Reg) : Bool :=
+  templates.any fun t => (matchTemplatePC {} t pc).isSome
 
 /-- Fast incremental stabilization using HashSet for O(1) membership.
     Single-threaded rip-indexed composition with inline dedup.
