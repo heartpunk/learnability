@@ -490,6 +490,16 @@ theorem embedMem_holesBelow {Reg : Type} (m : SymMem Reg) (n : Nat) :
     exact ⟨embedMem_holesBelow mem n, embedExpr_holesBelow a n, embedExpr_holesBelow v n⟩
 end
 
+theorem embedPC_holesBelow {Reg : Type} (pc : SymPC Reg) (n : Nat) :
+    (embedPC pc).holesBelow n := by
+  match pc with
+  | .true => trivial
+  | .eq a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .lt a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .le a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
+  | .and φ ψ => exact ⟨embedPC_holesBelow φ n, embedPC_holesBelow ψ n⟩
+  | .not φ => exact embedPC_holesBelow φ n
+
 mutual
 /-- If two valuations agree on all holes below n, instantiation agrees on
     templates with holes below n. -/
@@ -721,6 +731,19 @@ theorem TemplateMem.holesBelow_mono {Reg : Type} {n m : Nat}
            TemplateExpr.holesBelow_mono a h.2.1 h_le,
            TemplateExpr.holesBelow_mono v h.2.2 h_le⟩
 end
+
+theorem TemplatePC.holesBelow_mono {Reg : Type} {n m : Nat}
+    (t : TemplatePC Reg) (h : t.holesBelow n) (h_le : n ≤ m) :
+    t.holesBelow m := by
+  match t with
+  | .true => trivial
+  | .eq a b | .lt a b | .le a b =>
+    exact ⟨TemplateExpr.holesBelow_mono a h.1 h_le,
+           TemplateExpr.holesBelow_mono b h.2 h_le⟩
+  | .and φ ψ =>
+    exact ⟨TemplatePC.holesBelow_mono φ h.1 h_le,
+           TemplatePC.holesBelow_mono ψ h.2 h_le⟩
+  | .not φ => exact TemplatePC.holesBelow_mono φ h h_le
 
 -- Compound property: holesBelow + aligned + extends, for mutual induction
 structure AntiUnifyExprInv {Reg : Type} (st st' : AUState Reg)
