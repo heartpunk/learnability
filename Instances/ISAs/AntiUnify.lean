@@ -717,4 +717,67 @@ theorem AUState.Extends.rightVal_agree {Reg : Type}
   simp [h_lt, h_lt₂]
   exact congrArg HoleSub.right (h_ext.subs_agree h h_lt)
 
+/-- If template holes are below st₁.subs.size and st₁ extends to st₂,
+    left instantiation is invariant. -/
+theorem instantiateExpr_extends_left {Reg : Type}
+    {st₁ st₂ : AUState Reg} (h_ext : AUState.Extends st₁ st₂)
+    (t : TemplateExpr Reg) (h_below : t.holesBelow st₁.subs.size) :
+    instantiateExpr st₂.leftVal t = instantiateExpr st₁.leftVal t :=
+  instantiateExpr_val_agree t h_below (fun h h_lt => h_ext.leftVal_agree h h_lt)
+
+/-- Same for right instantiation. -/
+theorem instantiateExpr_extends_right {Reg : Type}
+    {st₁ st₂ : AUState Reg} (h_ext : AUState.Extends st₁ st₂)
+    (t : TemplateExpr Reg) (h_below : t.holesBelow st₁.subs.size) :
+    instantiateExpr st₂.rightVal t = instantiateExpr st₁.rightVal t :=
+  instantiateExpr_val_agree t h_below (fun h h_lt => h_ext.rightVal_agree h h_lt)
+
+/-- antiUnifyExpr output has holes below st'.subs.size when state is aligned.
+    This is needed for the inductive step: sub-results from the first
+    recursive call have holes bounded by the intermediate state, so they
+    remain valid after the second recursive call extends the state further. -/
+
+-- For the full mutual induction, we need holesBelow for antiUnifyExpr output.
+-- Statement (proof is the next milestone):
+theorem antiUnifyExpr_holesBelow {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
+    let (t, st') := antiUnifyExpr st l r
+    t.holesBelow st'.subs.size := by
+  sorry
+
+theorem antiUnifyMem_holesBelow {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymMem Reg) (h_al : st.Aligned) :
+    let (t, st') := antiUnifyMem st l r
+    t.holesBelow st'.subs.size := by
+  sorry
+
+-- Main correctness theorems (proof is the final milestone):
+theorem antiUnifyExpr_left {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
+    let (t, st') := antiUnifyExpr st l r
+    instantiateExpr st'.leftVal t = l := by
+  sorry
+
+theorem antiUnifyExpr_right {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
+    let (t, st') := antiUnifyExpr st l r
+    instantiateExpr st'.rightVal t = r := by
+  sorry
+
+/-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
+    The template instantiated with left substitutions = left input. -/
+theorem antiUnify_left {Reg : Type} [DecidableEq Reg]
+    (l r : SymPC Reg) :
+    let (template, subs) := antiUnify l r
+    instantiatePC (fun h => if h_lt : h < subs.size then (subs[h]).left else .const 0) template = l := by
+  sorry
+
+/-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
+    The template instantiated with right substitutions = right input. -/
+theorem antiUnify_right {Reg : Type} [DecidableEq Reg]
+    (l r : SymPC Reg) :
+    let (template, subs) := antiUnify l r
+    instantiatePC (fun h => if h_lt : h < subs.size then (subs[h]).right else .const 0) template = r := by
+  sorry
+
 end VexISA
