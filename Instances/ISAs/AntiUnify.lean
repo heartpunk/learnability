@@ -785,13 +785,18 @@ theorem antiUnifyExpr_inv {Reg : Type} [DecidableEq Reg]
                                        ih2.holesBelow (ih1.aligned h_al)⟩⟩)
     -- .load: w match → antiUnifyMem option → antiUnifyExpr
     · split
-      · split
-        · exact ⟨fun h => freshExprHole_aligned st _ _ h,
+      · -- w1 == w2: case split on antiUnifyMem result
+        cases h_mem : antiUnifyMem st _ _ with
+        | none =>
+          -- antiUnifyMem returned none → function uses freshExprHole
+          simp [h_mem]
+          exact ⟨fun h => freshExprHole_aligned st _ _ h,
                  freshExprHole_extends st _ _,
                  fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
-        · -- antiUnifyMem returned some: compose ihm + iha
-          rename_i h_eq
-          sorry
+        | some val =>
+          obtain ⟨tm, stm⟩ := val
+          sorry -- needs antiUnifyMem_inv + antiUnifyExpr_inv composition
+                -- blocker: l/r args inaccessible after cases on Option match
       · exact ⟨fun h => freshExprHole_aligned st _ _ h,
                freshExprHole_extends st _ _,
                fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
