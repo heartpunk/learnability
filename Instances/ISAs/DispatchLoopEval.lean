@@ -1137,7 +1137,7 @@ def composeBranchArraySimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     Returns (result, totalPairs, skippedByIndex, droppedBySimplify). -/
 def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
     (ip_reg : Reg) (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg))) :
-    Array (Branch (SymSub Reg) (SymPC Reg)) × Nat × Nat × Nat := Id.run do
+    Array (Branch (SymSub Reg) (SymPC Reg) × Nat) × Nat × Nat × Nat := Id.run do
   let isa := vexSummaryISA Reg
   -- Build frontier index: rip-guard addr → array of frontier branches
   let mut frontierByRip : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
@@ -1148,11 +1148,12 @@ def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq 
       let arr := frontierByRip.getD addr #[]
       frontierByRip := frontierByRip.insert addr (arr.push f)
     | none => frontierNoRip := frontierNoRip.push f
-  -- Compose using index
-  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  -- Compose using index, tracking which body branch produced each result
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg) × Nat) := #[]
   let mut dropped : Nat := 0
   let mut composed_count : Nat := 0
   let totalPairs := bodyArr.size * frontierArr.size
+  let mut bodyIdx : Nat := 0
   for b in bodyArr do
     -- Determine which frontier branches this body can reach
     let compatible := match extractRipTarget ip_reg b.sub with
@@ -1163,7 +1164,8 @@ def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq 
       let composed := b.compose isa f
       match simplifyBranch composed with
       | none => dropped := dropped + 1
-      | some b' => result := result.push b'
+      | some b' => result := result.push (b', bodyIdx)
+    bodyIdx := bodyIdx + 1
   let skipped := totalPairs - composed_count
   return (result, composed_count, skipped, dropped)
 
@@ -1276,7 +1278,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   let mut sigSeen : Std.HashSet (SigDedupKey Reg) := {}
   let initSig := computePCSignature closure initBranch.pc
   -- initSigKey inserted after closedness check determines dedupSubHash
-  let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
+  let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg) × Nat) := #[(initBranch, bodyArr.size)]
   -- allBranchesBySub: sub hash → array of branches, for efficient subsumption check
   let mut allBranchesBySub : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
   allBranchesBySub := allBranchesBySub.insert (hash initBranch.sub) #[initBranch]
@@ -1341,12 +1343,12 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     let (composed, pairsComposed, skipped, dropped) :=
-      composeBranchArrayIndexed ip_reg bodyArr frontier
+      composeBranchArrayIndexed ip_reg bodyArr (frontier.map (·.1))
     -- Inline dedup: exact-match via HashSet + signature-class via sigSeen
-    let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg) × Nat) := #[]
     let mut dupes : Nat := 0
     let mut sigCollapsed : Nat := 0
-    for b in composed do
+    for (b, bodyIdx) in composed do
       if current.contains b then
         dupes := dupes + 1
       else
@@ -1357,7 +1359,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
           sigCollapsed := sigCollapsed + 1
         else
           sigSeen := sigSeen.insert key
-          newBranches := newBranches.push b
+          newBranches := newBranches.push (b, bodyIdx)
     -- Semantic subsumption via SMT: batch check new branches against existing
     let t_prune_start ← IO.monoMsNow
     let mut prunedCount : Nat := 0
@@ -1365,7 +1367,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     let mut pcPairs : Array (SymPC Reg × SymPC Reg) := #[]
     let mut queryBranchIdx : Array Nat := #[]
     let mut branchIdx : Nat := 0
-    for bi in newBranches do
+    for (bi, _) in newBranches do
       let h := hash bi.sub
       let existingGroup := allBranchesBySub.getD h #[]
       for bj in existingGroup do
@@ -1385,7 +1387,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
               subsumedSet := subsumedSet.insert queryBranchIdx[i]
       log s!"    smt: {pcPairs.size} queries, cache_hits={subsHits}, {subsumedSet.size} subsumed"
     -- Filter new branches
-    let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    let mut survivingNew : Array (Branch (SymSub Reg) (SymPC Reg) × Nat) := #[]
     branchIdx := 0
     for bi in newBranches do
       if subsumedSet.contains branchIdx then
@@ -1395,7 +1397,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
       branchIdx := branchIdx + 1
     newBranches := survivingNew
     -- Update tracking structures with surviving new branches
-    for b in newBranches do
+    for (b, _) in newBranches do
       current := current.insert b
       let h := hash b.sub
       let arr := allBranchesBySub.getD h #[]
@@ -1405,7 +1407,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     let mut frontierSubs : Std.HashSet UInt64 := {}
     let mut frontierSubsNoRip : Std.HashSet UInt64 := {}
     let mut projectedSubs : Std.HashSet UInt64 := {}
-    for b in newBranches do
+    for (b, _) in newBranches do
       frontierSubs := frontierSubs.insert (hash b.sub)
       let noRipSub : SymSub Reg := { b.sub with regs := fun r => if r == ip_reg then .const 0 else b.sub.regs r }
       frontierSubsNoRip := frontierSubsNoRip.insert (hash noRipSub)
@@ -1826,8 +1828,10 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     -- Pure composition: no summary interception, body has no call branches
-    let (composed, pairsComposed, skipped, dropped) :=
+    let (composedTagged, pairsComposed, skipped, dropped) :=
       composeBranchArrayIndexed ip_reg bodyArr frontier
+    -- Strip body indices (not used in this function)
+    let composed := composedTagged.map (·.1)
     -- Simplify: load-after-store + constant folding + zero non-projected
     let mut simplified : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut droppedSimplify : Nat := 0
