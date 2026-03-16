@@ -875,15 +875,51 @@ theorem antiUnifyExpr_extends {Reg : Type} [DecidableEq Reg]
 -- when antiUnifyMem returns none, the caller uses freshExprHole (already proved).
 -- antiUnifyMem_left/right only need to cover the `some` case.
 
+mutual
 theorem antiUnifyExpr_left {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
     instantiateExpr (antiUnifyExpr st l r).2.leftVal (antiUnifyExpr st l r).1 = l := by
-  sorry
+  unfold antiUnifyExpr
+  split
+  · exact instantiateExpr_embedExpr _ l
+  · rename_i h_neq
+    split
+    -- Unary cases
+    all_goals try (rename_i a b; simp [instantiateExpr]
+                   exact antiUnifyExpr_left st a b h_al)
+    -- Binary cases
+    all_goals try (rename_i a1 a2 b1 b2; simp [instantiateExpr]; constructor
+                   · rw [instantiateExpr_extends_left
+                         (antiUnifyExpr_inv (antiUnifyExpr st a1 b1).2 a2 b2).extends_
+                         _ ((antiUnifyExpr_inv st a1 b1).holesBelow h_al)]
+                     exact antiUnifyExpr_left st a1 b1 h_al
+                   · exact antiUnifyExpr_left _ a2 b2 (antiUnifyExpr_aligned st a1 b1 h_al))
+    -- .load
+    · rename_i w1 m1 a1 w2 m2 a2
+      split
+      · cases h_mem : antiUnifyMem st m1 m2 with
+        | none => simp [h_mem]; exact freshExprHole_left st _ _ h_al
+        | some val =>
+          obtain ⟨tm, stm⟩ := val
+          simp [h_mem, instantiateExpr]
+          have ihm := antiUnifyMem_inv st m1 m2 tm stm h_mem
+          constructor
+          · rw [instantiateMem_val_agree _ (ihm.holesBelow h_al)
+                (fun h h_lt => (antiUnifyExpr_inv stm a1 a2).extends_.leftVal_agree h h_lt)]
+            exact antiUnifyMem_left st m1 m2 h_al tm stm h_mem
+          · exact antiUnifyExpr_left stm a1 a2 (ihm.aligned h_al)
+      · exact freshExprHole_left st _ _ h_al
+    -- catch-all
+    all_goals exact freshExprHole_left _ _ _ h_al
+  termination_by (sizeOf l, sizeOf r)
 
-theorem antiUnifyExpr_right {Reg : Type} [DecidableEq Reg]
-    (st : AUState Reg) (l r : SymExpr Reg) (h_al : st.Aligned) :
-    instantiateExpr (antiUnifyExpr st l r).2.rightVal (antiUnifyExpr st l r).1 = r := by
+theorem antiUnifyMem_left {Reg : Type} [DecidableEq Reg]
+    (st : AUState Reg) (l r : SymMem Reg) (h_al : st.Aligned) :
+    ∀ tm st', antiUnifyMem st l r = some (tm, st') →
+    instantiateMem st'.leftVal tm = l := by
   sorry
+  termination_by (sizeOf l, sizeOf r)
+end
 
 /-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
     The template instantiated with left substitutions = left input. -/
