@@ -649,4 +649,28 @@ theorem freshExprHole_right {Reg : Type}
   rw [h_al]
   simp [Array.size_push, Array.getElem_push]
 
+/-! ## Main correctness theorem — structures
+
+Bundle the properties we need from antiUnifyExpr/Mem into compound
+correctness predicates for the mutual well-founded induction. -/
+
+/-- Compound correctness property for antiUnifyExpr.
+    Given `(t, st') = antiUnifyExpr st l r`:
+    - State alignment is preserved
+    - State only extends (monotonicity)
+    - Left instantiation recovers `l`
+    - Right instantiation recovers `r` -/
+structure AntiUnifyExprCorrect {Reg : Type} (st : AUState Reg)
+    (l r : SymExpr Reg) (t : TemplateExpr Reg) (st' : AUState Reg) : Prop where
+  aligned : st.Aligned → st'.Aligned
+  extends_ : AUState.Extends st st'
+  left_correct : st.Aligned → instantiateExpr st'.leftVal t = l
+  right_correct : st.Aligned → instantiateExpr st'.rightVal t = r
+
+/-- Compound correctness property for antiUnifyMem. -/
+structure AntiUnifyMemCorrect {Reg : Type} (st : AUState Reg)
+    (l r : SymMem Reg) (t : TemplateMem Reg) (st' : AUState Reg) : Prop where
+  aligned : st.Aligned → st'.Aligned
+  extends_ : AUState.Extends st st'
+
 end VexISA
