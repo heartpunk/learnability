@@ -917,8 +917,40 @@ theorem antiUnifyMem_left {Reg : Type} [DecidableEq Reg]
     (st : AUState Reg) (l r : SymMem Reg) (h_al : st.Aligned) :
     ∀ tm st', antiUnifyMem st l r = some (tm, st') →
     instantiateMem st'.leftVal tm = l := by
-  sorry
+  intro tm st' h_some
+  unfold antiUnifyMem at h_some
+  cases l with
+  | base =>
+    cases r with
+    | base => simp at h_some; obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2; rfl
+    | store => simp at h_some
+  | store w1 m1 a1 v1 =>
+    cases r with
+    | base => simp at h_some
+    | store w2 m2 a2 v2 =>
+      by_cases hw : (w1 == w2)
+      · simp [hw] at h_some
+        match h_sub : antiUnifyMem st m1 m2 with
+        | none => simp [h_sub] at h_some
+        | some (sub_tm, sub_st) =>
+          simp [h_sub] at h_some
+          obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2
+          have ihm := antiUnifyMem_inv st m1 m2 sub_tm sub_st h_sub
+          have iha := antiUnifyExpr_inv sub_st a1 a2
+          have ihv := antiUnifyExpr_inv (antiUnifyExpr sub_st a1 a2).2 v1 v2
+          simp [instantiateMem]
+          refine ⟨?_, ?_, ?_⟩
+          · rw [instantiateMem_val_agree _ (ihm.holesBelow h_al)
+                (fun h h_lt => (iha.extends_.trans ihv.extends_).leftVal_agree h h_lt)]
+            exact antiUnifyMem_left st m1 m2 h_al sub_tm sub_st h_sub
+          · rw [instantiateExpr_extends_left ihv.extends_
+                _ (iha.holesBelow (ihm.aligned h_al))]
+            exact antiUnifyExpr_left sub_st a1 a2 (ihm.aligned h_al)
+          · exact antiUnifyExpr_left _ v1 v2
+              (antiUnifyExpr_aligned sub_st a1 a2 (ihm.aligned h_al))
+      · simp [hw] at h_some
   termination_by (sizeOf l, sizeOf r)
+  decreasing_by all_goals (simp_wf; subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
 end
 
 /-- TOP-LEVEL THEOREM: antiUnify produces a valid generalization.
