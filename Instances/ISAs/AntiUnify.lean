@@ -789,7 +789,9 @@ theorem antiUnifyExpr_inv {Reg : Type} [DecidableEq Reg]
         · exact ⟨fun h => freshExprHole_aligned st _ _ h,
                  freshExprHole_extends st _ _,
                  fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
-        · sorry -- some case: needs ihm + iha composition (goal shape issue)
+        · -- antiUnifyMem returned some: compose ihm + iha
+          rename_i h_eq
+          sorry
       · exact ⟨fun h => freshExprHole_aligned st _ _ h,
                freshExprHole_extends st _ _,
                fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
@@ -799,26 +801,42 @@ theorem antiUnifyExpr_inv {Reg : Type} [DecidableEq Reg]
                       fun h_al => freshExprHole_holesBelow _ _ _ h_al⟩
   termination_by (sizeOf l, sizeOf r)
 
-/-- When antiUnifyMem returns `some`, the compound invariant holds. -/
+/-- When antiUnifyMem returns `some`, the compound invariant holds.
+    Proved by matching on the inputs (for termination) and using the
+    definition of antiUnifyMem to relate the match to the result. -/
 theorem antiUnifyMem_inv {Reg : Type} [DecidableEq Reg]
-    (st : AUState Reg) (l r : SymMem Reg)
-    {tm : TemplateMem Reg} {st' : AUState Reg}
-    (h_some : antiUnifyMem st l r = some (tm, st')) :
-    AntiUnifyMemInv st st' tm := by
+    (st : AUState Reg) (l r : SymMem Reg) :
+    ∀ tm st', antiUnifyMem st l r = some (tm, st') → AntiUnifyMemInv st st' tm := by
+  intro tm st' h_some
   unfold antiUnifyMem at h_some
-  split at h_some
-  · -- base, base
+  match l, r with
+  | .base, .base =>
     simp at h_some; obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2
     exact ⟨id, .refl st, fun _ => trivial⟩
-  · -- store w1 m1 a1 v1, store w2 m2 a2 v2
-    split at h_some
-    · -- w1 == w2
-      split at h_some
-      · simp at h_some  -- none case → contradiction
-      · sorry -- some case: needs recursive antiUnifyMem_inv + antiUnifyExpr_inv
-    · simp at h_some  -- w1 ≠ w2 → none → contradiction
-  · simp at h_some  -- catch-all → none → contradiction
+  | .store w1 m1 a1 v1, .store w2 m2 a2 v2 =>
+    by_cases hw : (w1 == w2)
+    · simp [hw] at h_some
+      match h_sub : antiUnifyMem st m1 m2 with
+      | none => simp [h_sub] at h_some
+      | some (sub_tm, sub_st) =>
+        simp [h_sub] at h_some
+        obtain ⟨h1, h2⟩ := h_some; subst h1; subst h2
+        have ihm := antiUnifyMem_inv st m1 m2 sub_tm sub_st h_sub
+        have iha := antiUnifyExpr_inv sub_st a1 a2
+        have ihv := antiUnifyExpr_inv (antiUnifyExpr sub_st a1 a2).2 v1 v2
+        exact ⟨fun h => ihv.aligned (iha.aligned (ihm.aligned h)),
+               ihm.extends_.trans (iha.extends_.trans ihv.extends_),
+               fun h_al =>
+                 ⟨TemplateMem.holesBelow_mono _ (ihm.holesBelow h_al)
+                    (iha.extends_.trans ihv.extends_).subs_prefix,
+                  TemplateExpr.holesBelow_mono _ (iha.holesBelow (ihm.aligned h_al))
+                    ihv.extends_.subs_prefix,
+                  ihv.holesBelow (iha.aligned (ihm.aligned h_al))⟩⟩
+    · simp [hw] at h_some
+  | .base, .store .. => simp at h_some
+  | .store .., .base => simp at h_some
   termination_by (sizeOf l, sizeOf r)
+  decreasing_by all_goals sorry
 end
 
 -- Extract individual theorems
