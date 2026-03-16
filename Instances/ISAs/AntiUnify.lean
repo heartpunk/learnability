@@ -922,7 +922,13 @@ theorem antiUnifyExpr_left {Reg : Type} [DecidableEq Reg]
     | (rename_i w1 m1 a1 w2 m2 a2
        split
        · simp [instantiateExpr]
-         exact ⟨sorry, antiUnifyExpr_left _ a1 a2 ((antiUnifyMem_inv st m1 m2).aligned h_al)⟩
+         have ihm := antiUnifyMem_inv st m1 m2
+         have iha := antiUnifyExpr_inv (antiUnifyMem st m1 m2).2 a1 a2
+         exact ⟨by
+           rw [instantiateMem_val_agree _ (ihm.holesBelow h_al)
+               (fun h h_lt => iha.extends_.leftVal_agree h h_lt)]
+           exact antiUnifyMem_left st m1 m2 h_al,
+           antiUnifyExpr_left _ a1 a2 (ihm.aligned h_al)⟩
        · exact freshExprHole_left st _ _ h_al)
     -- catch-all
     | exact freshExprHole_left st _ _ h_al
