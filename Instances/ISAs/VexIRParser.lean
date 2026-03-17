@@ -188,6 +188,10 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
         match op, args with
         | "64to32",  [a] => do let e ← parseExpr a st fuel; .ok (.narrow32 e)
         | "32Uto64", [a] => do let e ← parseExpr a st fuel; .ok (.zext64 e)
+        | "DivModS64to32", [a, b] => do
+          -- Signed div+mod packed into 64 bits. No symbolic div op, so approximate
+          -- as the dividend (preserves dataflow for grammar extraction).
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
         | "32HLto64", [hi, lo] => do
           let h ← parseExpr hi st fuel; let l ← parseExpr lo st fuel
           .ok (.or64 (.shl64 (.zext64 (.narrow32 h)) (.const 32)) (.zext64 (.narrow32 l)))
