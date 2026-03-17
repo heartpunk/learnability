@@ -228,6 +228,8 @@ inductive Cond (Reg : Type) where
   | lt64 : Expr Reg → Expr Reg → Cond Reg
   /-- Unsigned 64-bit less-than-or-equal comparison on `UInt64` values. -/
   | le64 : Expr Reg → Expr Reg → Cond Reg
+  /-- 64-bit not-equal comparison (negation of eq64). -/
+  | ne64 : Expr Reg → Expr Reg → Cond Reg
   /--
   Partial AMD64 condition-code helper. The current semantics only implement the zero-condition
   slice used by the existing `jz`-style fixtures; unsupported codes evaluate to `false`.

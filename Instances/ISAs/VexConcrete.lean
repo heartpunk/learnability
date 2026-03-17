@@ -43,6 +43,7 @@ def evalAmd64CalculateConditionZero
   | .eq64 lhs rhs => evalExpr state temps lhs == evalExpr state temps rhs
   | .lt64 lhs rhs => decide (evalExpr state temps lhs < evalExpr state temps rhs)
   | .le64 lhs rhs => decide (evalExpr state temps lhs ≤ evalExpr state temps rhs)
+  | .ne64 lhs rhs => !(evalExpr state temps lhs == evalExpr state temps rhs)
   | .amd64CalculateCondition code ccOp ccDep1 ccDep2 ccNdep =>
       if code = 0x4 then
         evalAmd64CalculateConditionZero

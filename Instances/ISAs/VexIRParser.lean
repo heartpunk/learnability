@@ -246,6 +246,16 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
     let l ← parseExpr a st; let r ← parseExpr b st
     let bias : Expr Amd64Reg := .const 0x8000_0000_0000_0000
     .ok (.le64 (.add64 (.sext32to64 (.narrow32 l)) bias) (.add64 (.sext32to64 (.narrow32 r)) bias))
+  | "CmpNE64",  [a, b] => do
+    let l ← parseExpr a st; let r ← parseExpr b st; .ok (.ne64 l r)
+  | "CmpNE32",  [a, b] => do
+    let l ← parseExpr a st; let r ← parseExpr b st
+    .ok (.ne64 (.zext64 (.narrow32 l)) (.zext64 (.narrow32 r)))
+  | "CmpLE64S", [a, b] => do
+    -- Signed 64-bit LE: bias by 2^63 then unsigned compare (same pattern as CmpLT32S)
+    let l ← parseExpr a st; let r ← parseExpr b st
+    let bias : Expr Amd64Reg := .const 0x8000_0000_0000_0000
+    .ok (.le64 (.add64 l bias) (.add64 r bias))
   | "amd64g_calculate_condition",
       [codeStr, opStr, dep1Str, dep2Str, ndepStr] => do
     let code ← match parseNumLit codeStr with
@@ -259,8 +269,8 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
   | _, _ => .error s!"unsupported condition: {op}({argsStr})"
 
 private def isCondOp (op : String) : Bool :=
-  op ∈ (["CmpEQ64", "CmpLT64U", "CmpLE64U",
-          "CmpEQ32", "CmpLT32U", "CmpLE32U",
+  op ∈ (["CmpEQ64", "CmpLT64U", "CmpLE64U", "CmpNE64", "CmpLE64S",
+          "CmpEQ32", "CmpLT32U", "CmpLE32U", "CmpNE32",
           "CmpLT32S", "CmpLE32S"] : List String)
 
 private def isCondPropOp (op : String) : Bool :=
