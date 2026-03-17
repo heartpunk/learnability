@@ -233,6 +233,9 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
           let e ← parseExpr a st fuel; .ok (.not32 e)
         | "Not64", [a] => do
           let e ← parseExpr a st fuel; .ok (.not64 e)
+        | "64HLto128", [hi, lo] => do
+          -- Combine two 64-bit values into 128-bit. Model as low 64 bits only.
+          let _ ← parseExpr hi st fuel; let l ← parseExpr lo st fuel; .ok l
         | "64UtoV128", [a] => do
           -- Zero-extend 64-bit to 128-bit SIMD vector. We only model the low 64 bits.
           let e ← parseExpr a st fuel; .ok e
