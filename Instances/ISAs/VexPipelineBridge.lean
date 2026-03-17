@@ -837,6 +837,86 @@ theorem h_value_determined_of_state_agreement
   have h_eq := h_state_eq s₁ s₂ h_equiv
   subst h_eq; exact Iff.rfl
 
+/-! ### Lemma 3: Partition Equivalence → Expression Agreement (via basis coverage)
+
+The key reduction for h_value_determined: if every atomic comparison in a
+SymPC φ appears (possibly negated) as a basis PC, then partition-equivalent
+states agree on φ's truth value.
+
+This is a generalization of `evalSymPC_of_conjunctsInClosure` (Phase 6)
+to work for LIFTED PCs that aren't literally basis members but whose
+atomic comparisons are covered by the basis.
+
+Combined with `evalSymPC_subst`, this gives h_value_determined when the
+lifted PC's atoms are basis-covered. -/
+
+/-- Collect all atomic comparison PCs from a SymPC (leaf-level, ignoring
+    and/not structure). Returns the set of eq/lt/le sub-PCs. -/
+def SymPC.atoms {Reg : Type} : SymPC Reg → List (SymPC Reg)
+  | .true => []
+  | .eq l r => [.eq l r]
+  | .lt l r => [.lt l r]
+  | .le l r => [.le l r]
+  | .and φ ψ => SymPC.atoms φ ++ SymPC.atoms ψ
+  | .not φ => SymPC.atoms φ
+
+/-- If every atom of φ is in the closure (or its negation is), and
+    s₁, s₂ are partition-equivalent, they agree on φ's truth value.
+
+    This generalizes `evalSymPC_of_conjunctsInClosure`: instead of
+    requiring conjuncts ∈ closure, we require atoms ∈ closure.
+    Since atoms are the leaves under and/not, and evalSymPC distributes
+    over and/not, agreement on atoms implies agreement on the whole PC. -/
+theorem evalSymPC_of_atomsInClosure
+    (closure : Finset (SymPC Reg))
+    (φ : SymPC Reg)
+    (h_atoms : ∀ a ∈ φ.atoms, a ∈ closure)
+    {s₁ s₂ : ConcreteState Reg}
+    (h_equiv : (pcSetoidWith (vexSummaryISA Reg) closure).r s₁ s₂) :
+    evalSymPC s₁ φ = evalSymPC s₂ φ := by
+  induction φ with
+  | true => rfl
+  | eq l r =>
+    have hm : SymPC.eq l r ∈ closure := h_atoms _ (List.Mem.head _)
+    exact bool_eq_of_true_iff (h_equiv _ hm)
+  | lt l r =>
+    have hm : SymPC.lt l r ∈ closure := h_atoms _ (List.Mem.head _)
+    exact bool_eq_of_true_iff (h_equiv _ hm)
+  | le l r =>
+    have hm : SymPC.le l r ∈ closure := h_atoms _ (List.Mem.head _)
+    exact bool_eq_of_true_iff (h_equiv _ hm)
+  | and φ ψ ih₁ ih₂ =>
+    simp only [evalSymPC]
+    have hφ : ∀ a ∈ φ.atoms, a ∈ closure :=
+      fun a ha => h_atoms a (List.mem_append_left _ ha)
+    have hψ : ∀ a ∈ ψ.atoms, a ∈ closure :=
+      fun a ha => h_atoms a (List.mem_append_right _ ha)
+    rw [ih₁ hφ, ih₂ hψ]
+  | not φ ih =>
+    simp only [evalSymPC]
+    have hφ : ∀ a ∈ φ.atoms, a ∈ closure := h_atoms
+    rw [ih hφ]
+
+/-- h_value_determined when lifted PC atoms are basis-covered.
+
+    If for every (branch, basis PC) pair, the atoms of the lifted PC
+    `substSymPC b.sub φ` are all in the basis, then SemClosed holds.
+
+    This connects the structural approach to the certificate: given a
+    basis where lifting preserves atom membership, SemClosed follows
+    without SMT. -/
+theorem semClosed_of_liftedAtomsInBasis
+    (model : Finset (Branch (SymSub Reg) (SymPC Reg)))
+    (basis : Finset (SymPC Reg))
+    (h_atoms_closed : ∀ b ∈ model, ∀ φ ∈ basis,
+      ∀ a ∈ (substSymPC b.sub φ).atoms, a ∈ basis) :
+    SemClosed (vexSummaryISA Reg) model basis := by
+  intro b hb φ hφ s₁ s₂ h_equiv
+  simp only [vexSummaryISA, satisfiesSymPC]
+  have h_eq := evalSymPC_of_atomsInClosure basis (substSymPC b.sub φ)
+    (h_atoms_closed b hb φ hφ) h_equiv
+  exact Bool.eq_iff_iff.mp h_eq
+
 end ApproachB
 
 end VexISA
