@@ -233,6 +233,12 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
           let e ← parseExpr a st fuel; .ok (.not32 e)
         | "Not64", [a] => do
           let e ← parseExpr a st fuel; .ok (.not64 e)
+        | "64UtoV128", [a] => do
+          -- Zero-extend 64-bit to 128-bit SIMD vector. We only model the low 64 bits.
+          let e ← parseExpr a st fuel; .ok e
+        | "64HIto32", [a] => do
+          -- High 32 bits of a 64-bit value.
+          let e ← parseExpr a st fuel; .ok (.narrow32 (.shr64 e (.const 32)))
         | "MullU64", [a, b] => do
           -- High 64 bits of unsigned 128-bit product. Used for div-by-constant optimization.
           -- No SymExpr constructor — approximate as opaque (return first operand).
