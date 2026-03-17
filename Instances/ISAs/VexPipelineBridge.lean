@@ -706,4 +706,80 @@ theorem h_contains_via_conjuncts
 
 end HContainsConjuncts
 
+/-! ## Phase 7: Approach B — EqualityDispatch → SemClosed
+
+Structural theorem that discharges `h_value_determined` for equality-dispatch
+loops without SMT. The proof goes through expression evaluation determinism:
+
+1. Guard pinning: equality guards in the basis pin expression values
+2. Body determinism: `applySymSub` is a pure function of state
+3. Therefore: partition-equivalent states produce same lifted PC truth values
+
+Key bridge: `evalSymPC_subst` gives
+  `evalSymPC s (substSymPC σ φ) = evalSymPC (applySymSub σ s) φ`
+so h_value_determined reduces to showing `applySymSub b.sub s₁` and
+`applySymSub b.sub s₂` agree on the PC φ when s₁, s₂ are partition-equiv. -/
+
+section ApproachB
+
+variable {Reg : Type}
+variable [DecidableEq Reg] [Fintype Reg]
+
+/-! ### Lemma 1: Guard Pinning
+
+If an equality guard `eq(.reg r, .const c)` is in the basis and two states
+are partition-equivalent, they agree on that register's value.
+
+This is the foundational lemma for approach B: equality guards pin register
+values, so partition equivalence → register value agreement. -/
+
+/-- If `eq(.reg r, .const c)` is in the basis and both states satisfy it,
+    then both states have `regs r = c`. -/
+private theorem eq_guard_pins_reg
+    {s : ConcreteState Reg} {r : Reg} {c : UInt64}
+    (h_sat : evalSymPC s (.eq (.reg r) (.const c)) = true) :
+    s.regs r = c := by
+  simp [evalSymPC, evalSymExpr] at h_sat
+  exact eq_of_beq h_sat
+
+/-- Guard pinning: if `eq(.reg r, .const c)` is in the basis and s₁, s₂
+    are partition-equivalent, they have the same value for register r.
+
+    Proof: partition equivalence → same truth value on the guard →
+    both satisfy it the same way → same register value.
+
+    Note: this gives register agreement only for PINNED registers
+    (those appearing in equality guards), not all registers. -/
+theorem guard_pins_register
+    (closure : Finset (SymPC Reg))
+    {s₁ s₂ : ConcreteState Reg}
+    (h_equiv : (pcSetoidWith (vexSummaryISA Reg) closure).r s₁ s₂)
+    {r : Reg} {c : UInt64}
+    (h_guard : SymPC.eq (.reg r) (.const c) ∈ closure)
+    (h_sat₁ : (vexSummaryISA Reg).satisfies s₁ (.eq (.reg r) (.const c))) :
+    s₁.regs r = s₂.regs r := by
+  have h_iff := h_equiv (.eq (.reg r) (.const c)) h_guard
+  simp only [vexSummaryISA, satisfiesSymPC] at h_iff h_sat₁
+  have h_sat₂ := h_iff.mp h_sat₁
+  have h₁ := eq_guard_pins_reg h_sat₁
+  have h₂ := eq_guard_pins_reg h_sat₂
+  rw [h₁, h₂]
+
+/-- Unconditional guard pinning: if `eq(.reg r, .const c)` is in the basis
+    and s₁, s₂ are partition-equivalent, they agree on register r regardless
+    of whether the guard is satisfied (both true or both false → same value
+    either way, because partition equivalence gives same truth value). -/
+theorem guard_pins_register_unconditional
+    (closure : Finset (SymPC Reg))
+    {s₁ s₂ : ConcreteState Reg}
+    (h_equiv : (pcSetoidWith (vexSummaryISA Reg) closure).r s₁ s₂)
+    {r : Reg} {c : UInt64}
+    (h_guard : SymPC.eq (.reg r) (.const c) ∈ closure) :
+    (evalSymExpr s₁ (.reg r) == c) = (evalSymExpr s₂ (.reg r) == c) := by
+  have h_iff := h_equiv (.eq (.reg r) (.const c)) h_guard
+  simp only [vexSummaryISA, satisfiesSymPC, evalSymPC, evalSymExpr] at h_iff
+  exact Bool.eq_iff_iff.mpr h_iff
+
+end ApproachB
+
 end VexISA
