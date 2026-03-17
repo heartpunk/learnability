@@ -188,6 +188,7 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
         | "8Uto64",  [a] => parseExpr a st fuel
         | "16Uto32", [a] => parseExpr a st fuel
         | "16Uto64", [a] => parseExpr a st fuel
+        | "8Sto64",  [a] => do let e ← parseExpr a st fuel; .ok (.sext32to64 (.sext8to32 e))
         | "1Uto8",   [a] => parseExpr a st fuel
         | "1Uto64",  [a] => parseExpr a st fuel
         | "64to1",   [a] => parseExpr a st fuel
