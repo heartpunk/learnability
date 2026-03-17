@@ -111,50 +111,57 @@ def extract_text_section(binary: str) -> dict:
     return result
 
 
-<<<<<<< conflict 1 of 1
-+++++++ yxkvzmyx f455a21b (rebase destination)
-%%%%%%% diff from: oqqtmuzq 1c97f471 "Add justfile + stalagmite flake input + per-function VEX extraction" (parents of rebased revision)
-\\\\\\\        to: wqpvuzkx 74d9a5a3 "Fix flake: lean4-nix overlay for pinned v4.27.0, extract all 9 stalagmite subjects" (rebased revision)
- def extract_per_function(binary: str) -> dict:
-     """Sweep each STT_FUNC symbol individually, producing per-function JSON.
- 
-     Uses CLE's rebased symbol addresses so block addresses match function
-     entry points.  Output format matches loadFunctionsFromJSON in Lean:
-         {"arch": "amd64", "functions": {"name": {"addr": "0x...", "size": N,
-          "blocks": [...]}}, "memory_regions": [...]}
-     """
-     project = angr.Project(binary, auto_load_libs=False)
-     obj = project.loader.main_object
- 
-     functions = {}
-     for sym in obj.symbols:
--        if sym.type != "STT_FUNC" or sym.size == 0:
-+        if not sym.is_function or sym.size == 0:
-             continue
-         addr = sym.rebased_addr
-         blocks = []
-         cursor = addr
-         while cursor < addr + sym.size:
-             block = project.factory.block(cursor)
-             irsb = block.vex
-             blocks.append(str(irsb))
-             if block.size == 0:
-                 break
-             cursor += block.size
-         functions[sym.name] = {
-             "addr": f"0x{addr:x}",
-             "size": sym.size,
-             "blocks": blocks,
-         }
- 
-     return {
-         "arch": "amd64",
-         "functions": functions,
-         "memory_regions": extract_memory_regions(project),
-     }
- 
- 
->>>>>>> conflict 1 of 1 ends
+def extract_per_function(binary: str) -> dict:
+    """Sweep each STT_FUNC symbol individually, producing per-function JSON.
+
+    Uses CLE's rebased symbol addresses so block addresses match function
+    entry points.  Output format matches loadFunctionsFromJSON in Lean:
+        {"arch": "amd64", "functions": {"name": {"addr": "0x...", "size": N,
+         "blocks": [...]}}, "memory_regions": [...]}
+    """
+    project = angr.Project(binary, auto_load_libs=False)
+    obj = project.loader.main_object
+
+    # Collect best name per address (prefer GLOBAL over LOCAL, shorter over longer)
+    best_sym: dict[int, "cle.backends.symbol.Symbol"] = {}
+    for sym in obj.symbols:
+        if not sym.is_function or sym.size == 0:
+            continue
+        addr = sym.rebased_addr
+        if addr not in best_sym:
+            best_sym[addr] = sym
+        else:
+            prev = best_sym[addr]
+            # Prefer GLOBAL binding, then shorter name (avoids .localalias)
+            if sym.is_export and not prev.is_export:
+                best_sym[addr] = sym
+            elif sym.is_export == prev.is_export and len(sym.name) < len(prev.name):
+                best_sym[addr] = sym
+
+    functions = {}
+    for addr, sym in sorted(best_sym.items()):
+        blocks = []
+        cursor = addr
+        while cursor < addr + sym.size:
+            block = project.factory.block(cursor)
+            irsb = block.vex
+            blocks.append(str(irsb))
+            if block.size == 0:
+                break
+            cursor += block.size
+        functions[sym.name] = {
+            "addr": f"0x{addr:x}",
+            "size": sym.size,
+            "blocks": blocks,
+        }
+
+    return {
+        "arch": "amd64",
+        "functions": functions,
+        "memory_regions": extract_memory_regions(project),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Extract VEX IR blocks via pyvex linear sweep."
@@ -176,6 +183,11 @@ def main() -> None:
         help="Sweep entire .text section",
     )
     parser.add_argument(
+        "--per-function",
+        action="store_true",
+        help="Sweep each ELF function symbol individually (per-function JSON)",
+    )
+    parser.add_argument(
         "--start",
         type=lambda s: int(s, 0),
         help="Start address for range sweep (hex or decimal)",
@@ -187,7 +199,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.text:
+    if args.per_function:
+        result = extract_per_function(args.binary)
+    elif args.text:
         result = extract_text_section(args.binary)
     elif args.start is not None and args.end is not None:
         if args.end <= args.start:

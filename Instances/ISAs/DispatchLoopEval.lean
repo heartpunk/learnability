@@ -4191,11 +4191,18 @@ def printLTSGrammar (log : String → IO Unit)
   log s!"\n=== Token Name Table ({tokenNames.size} entries, derived={parserStructure.isSome}) ==="
   for (code, name) in tokenNames.toArray do
     log s!"  {code.toNat} → {name}"
-  -- Extract grammar for each NT function (skip the lexer)
+  -- Extract grammar for detected NT classifiers (or all non-lexer if no ParserStructure)
+  let classifierAddrs : Option (Std.HashSet UInt64) := match parserStructure with
+    | some ps => some (ps.classifiers.foldl (fun s f => s.insert f.entryAddr) {})
+    | none => none
   let mut grammars : Array ExtractedNTGrammar := #[]
   for func in functions do
     if func.entryAddr == lexerAddr then continue
-    -- Also skip by name for backward compatibility when no ParserStructure
+    -- When parser structure detected, only extract for classifier NTs
+    match classifierAddrs with
+    | some addrs => if !addrs.contains func.entryAddr then continue
+    | none => pure ()
+    -- Skip lexer by name for backward compatibility when no ParserStructure
     if parserStructure.isNone && func.name == "next_sym" then continue
     match parseBlocksWithAddresses func.blocks with
     | .error e => log s!"  Parse error for {func.name}: {e}"
@@ -4270,26 +4277,315 @@ def mkLogger (logPath : System.FilePath) : IO (String → IO Unit) := do
     let h ← IO.FS.Handle.mk logPath .append
     h.putStrLn msg
 
-/-- Main entry point for dispatch loop evaluation with CLI args.
-    - 0 args: legacy hardcoded tinyc data
-    - 1 arg (JSON path): per-function JSON format
-    - 2 args (blocks.json, ELF binary): file-based discovery mode -/
+def mkFileLogger (logPath : System.FilePath) : IO (String → IO Unit) := do
+  IO.FS.writeFile logPath ""
+  return fun msg => do
+    let h ← IO.FS.Handle.mk logPath .append
+    h.putStrLn msg
+
+/-! ## JSON Output -/
+
+/-- Serialize extracted pipeline results to structured JSON.
+    Includes: functions, parser structure, grammar, and LTS. -/
+def pipelineToJson (functions : Array FunctionSpec)
+    (parserStructure : Option ParserStructure) : Lean.Json :=
+  let ip_reg := Amd64Reg.rip
+  let (tokenNames, lexerName, lexerAddr) := match parserStructure with
+    | some ps => (ps.tokenNames, ps.lexerName, ps.lexerAddr)
+    | none => (({} : TokenNameTable), "next_sym", (0 : UInt64))
+  let funcEntries := functions.foldl (fun m f => m.insert f.entryAddr f.name)
+    ({} : Std.HashMap UInt64 String)
+  -- Extract grammars (pure computation)
+  let classifierAddrs : Option (Std.HashSet UInt64) := match parserStructure with
+    | some ps => some (ps.classifiers.foldl (fun s f => s.insert f.entryAddr) {})
+    | none => none
+  let grammars : Array ExtractedNTGrammar := Id.run do
+    let mut gs : Array ExtractedNTGrammar := #[]
+    for func in functions do
+      let skip := func.entryAddr == lexerAddr ||
+        (parserStructure.isNone && func.name == "next_sym") ||
+        (match classifierAddrs with | some addrs => !addrs.contains func.entryAddr | none => false)
+      if !skip then
+        match parseBlocksWithAddresses func.blocks with
+        | .error _ => pure ()
+        | .ok pairs =>
+          let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+          gs := gs.push (extractNTGrammar func.name func.entryAddr bodyArr funcEntries
+                          lexerName tokenNames)
+    gs
+  -- Functions array
+  let funcsJson := Lean.Json.arr (functions.map fun f =>
+    Lean.Json.mkObj [
+      ("name", .str f.name),
+      ("entryAddr", .str (hexAddr f.entryAddr)),
+      ("blockCount", .num ⟨f.blocks.length, 0⟩)
+    ])
+  -- Parser structure
+  let parserJson := match parserStructure with
+    | some ps => Lean.Json.mkObj [
+        ("detected", .bool true),
+        ("lexer", .str ps.lexerName),
+        ("lexerAddr", .str (hexAddr ps.lexerAddr)),
+        ("entryClassifier", .str (hexAddr ps.entryClassifier)),
+        ("tokenNames", Lean.Json.mkObj (ps.tokenNames.toArray.toList.map fun (code, name) =>
+          (s!"{code.toNat}", .str name)))
+      ]
+    | none => Lean.Json.mkObj [("detected", .bool false)]
+  -- Grammar per NT
+  let grammarEntries : List (String × Lean.Json) := Id.run do
+    let mut entries : List (String × Lean.Json) := []
+    for g in grammars do
+      let prods := g.prods.map fun prod =>
+        Lean.Json.arr (prod.map fun sym => .str (renderSym tokenNames sym))
+      entries := entries ++ [(g.funcName, Lean.Json.mkObj [
+        ("productions", Lean.Json.arr prods)
+      ])]
+      match g.repNTName with
+      | some repName =>
+        let repProds := g.repNTProds.map fun prod =>
+          Lean.Json.arr (prod.map fun sym => .str (renderSym tokenNames sym))
+        entries := entries ++ [(repName, Lean.Json.mkObj [
+          ("productions", Lean.Json.arr repProds)
+        ])]
+      | none => pure ()
+    entries
+  let grammarJson := Lean.Json.mkObj grammarEntries
+  -- LTS per NT function
+  let ltsEntries : List (String × Lean.Json) := Id.run do
+    let mut entries : List (String × Lean.Json) := []
+    for g in grammars do
+      match functions.find? (·.name == g.funcName) with
+      | none => pure ()
+      | some f =>
+        match parseBlocksWithAddresses f.blocks with
+        | .error _ => pure ()
+        | .ok pairs =>
+          let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+          let lts := extractLTS ip_reg bodyArr funcEntries
+          let transJson := lts.transitions.map fun t =>
+            Lean.Json.mkObj [
+              ("src", .str (hexAddr t.src)),
+              ("label", .str (charClassToTokenName tokenNames t.label)),
+              ("tgt", .str (hexAddr t.tgt))
+            ]
+          entries := entries ++ [(f.name, Lean.Json.mkObj [
+            ("transitions", Lean.Json.arr transJson),
+            ("stateCount", .num ⟨lts.states.size, 0⟩),
+            ("transitionCount", .num ⟨lts.transitions.size, 0⟩)
+          ])]
+    entries
+  let ltsJson := Lean.Json.mkObj ltsEntries
+  -- Top-level result
+  Lean.Json.mkObj [
+    ("functions", funcsJson),
+    ("parser", parserJson),
+    ("grammar", grammarJson),
+    ("lts", ltsJson)
+  ]
+
+/-- Run pipeline and output structured JSON to stdout. Log goes to file only. -/
+def runPipelineJSON (functions : Array FunctionSpec) (regions : Array MemRegion := #[])
+    (log : String → IO Unit) : IO Unit := do
+  log "=== Stratified Dispatch Loop Stabilization (JSON mode) ==="
+  let summaries ← stratifiedFixpoint functions regions log
+  let parserResult ← detectParser functions summaries log
+  let ps := match parserResult with
+    | .ok ps => some ps
+    | .error _ => none
+  let json := pipelineToJson functions ps
+  IO.println json.pretty
+
+/-! ## Entry-point scoping -/
+
+/-- BFS reachability from an entry address in a call graph. Pure computation. -/
+def callGraphReachable (entryAddr : UInt64) (callGraph : Array (UInt64 × UInt64)) :
+    Std.HashSet UInt64 := Id.run do
+  let mut reachable : Std.HashSet UInt64 := {}
+  let mut queue : Array UInt64 := #[entryAddr]
+  while !queue.isEmpty do
+    let cur := queue.back!
+    queue := queue.pop
+    if reachable.contains cur then pure ()
+    else
+      reachable := reachable.insert cur
+      for (src, tgt) in callGraph do
+        if src == cur && !reachable.contains tgt then
+          queue := queue.push tgt
+  return reachable
+
+/-- Given an entry address, compute the transitive closure of the call graph
+    and return only the functions reachable from that entry.
+    Uses buildCallGraph (syntactic, no fixpoint needed). -/
+def scopeByEntry (functions : Array FunctionSpec) (entryAddr : UInt64)
+    (log : String → IO Unit) : IO (Array FunctionSpec) := do
+  let callGraph ← buildCallGraph functions log
+  let reachable := callGraphReachable entryAddr callGraph
+  let result := functions.filter fun f => reachable.contains f.entryAddr
+  log s!"\n=== Entry-point scoping from {hexAddr entryAddr} ==="
+  log s!"  {result.size}/{functions.size} functions reachable"
+  for f in result do
+    log s!"    {f.name} @ {hexAddr f.entryAddr}"
+  return result
+
+/-- Resolve an entry point: by hex address or by function name. -/
+def resolveEntry (functions : Array FunctionSpec) (entry : String) : Option UInt64 :=
+  -- Try as hex address first
+  match parseHexAddr entry with
+  | some addr => if functions.any (·.entryAddr == addr) then some addr else none
+  | none =>
+    -- Try as function name
+    match functions.find? (·.name == entry) with
+    | some f => some f.entryAddr
+    | none => none
+
+/-! ## CLI Argument Parsing -/
+
+/-- Parsed CLI configuration. -/
+structure CLIConfig where
+  jsonPath : Option System.FilePath := none
+  elfBinary : Option System.FilePath := none
+  jsonOutput : Bool := false
+  functionsSpec : Option String := none  -- comma-separated names or addrs
+  entry : Option String := none
+  logPath : System.FilePath := ".lake/stabilization.log"
+  showHelp : Bool := false
+  deriving Inhabited
+
+/-- Parse comma-separated hex addresses. -/
+private def parseAddrList (s : String) : Option (Array UInt64) :=
+  let parts := s.splitOn ","
+  let parsed := parts.filterMap fun p => parseHexAddr p.trimAscii.toString
+  if parsed.length == parts.length then some parsed.toArray else none
+
+/-- Resolve a comma-separated list of function names or addresses to FunctionSpecs.
+    Returns the subset of functions matching the given names/addresses. -/
+def resolveFunctionList (functions : Array FunctionSpec) (spec : String) : Array FunctionSpec :=
+  let parts := spec.splitOn ","
+  let names := parts.map (·.trimAscii.toString)
+  functions.filter fun f =>
+    names.any fun n =>
+      f.name == n || (match parseHexAddr n with | some a => f.entryAddr == a | none => false)
+
+/-- Parse CLI arguments into a CLIConfig. -/
+private def parseCLIArgs : List String → CLIConfig → CLIConfig
+  | [], cfg => cfg
+  | "--help" :: rest, cfg => parseCLIArgs rest { cfg with showHelp := true }
+  | "-h" :: rest, cfg => parseCLIArgs rest { cfg with showHelp := true }
+  | "--json" :: rest, cfg => parseCLIArgs rest { cfg with jsonOutput := true }
+  | "--functions" :: spec :: rest, cfg =>
+    parseCLIArgs rest { cfg with functionsSpec := some spec }
+  | "--entry" :: name :: rest, cfg => parseCLIArgs rest { cfg with entry := some name }
+  | "--log" :: path :: rest, cfg => parseCLIArgs rest { cfg with logPath := path }
+  | arg :: rest, cfg =>
+    if arg.startsWith "--" then
+      parseCLIArgs rest cfg  -- skip unknown flags
+    else if cfg.jsonPath.isNone then
+      parseCLIArgs rest { cfg with jsonPath := some arg }
+    else if cfg.elfBinary.isNone then
+      parseCLIArgs rest { cfg with elfBinary := some arg }
+    else
+      parseCLIArgs rest cfg  -- extra positional args ignored
+
+/-- Print usage/help text. -/
+private def printUsage : IO Unit := do
+  IO.eprintln "Usage: dispatchLoopEval [OPTIONS] <input.json> [elf-binary]"
+  IO.eprintln "       dispatchLoopEval --test [--subject NAME]"
+  IO.eprintln ""
+  IO.eprintln "Extract grammars from binary dispatch loops via symbolic execution."
+  IO.eprintln ""
+  IO.eprintln "Arguments:"
+  IO.eprintln "  <input.json>         Per-function blocks JSON (VEX IR)"
+  IO.eprintln "  [elf-binary]         ELF binary for symbol-based function discovery"
+  IO.eprintln ""
+  IO.eprintln "Options:"
+  IO.eprintln "  --json               Output results as structured JSON to stdout"
+  IO.eprintln "  --entry NAME|ADDR    Scope to functions reachable from entry point"
+  IO.eprintln "  --functions ADDRS    Comma-separated hex entry addresses to analyze"
+  IO.eprintln "  --log PATH           Log file path (default: .lake/stabilization.log)"
+  IO.eprintln "  --test               Run test suite (via dispatchLoopTest)"
+  IO.eprintln "  --subject NAME       Run specific test subject (with --test)"
+  IO.eprintln "  --help, -h           Show this help message"
+  IO.eprintln ""
+  IO.eprintln "Examples:"
+  IO.eprintln "  dispatchLoopEval reference/tinyc/blocks.json --entry statement"
+  IO.eprintln "  dispatchLoopEval reference/tinyc/blocks.json --entry 0x400678 --json"
+  IO.eprintln "  dispatchLoopEval blocks.json tiny.o --functions 0x401234,0x401567"
+  IO.eprintln "  dispatchLoopEval --test"
+
+/-- Main entry point for dispatch loop evaluation with CLI args. -/
 def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
-  let log ← mkLogger ".lake/stabilization.log"
-  match args with
-  | blocksJson :: elfBinary :: _ =>
-    -- File-based mode: blocks.json + ELF binary
-    dispatchLoopEvalFromFiles blocksJson elfBinary log
-  | [jsonPath] =>
-    -- Single arg: per-function JSON format
-    log s!"Loading functions from {jsonPath}..."
-    let (functions, regions) ← loadFunctionsFromJSON jsonPath
-    log s!"  {functions.size} functions loaded, {regions.size} memory regions"
-    for r in regions do
-      log s!"    {r.name}: [0x{String.ofList (Nat.toDigits 16 r.vaddr.toNat)}, +{r.size}) {r.flags}"
-    runPipeline functions regions log
-  | [] =>
-    -- No args: print usage
-    IO.eprintln "Usage: dispatchLoopEval <blocks.json> <elf-binary>"
-    IO.eprintln "       dispatchLoopEval <per-function.json>"
+  let cfg := parseCLIArgs args {}
+  if cfg.showHelp then
+    printUsage
+    return
+  match cfg.jsonPath with
+  | none =>
+    printUsage
     IO.Process.exit 1
+  | some jsonPath =>
+    let log ← if cfg.jsonOutput
+              then mkFileLogger cfg.logPath
+              else mkLogger cfg.logPath
+    match cfg.elfBinary with
+    | some elfBinary =>
+      -- File-based mode: blocks.json + ELF binary
+      log s!"Loading blocks from {jsonPath}..."
+      let blocks ← loadBlocksFromJSON jsonPath
+      log s!"  {blocks.size} blocks loaded"
+      log s!"Reading symbols from {elfBinary}..."
+      let symbols ← ElfSymbolTable.readSymbolsFromFile elfBinary
+      log s!"  {symbols.size} function symbols found"
+      for (name, addr, size) in symbols do
+        log s!"    {name} @ 0x{String.ofList (Nat.toDigits 16 addr.toNat)}, {size} bytes"
+      match discoverFunctions blocks symbols with
+      | .error e =>
+        IO.eprintln s!"Function discovery error: {e}"
+        IO.Process.exit 1
+      | .ok result =>
+        log s!"Discovered {result.functions.size} functions with blocks:"
+        for f in result.functions do
+          log s!"  {f.name}: {f.blocks.length} blocks"
+        if result.orphanCount > 0 then
+          log s!"  WARNING: {result.orphanCount} blocks not in any function symbol range"
+        -- Scope functions: --entry then --functions
+        let functions ← match cfg.entry with
+          | some entry =>
+            match resolveEntry result.functions entry with
+            | some addr => scopeByEntry result.functions addr log
+            | none =>
+              IO.eprintln s!"Unknown entry point: {entry}"
+              IO.Process.exit 1
+          | none => pure result.functions
+        let functions := match cfg.functionsSpec with
+          | some spec => resolveFunctionList functions spec
+          | none => functions
+        if cfg.jsonOutput then
+          runPipelineJSON functions (log := log)
+        else
+          runPipeline functions (log := log)
+    | none =>
+      -- Single JSON: per-function format
+      log s!"Loading functions from {jsonPath}..."
+      let (allFunctions, regions) ← loadFunctionsFromJSON jsonPath
+      log s!"  {allFunctions.size} functions loaded, {regions.size} memory regions"
+      for r in regions do
+        log s!"    {r.name}: [0x{String.ofList (Nat.toDigits 16 r.vaddr.toNat)}, +{r.size}) {r.flags}"
+      -- Scope functions: --entry (call graph reachability) then --functions (exact set)
+      let functions ← match cfg.entry with
+        | some entry =>
+          match resolveEntry allFunctions entry with
+          | some addr => scopeByEntry allFunctions addr log
+          | none =>
+            IO.eprintln s!"Unknown entry point: {entry}"
+            IO.eprintln s!"Available: {", ".intercalate (allFunctions.map (·.name)).toList}"
+            IO.Process.exit 1
+        | none => pure allFunctions
+      let functions := match cfg.functionsSpec with
+        | some spec =>
+          let filtered := resolveFunctionList functions spec
+          filtered
+        | none => functions
+      if cfg.jsonOutput then
+        runPipelineJSON functions regions log
+      else
+        runPipeline functions regions log
