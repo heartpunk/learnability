@@ -38,7 +38,7 @@ _funcs_parson := ""
 _funcs_lisp := ""
 _funcs_calc := ""
 _funcs_simplearithmeticparser := ""
-_funcs_cgi_decode := ""
+_funcs_cgi_decode := "cgi_decode"
 _funcs_mjs := ""
 
 # ── Extraction ────────────────────────────────────────────────────
