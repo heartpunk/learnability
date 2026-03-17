@@ -224,6 +224,9 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
           let e ← parseExpr a st fuel; .ok (.not32 e)
         | "Not64", [a] => do
           let e ← parseExpr a st fuel; .ok (.not64 e)
+        | "MullU8", [a, b] => do
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel
+          .ok (.mul64 (.and64 l (.const 0xFF)) (.and64 r (.const 0xFF)))
         | "Mul32", [a, b] => do
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.mul32 l r)
         | "Mul64", [a, b] => do
