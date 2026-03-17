@@ -2173,7 +2173,72 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
           log s!"    [h_contains] PASS ({bodyArr.size} body branches, {fullClosure.size} closure PCs)"
         else
           log s!"    [h_contains] FAIL: {dataMissesF} data misses ({bodyArr.size} body branches)"
-      -- Task 1B: Closure closedness verification.
+      -- Closedness check on BODY branches (branchingLoopModel).
+      -- This is the check that matters for the certificate: are body branch
+      -- substitutions closed over the full closure?
+      do
+        let (fullClosure2, _, _) := extractClosure ip_reg bodyArr (dataOnly := false)
+        let mut bodyTrivClosed : Nat := 0
+        let mut bodyNeedsSMT : Nat := 0
+        let mut bodyViolations : Nat := 0
+        let bodyTotal := bodyArr.size * fullClosure2.size
+        for b in bodyArr do
+          for phi in fullClosure2 do
+            let lifted := substSymPC b.sub phi
+            let liftedSimplified := simplifyLoadStorePCOpt addrClassify lifted
+            match SymPC.simplifyConst liftedSimplified with
+            | none => bodyTrivClosed := bodyTrivClosed + 1
+            | some .true => bodyTrivClosed := bodyTrivClosed + 1
+            | some pc' =>
+              let inClosure := pc' == .true || fullClosure2.any (fun phi_j => phi_j == pc')
+              if inClosure then
+                bodyTrivClosed := bodyTrivClosed + 1
+              else
+                bodyNeedsSMT := bodyNeedsSMT + 1
+        -- For non-trivial cases, run SMT equivalence check
+        if bodyNeedsSMT > 0 then
+          let mut smtPairs : Array (SymPC Reg × SymPC Reg) := #[]
+          let mut smtLiftedIdx : Array Nat := #[]
+          let mut liftedNeedingCheck2 : Array Nat := #[]
+          let mut gIdx : Nat := 0
+          for b in bodyArr do
+            for phi in fullClosure2 do
+              let lifted := substSymPC b.sub phi
+              let liftedSimplified := simplifyLoadStorePCOpt addrClassify lifted
+              match SymPC.simplifyConst liftedSimplified with
+              | none => pure ()
+              | some .true => pure ()
+              | some pc' =>
+                let inClosure := pc' == .true || fullClosure2.any (fun phi_j => phi_j == pc')
+                unless inClosure do
+                  for phi_j in fullClosure2 do
+                    smtPairs := smtPairs.push (pc', phi_j)
+                    smtLiftedIdx := smtLiftedIdx.push gIdx
+                  liftedNeedingCheck2 := liftedNeedingCheck2.push gIdx
+              gIdx := gIdx + 1
+          if smtPairs.size > 0 then
+            let mut fwdP : Array (SymPC Reg × SymPC Reg) := #[]
+            let mut revP : Array (SymPC Reg × SymPC Reg) := #[]
+            for (cp, rp) in smtPairs do
+              fwdP := fwdP.push (cp, rp)
+              revP := revP.push (rp, cp)
+            let (fwdR, _) ← smtCheckImplCached smtCache fwdP ".lake/smt_body_closed.smt2"
+            let (revR, _) ← smtCheckImplCached smtCache revP ".lake/smt_body_closed.smt2"
+            let mut closedBySMT2 : Std.HashSet Nat := {}
+            for i in [:smtPairs.size] do
+              if h1 : i < fwdR.size then
+                if h2 : i < revR.size then
+                  if fwdR[i] && revR[i] then
+                    closedBySMT2 := closedBySMT2.insert smtLiftedIdx[i]!
+            for gIdx2 in liftedNeedingCheck2 do
+              unless closedBySMT2.contains gIdx2 do
+                bodyViolations := bodyViolations + 1
+        let bodyClosed := bodyViolations == 0
+        if bodyClosed then
+          log s!"    [body-closed] PASS: body branches closed over full closure ({bodyArr.size}×{fullClosure2.size}, trivial={bodyTrivClosed})"
+        else
+          log s!"    [body-closed] FAIL: {bodyViolations} violations ({bodyArr.size}×{fullClosure2.size}, trivial={bodyTrivClosed}, smt_cands={bodyNeedsSMT})"
+      -- Task 1B: Closure closedness verification (on summaryArr, for reference).
       -- For each branch b in summaryArr and each data guard PC phi in closure:
       --   lifted = substSymPC b.sub phi  (the pc_lift from VexSummary/VexCompTree)
       --   simplified = simplifyLoadStorePC lifted |> SymPC.simplifyConst
