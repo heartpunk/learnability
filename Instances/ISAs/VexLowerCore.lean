@@ -55,6 +55,7 @@ def lowerExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .sub32 lhs rhs => .sub32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .shl32 lhs rhs => .shl32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .and32 lhs rhs => .and32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .or32 lhs rhs => .or32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .add64 lhs rhs => .add64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .sub64 lhs rhs => .sub64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .xor64 lhs rhs => .xor64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)

@@ -17,6 +17,7 @@ inductive SymExpr (Reg : Type) where
   | sub32 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | shl32 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | and32 : SymExpr Reg → SymExpr Reg → SymExpr Reg
+  | or32 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | add64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | sub64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | xor64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
@@ -139,6 +140,7 @@ mutual
   | .sub32 lhs rhs => mask32 (evalSymExpr state lhs - evalSymExpr state rhs)
   | .shl32 lhs rhs => shiftLeft32 (evalSymExpr state lhs) (evalSymExpr state rhs)
   | .and32 lhs rhs => mask32 (evalSymExpr state lhs &&& evalSymExpr state rhs)
+  | .or32 lhs rhs => mask32 (evalSymExpr state lhs ||| evalSymExpr state rhs)
   | .add64 lhs rhs => evalSymExpr state lhs + evalSymExpr state rhs
   | .sub64 lhs rhs => evalSymExpr state lhs - evalSymExpr state rhs
   | .xor64 lhs rhs => evalSymExpr state lhs ^^^ evalSymExpr state rhs
@@ -181,6 +183,7 @@ def substSymExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .sub32 lhs rhs => .sub32 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .shl32 lhs rhs => .shl32 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .and32 lhs rhs => .and32 (substSymExpr sub lhs) (substSymExpr sub rhs)
+  | .or32 lhs rhs => .or32 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .add64 lhs rhs => .add64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .sub64 lhs rhs => .sub64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .xor64 lhs rhs => .xor64 (substSymExpr sub lhs) (substSymExpr sub rhs)
@@ -273,6 +276,8 @@ theorem substSymExpr_id {Reg : Type} [DecidableEq Reg] [Fintype Reg] (expr : Sym
       simp [substSymExpr, substSymExpr_id]
   | and32 lhs rhs =>
       simp [substSymExpr, substSymExpr_id]
+  | or32 lhs rhs =>
+      simp [substSymExpr, substSymExpr_id]
   | add64 lhs rhs =>
       simp [substSymExpr, substSymExpr_id]
   | sub64 lhs rhs =>
@@ -325,6 +330,8 @@ theorem substSymExpr_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       simp [substSymExpr, substSymExpr_compose]
   | and32 lhs rhs =>
       simp [substSymExpr, substSymExpr_compose]
+  | or32 lhs rhs =>
+      simp [substSymExpr, substSymExpr_compose]
   | add64 lhs rhs =>
       simp [substSymExpr, substSymExpr_compose]
   | sub64 lhs rhs =>
@@ -367,6 +374,8 @@ theorem evalSymExpr_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | shl32 lhs rhs =>
       simp [substSymExpr, evalSymExpr_subst]
   | and32 lhs rhs =>
+      simp [substSymExpr, evalSymExpr_subst]
+  | or32 lhs rhs =>
       simp [substSymExpr, evalSymExpr_subst]
   | add64 lhs rhs =>
       simp [substSymExpr, evalSymExpr_subst]
@@ -456,6 +465,7 @@ def hashSymExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → UInt64
   | .sub32 l r => mixHash 7 (mixHash (hashSymExpr l) (hashSymExpr r))
   | .shl32 l r => mixHash 8 (mixHash (hashSymExpr l) (hashSymExpr r))
   | .and32 l r => mixHash 17 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .or32 l r => mixHash 41 (mixHash (hashSymExpr l) (hashSymExpr r))
   | .add64 l r => mixHash 9 (mixHash (hashSymExpr l) (hashSymExpr r))
   | .sub64 l r => mixHash 10 (mixHash (hashSymExpr l) (hashSymExpr r))
   | .xor64 l r => mixHash 11 (mixHash (hashSymExpr l) (hashSymExpr r))

@@ -209,6 +209,8 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.shl32 l r)
         | "And32", [a, b] => do
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.and32 l r)
+        | "Or32", [a, b] => do
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.or32 l r)
         | "Or8",  [a, b] => do
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.or64 l r)
         | "And8", [a, b] => do
