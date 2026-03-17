@@ -122,10 +122,17 @@ def classifyAddr {Reg : Type} [DecidableEq Reg]
     if stackRegs.any (· == r) then some .stack else none
   | .sub64 (.reg r) (.const _) =>
     if stackRegs.any (· == r) then some .stack else none
-  | .load _ .base (.const c) =>
-    -- Indirect load from base memory at constant address.
-    -- If the source address is in a loaded region (GOT, data, etc.),
-    -- the loaded pointer is also from the loaded image — not the stack.
+  | .load _ _mem (.const c) =>
+    -- Indirect load at a constant address through ANY memory state.
+    -- If the constant address is in a loaded region (GOT, data, etc.),
+    -- the loaded pointer targets the loaded image — not the stack.
+    -- Sound because: loaded-region addresses are in read-only sections
+    -- (GOT, .rodata, .data). Stack stores don't affect these addresses
+    -- (different regions by ELF layout). So load(store_chain, GOT_addr)
+    -- returns the same value as load(base_mem, GOT_addr).
+    -- This handles the common pattern where the memory has been modified
+    -- by stack stores (e.g., store_64(base_mem, rbp-16, rax)) but the
+    -- load targets a GOT/data constant that is unaffected.
     lookupRegion regions c
   | _ => none
 
