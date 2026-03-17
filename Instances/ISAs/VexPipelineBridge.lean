@@ -850,17 +850,7 @@ atomic comparisons are covered by the basis.
 Combined with `evalSymPC_subst`, this gives h_value_determined when the
 lifted PC's atoms are basis-covered. -/
 
-/-- Collect all atomic comparison PCs from a SymPC (leaf-level, ignoring
-    and/not structure). Returns the set of eq/lt/le sub-PCs. -/
-def SymPC.atoms {Reg : Type} : SymPC Reg → List (SymPC Reg)
-  | .true => []
-  | .eq l r => [.eq l r]
-  | .lt l r => [.lt l r]
-  | .le l r => [.le l r]
-  | .and φ ψ => SymPC.atoms φ ++ SymPC.atoms ψ
-  | .not φ => SymPC.atoms φ
-
-/-- If every atom of φ is in the closure (or its negation is), and
+/-- If every atom of φ is in the closure, and
     s₁, s₂ are partition-equivalent, they agree on φ's truth value.
 
     This generalizes `evalSymPC_of_conjunctsInClosure`: instead of

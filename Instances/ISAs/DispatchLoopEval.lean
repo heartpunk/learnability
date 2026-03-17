@@ -510,6 +510,16 @@ def SymPC.conjuncts {Reg : Type} : SymPC Reg → List (SymPC Reg)
   | .and φ ψ => SymPC.conjuncts φ ++ SymPC.conjuncts ψ
   | pc => [pc]
 
+/-- Collect all atomic comparison PCs from a SymPC (leaf-level eq/lt/le,
+    ignoring and/not structure). Used by `semClosed_of_liftedAtomsInBasis`. -/
+def SymPC.atoms {Reg : Type} : SymPC Reg → List (SymPC Reg)
+  | .true => []
+  | .eq l r => [.eq l r]
+  | .lt l r => [.lt l r]
+  | .le l r => [.le l r]
+  | .and φ ψ => SymPC.atoms φ ++ SymPC.atoms ψ
+  | .not φ => SymPC.atoms φ
+
 /-! ## PC Expression Canonicalization (Kuznetsov et al. 2012)
 
 Normalizes SymExpr/SymPC so that syntactically different but semantically
@@ -2412,6 +2422,56 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
               log s!"    [template-exp] *** Template basis INSUFFICIENT — need approach D (memory regions) ***"
           else
             log s!"    [template-exp] *** ALL TRIVIALLY CLOSED — template basis gives SemClosed ***"
+      -- Atom-closure check (approach B): does the expanded basis satisfy
+      -- h_atoms_closed from semClosed_of_liftedAtomsInBasis?
+      -- If yes: SemClosed holds by structural theorem, no SMT needed.
+      do
+        -- Build expanded basis for body branches (branchingLoopModel)
+        let (fullClosure3, _, _) := extractClosure ip_reg bodyArr (dataOnly := false)
+        -- One-round expansion on body branches
+        let mut atomBasis : Array (SymPC Reg) := fullClosure3
+        let mut atomSeen : Std.HashSet (SymPC Reg) :=
+          fullClosure3.foldl (fun s pc => s.insert pc) {}
+        -- Add full branch PCs for h_contains
+        for b in bodyArr do
+          unless atomSeen.contains b.pc do
+            atomSeen := atomSeen.insert b.pc
+            atomBasis := atomBasis.push b.pc
+        -- Add non-closed lifted PCs (one round)
+        for b in bodyArr do
+          for phi in fullClosure3 do
+            let lifted := substSymPC b.sub phi
+            let liftedSimplified := simplifyLoadStorePCOpt addrClassify lifted
+            match SymPC.simplifyConst liftedSimplified with
+            | none => pure ()
+            | some .true => pure ()
+            | some pc' =>
+              unless atomSeen.contains pc' do
+                atomSeen := atomSeen.insert pc'
+                atomBasis := atomBasis.push pc'
+        -- Now check: for each body branch and expanded basis PC,
+        -- are all atoms of the lifted PC in the expanded basis?
+        let mut atomViolations : Nat := 0
+        let mut atomTotal : Nat := 0
+        let atomBasisSet : Std.HashSet (SymPC Reg) :=
+          atomBasis.foldl (fun s pc => s.insert pc) {}
+        for b in bodyArr do
+          for phi in atomBasis do
+            atomTotal := atomTotal + 1
+            let lifted := substSymPC b.sub phi
+            let liftedSimplified := simplifyLoadStorePCOpt addrClassify lifted
+            match SymPC.simplifyConst liftedSimplified with
+            | none => pure ()  -- trivial false, atoms vacuously in basis
+            | some .true => pure ()  -- trivial true, no atoms
+            | some pc' =>
+              for a in SymPC.atoms pc' do
+                unless atomBasisSet.contains a do
+                  atomViolations := atomViolations + 1
+        if atomViolations == 0 then
+          log s!"    [atom-closed] PASS: expanded basis is atom-closed ({atomBasis.size} PCs, {atomTotal} pairs checked)"
+          log s!"    [atom-closed] *** semClosed_of_liftedAtomsInBasis applies — SemClosed by structural theorem ***"
+        else
+          log s!"    [atom-closed] FAIL: {atomViolations} atom violations ({atomBasis.size} PCs, {atomTotal} pairs)"
       return some (k, summaryArr)
     frontier := newBranches
   return none
