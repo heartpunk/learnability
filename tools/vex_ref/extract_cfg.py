@@ -111,6 +111,50 @@ def extract_text_section(binary: str) -> dict:
     return result
 
 
+<<<<<<< conflict 1 of 1
++++++++ yxkvzmyx f455a21b (rebase destination)
+%%%%%%% diff from: oqqtmuzq 1c97f471 "Add justfile + stalagmite flake input + per-function VEX extraction" (parents of rebased revision)
+\\\\\\\        to: wqpvuzkx 74d9a5a3 "Fix flake: lean4-nix overlay for pinned v4.27.0, extract all 9 stalagmite subjects" (rebased revision)
+ def extract_per_function(binary: str) -> dict:
+     """Sweep each STT_FUNC symbol individually, producing per-function JSON.
+ 
+     Uses CLE's rebased symbol addresses so block addresses match function
+     entry points.  Output format matches loadFunctionsFromJSON in Lean:
+         {"arch": "amd64", "functions": {"name": {"addr": "0x...", "size": N,
+          "blocks": [...]}}, "memory_regions": [...]}
+     """
+     project = angr.Project(binary, auto_load_libs=False)
+     obj = project.loader.main_object
+ 
+     functions = {}
+     for sym in obj.symbols:
+-        if sym.type != "STT_FUNC" or sym.size == 0:
++        if not sym.is_function or sym.size == 0:
+             continue
+         addr = sym.rebased_addr
+         blocks = []
+         cursor = addr
+         while cursor < addr + sym.size:
+             block = project.factory.block(cursor)
+             irsb = block.vex
+             blocks.append(str(irsb))
+             if block.size == 0:
+                 break
+             cursor += block.size
+         functions[sym.name] = {
+             "addr": f"0x{addr:x}",
+             "size": sym.size,
+             "blocks": blocks,
+         }
+ 
+     return {
+         "arch": "amd64",
+         "functions": functions,
+         "memory_regions": extract_memory_regions(project),
+     }
+ 
+ 
+>>>>>>> conflict 1 of 1 ends
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Extract VEX IR blocks via pyvex linear sweep."
