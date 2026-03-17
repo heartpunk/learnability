@@ -33,7 +33,7 @@ _src_mjs := "mjs_orig.c"
 # Parser functions per subject (comma-separated, for --functions scoping)
 _funcs_tinyc := "next_sym,term,sum,test,expr,paren_expr,statement"
 _funcs_json := "json_parse,json_parse_value,json_parse_array,json_parse_object,skip_whitespace,has_char,json_is_literal"
-_funcs_cjson := ""
+_funcs_cjson := "parse_value,parse_array,parse_object,parse_string,parse_number,parse_hex4,buffer_skip_whitespace,skip_utf8_bom,utf16_literal_to_utf8,cJSON_ParseWithLengthOpts"
 _funcs_parson := ""
 _funcs_lisp := "lex,parse,parse_sexp,eat_tok,peek_tok"
 _funcs_calc := "parse_expr,parse_expression,parse_mult,parse_op,parse_primary,parse_sum,opp_parse_expression,rdp_parse_expression"
