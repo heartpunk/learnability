@@ -2143,6 +2143,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   for b in frontier do
     current := current.insert b
   log s!"    initial frontier: {frontier.size} branches (skip + {initialFrontier.size} call-expanded)"
+  let mut subPool : SubPool Reg := {}
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     -- Pure composition: no summary interception, body has no call branches
@@ -2156,7 +2157,11 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     for b in composed do
       match simplifyBranchFull b addrClassify with
       | none => droppedSimplify := droppedSimplify + 1
-      | some sb => simplified := simplified.push (zeroNonProjected closedRegs ip_reg sb)
+      | some sb =>
+        let zb := zeroNonProjected closedRegs ip_reg sb
+        let (internedSub, subPool') := subPool.intern zb.sub
+        subPool := subPool'
+        simplified := simplified.push ⟨internedSub, zb.pc⟩
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
     -- Phase 1: structural dedup — collect all branches not already in current
