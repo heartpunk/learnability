@@ -148,7 +148,7 @@ def exprNodeCount {Reg : Type} : SymExpr Reg → Nat
   | .reg _ => 1
   | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x => 1 + exprNodeCount x
   | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .add64 a b | .sub64 a b
-  | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b | .mul64 a b =>
+  | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b =>
     1 + exprNodeCount a + exprNodeCount b
   | .load _ m addr => 1 + memNodeCount m + exprNodeCount addr
 
@@ -160,7 +160,7 @@ def exprUnresolvedLoads {Reg : Type} : SymExpr Reg → Nat
   | .const _ | .reg _ => 0
   | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x => exprUnresolvedLoads x
   | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .add64 a b | .sub64 a b
-  | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b | .mul64 a b =>
+  | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b =>
     exprUnresolvedLoads a + exprUnresolvedLoads b
   | .load _ m addr => (match m with | .base => 0 | _ => 1) + memUnresolvedLoads m + exprUnresolvedLoads addr
 
@@ -189,6 +189,7 @@ def exprSummary {Reg : Type} [ToString Reg] : SymExpr Reg → Nat → String
   | .or32 a b, d => s!"or32({exprSummary a (d-1)},{exprSummary b (d-1)})"
   | .xor32 a b, d => s!"xor32({exprSummary a (d-1)},{exprSummary b (d-1)})"
   | .mul64 a b, d => s!"mul64({exprSummary a (d-1)},{exprSummary b (d-1)})"
+  | .mul32 a b, d => s!"mul32({exprSummary a (d-1)},{exprSummary b (d-1)})"
   | .load w m addr, d => s!"ld{w.byteCount*8}(mem[{memNodeCount m}],{exprSummary addr (d-1)})"
 end
 
@@ -341,7 +342,7 @@ def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymEx
   | .and64 a b => foldAnd64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .or64 a b => .or64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .shl64 a b => .shl64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
-  | .shr64 a b | .mul64 a b => .shr64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .shr64 a b | .mul64 a b | .mul32 a b => .shr64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .load w mem addr =>
     let addr' := simplifyLoadStoreExpr addr
     let mem' := simplifyLoadStoreMem mem
@@ -401,7 +402,7 @@ def simplifyLoadStoreExprR {Reg : Type} [DecidableEq Reg]
   | .and64 a b => foldAnd64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .or64 a b => .or64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .shl64 a b => .shl64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
-  | .shr64 a b | .mul64 a b => .shr64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .shr64 a b | .mul64 a b | .mul32 a b => .shr64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .load w mem addr =>
     let addr' := simplifyLoadStoreExprR classify addr
     let mem' := simplifyLoadStoreMemR classify mem
@@ -562,7 +563,7 @@ def canonicalizeExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → SymExpr Reg
   | .or32 a b => .or32 (canonicalizeExpr a) (canonicalizeExpr b)
   | .xor32 a b => .xor32 (canonicalizeExpr a) (canonicalizeExpr b)
   | .shl64 a b => .shl64 (canonicalizeExpr a) (canonicalizeExpr b)
-  | .shr64 a b | .mul64 a b => .shr64 (canonicalizeExpr a) (canonicalizeExpr b)
+  | .shr64 a b | .mul64 a b | .mul32 a b => .shr64 (canonicalizeExpr a) (canonicalizeExpr b)
   | .load w m addr => .load w (canonicalizeMem m) (canonicalizeExpr addr)
 /-- Canonicalize a SymMem: normalize expressions within stores. -/
 def canonicalizeMem {Reg : Type} [Hashable Reg] : SymMem Reg → SymMem Reg
@@ -636,6 +637,7 @@ def SymExpr.toSMTLib {Reg : Type} [ToString Reg] : SymExpr Reg → String
   | .shl64 l r => s!"(bvshl {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
   | .shr64 l r => s!"(bvlshr {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
   | .mul64 l r => s!"(bvmul {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
+  | .mul32 l r => s!"((_ zero_extend 32) (bvmul ((_ extract 31 0) {SymExpr.toSMTLib l}) ((_ extract 31 0) {SymExpr.toSMTLib r})))"
   | .load w m addr => s!"(load_{Width.toSMTWidth w} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr})"
 
 /-- Encode a SymMem as an SMT-LIB2 expression (uninterpreted sort). -/
@@ -677,6 +679,7 @@ def SymExpr.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
   | .shl64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
   | .shr64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
   | .mul64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
+  | .mul32 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
   | .load _ _ addr, s => SymExpr.collectRegNames addr s
 
 def SymPC.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
@@ -695,7 +698,7 @@ def SymExpr.hasLoad {Reg : Type} : SymExpr Reg → Bool
   | .const _ | .reg _ => false
   | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => SymExpr.hasLoad e
   | .sub32 l r | .shl32 l r | .and32 l r | .or32 l r | .xor32 l r | .add64 l r | .sub64 l r | .xor64 l r
-  | .and64 l r | .or64 l r | .shl64 l r | .shr64 l r | .mul64 l r => SymExpr.hasLoad l || SymExpr.hasLoad r
+  | .and64 l r | .or64 l r | .shl64 l r | .shr64 l r | .mul64 l r | .mul32 l r => SymExpr.hasLoad l || SymExpr.hasLoad r
 
 def SymMem.hasLoad {Reg : Type} : SymMem Reg → Bool
   | .base => false
@@ -731,6 +734,7 @@ def SymExpr.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
   | .shl64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
   | .shr64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
   | .mul64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
+  | .mul32 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
   | .load _ m addr, s => SymExpr.collectRegsHS addr (SymMem.collectRegsHS m s)
 
 /-- Collect all registers referenced in a SymMem. -/
@@ -1427,6 +1431,9 @@ def matchTemplateExpr {Reg : Type} [DecidableEq Reg]
     | _ => none
   | .mul64 ta tb => match e with
     | .mul64 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
+    | _ => none
+  | .mul32 ta tb => match e with
+    | .mul32 ea eb => (matchTemplateExpr bindings ta ea).bind (matchTemplateExpr · tb eb)
     | _ => none
   | .load tw tm ta => match e with
     | .load ew em ea =>
@@ -2675,7 +2682,7 @@ def ppExpr : SymExpr Amd64Reg → String
   | .and64 a b => s!"({ppExpr a}&{ppExpr b})"
   | .or64  a b => s!"({ppExpr a}|{ppExpr b})"
   | .xor64 a b => s!"({ppExpr a}^{ppExpr b})"
-  | .shr64 a b | .mul64 a b => s!"({ppExpr a}>>{ppExpr b})"
+  | .shr64 a b | .mul64 a b | .mul32 a b => s!"({ppExpr a}>>{ppExpr b})"
   | .shl64 a b => s!"({ppExpr a}<<{ppExpr b})"
   | .low32 e   => s!"lo32({ppExpr e})"
   | .uext32 e  => s!"zx32({ppExpr e})"
@@ -3098,7 +3105,7 @@ def exprLoadsViaRegAddr : SymExpr Amd64Reg → Bool
   | .load _ _ addr => addrUsesRegs addr
   | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => exprLoadsViaRegAddr e
   | .add64 a b | .sub64 a b | .xor64 a b | .and64 a b | .or64 a b
-  | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .shl64 a b | .shr64 a b | .mul64 a b => exprLoadsViaRegAddr a || exprLoadsViaRegAddr b
+  | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b => exprLoadsViaRegAddr a || exprLoadsViaRegAddr b
   | _ => false
 where
   /-- Check if an address expression uses registers (for load address chains). -/
@@ -3107,7 +3114,7 @@ where
   | .const _ => false
   | .load _ _ innerAddr => addrUsesRegs innerAddr  -- chained load: check inner address
   | .add64 a b | .sub64 a b | .xor64 a b | .and64 a b | .or64 a b
-  | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .shl64 a b | .shr64 a b | .mul64 a b => addrUsesRegs a || addrUsesRegs b
+  | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b => addrUsesRegs a || addrUsesRegs b
   | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => addrUsesRegs e
 
 /-- Extract a constant (printable char or token code) from a SymExpr. -/

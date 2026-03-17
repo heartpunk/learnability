@@ -64,7 +64,7 @@ def SymExpr.RegOnly {Reg : Type} (allowed : Finset Reg) : SymExpr Reg → Prop
   | .reg r        => r ∈ allowed
   | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e => SymExpr.RegOnly allowed e
   | .sub32 l r | .shl32 l r | .and32 l r | .or32 l r | .xor32 l r | .add64 l r | .sub64 l r
-  | .xor64 l r | .and64 l r | .or64 l r | .shl64 l r | .shr64 l r | .mul64 l r =>
+  | .xor64 l r | .and64 l r | .or64 l r | .shl64 l r | .shr64 l r | .mul64 l r | .mul32 l r =>
       SymExpr.RegOnly allowed l ∧ SymExpr.RegOnly allowed r
   | .load _ _ _   => False
 
@@ -155,6 +155,10 @@ private theorem evalSymExpr_congr_of_regOnly_aux
         evalSymExpr_congr_of_regOnly_aux hRegs l hl,
         evalSymExpr_congr_of_regOnly_aux hRegs r hr]
   | .mul64 l r, ⟨hl, hr⟩ => by
+      simp only [evalSymExpr,
+        evalSymExpr_congr_of_regOnly_aux hRegs l hl,
+        evalSymExpr_congr_of_regOnly_aux hRegs r hr]
+  | .mul32 l r, ⟨hl, hr⟩ => by
       simp only [evalSymExpr,
         evalSymExpr_congr_of_regOnly_aux hRegs l hl,
         evalSymExpr_congr_of_regOnly_aux hRegs r hr]
