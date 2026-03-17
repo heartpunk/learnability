@@ -2028,6 +2028,29 @@ def composeBranchArrayStratified {Reg : Type} [DecidableEq Reg] [Fintype Reg] [B
   let skipped := totalPairs - composed_count
   return (result, composed_count, skipped, dropped, summaryHits)
 
+/-- Pool for deduplicating SymSub values across branches.
+    When multiple branches share identical substitutions (same register map +
+    memory chain), they can point to a single pooled copy. The pool uses hash
+    lookup with equality check to avoid collisions. -/
+structure SubPool (Reg : Type) [Hashable Reg] [EnumReg Reg] where
+  pool : Std.HashMap UInt64 (SymSub Reg) := {}
+  hits : Nat := 0
+  misses : Nat := 0
+
+/-- Intern a SymSub: if an equal sub is already pooled, return the pooled copy
+    (sharing its heap allocation). Otherwise, insert and return the new sub.
+    On hash collision with a non-equal sub, the new sub is stored (overwriting
+    the old entry — a minor loss of sharing, not a correctness issue). -/
+def SubPool.intern {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg]
+    (sp : SubPool Reg) (sub : SymSub Reg) : SymSub Reg × SubPool Reg :=
+  let h := hash sub
+  match sp.pool.get? h with
+  | some existing =>
+    if existing == sub
+    then (existing, { sp with hits := sp.hits + 1 })
+    else (sub, { sp with pool := sp.pool.insert h sub, misses := sp.misses + 1 })
+  | none => (sub, { sp with pool := sp.pool.insert h sub, misses := sp.misses + 1 })
+
 /-- Per-function stabilization with optional initial frontier seeding.
     When initialFrontier is non-empty, those branches are added to the
     initial state (along with skip) instead of starting from skip alone.
