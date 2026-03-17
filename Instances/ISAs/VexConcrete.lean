@@ -29,6 +29,7 @@ def evalAmd64CalculateConditionZero
   | .add32 lhs rhs => mask32 (evalExpr state temps lhs + evalExpr state temps rhs)
   | .sub32 lhs rhs => mask32 (evalExpr state temps lhs - evalExpr state temps rhs)
   | .shl32 lhs rhs => shiftLeft32 (evalExpr state temps lhs) (evalExpr state temps rhs)
+  | .and32 lhs rhs => mask32 (evalExpr state temps lhs &&& evalExpr state temps rhs)
   | .add64 lhs rhs => evalExpr state temps lhs + evalExpr state temps rhs
   | .sub64 lhs rhs => evalExpr state temps lhs - evalExpr state temps rhs
   | .xor64 lhs rhs => evalExpr state temps lhs ^^^ evalExpr state temps rhs
