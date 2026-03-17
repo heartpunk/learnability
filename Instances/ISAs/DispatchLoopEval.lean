@@ -594,6 +594,7 @@ instance : ToString Amd64Reg where
     | .rbp => "rbp" | .rsp => "rsp" | .rdi => "rdi" | .rip => "rip"
     | .cc_op => "cc_op" | .cc_dep1 => "cc_dep1" | .cc_dep2 => "cc_dep2" | .cc_ndep => "cc_ndep"
     | .r11 => "r11"
+    | .rbx => "rbx"
 
 /-- SMT-LIB2 width suffix for memory operations. -/
 def Width.toSMTWidth : Width → String
