@@ -780,6 +780,63 @@ theorem guard_pins_register_unconditional
   simp only [vexSummaryISA, satisfiesSymPC, evalSymPC, evalSymExpr] at h_iff
   exact Bool.eq_iff_iff.mpr h_iff
 
+/-! ### Lemma 2: State Agreement → Evaluation Agreement
+
+If two states have the same registers and memory, then `evalSymExpr`,
+`evalSymMem`, and `evalSymPC` produce identical results. This is the
+"body determinism" lemma: `applySymSub` is a pure function, so same
+inputs → same outputs.
+
+The key bridge: `evalSymPC_subst` gives
+  `evalSymPC s (substSymPC σ φ) = evalSymPC (applySymSub σ s) φ`
+Combined with state agreement, this proves h_value_determined when the
+partition class determines the full state (or the relevant fragment). -/
+
+/-- States with same registers and memory are equal. -/
+theorem concreteState_eq_of_components
+    {s₁ s₂ : ConcreteState Reg}
+    (h_regs : s₁.regs = s₂.regs)
+    (h_mem : s₁.mem = s₂.mem) :
+    s₁ = s₂ :=
+  ConcreteState.ext h_regs h_mem
+
+/-- Equal states produce equal `applySymSub` results.
+    This is body block determinism: same state in → same state out. -/
+theorem applySymSub_congr
+    (σ : SymSub Reg) {s₁ s₂ : ConcreteState Reg}
+    (h_eq : s₁ = s₂) :
+    applySymSub σ s₁ = applySymSub σ s₂ := by
+  subst h_eq; rfl
+
+/-- h_value_determined holds when partition-equivalent states have
+    equal register files and memory.
+
+    This is the key reduction: if pcSetoidWith gives state equality
+    (strong partition), then substSymPC evaluation agrees trivially
+    via evalSymPC_subst + state equality.
+
+    The hypothesis `h_state_eq` must be provided externally — it says
+    that partition equivalence on this particular basis implies full
+    state equality (at least on the components referenced by the model).
+    For equality-dispatch with all registers pinned, this holds. -/
+theorem h_value_determined_of_state_agreement
+    (isa : SymbolicISA (SymSub Reg) (SymPC Reg) (ConcreteState Reg))
+    (model : Finset (Branch (SymSub Reg) (SymPC Reg)))
+    (basis : Finset (SymPC Reg))
+    (h_lift_eq : ∀ (σ : SymSub Reg) (φ : SymPC Reg),
+      isa.pc_lift σ φ = substSymPC σ φ)
+    (h_sat_eq : ∀ (s : ConcreteState Reg) (φ : SymPC Reg),
+      isa.satisfies s φ = (evalSymPC s φ = true))
+    (h_state_eq : ∀ s₁ s₂ : ConcreteState Reg,
+      (pcSetoidWith isa basis).r s₁ s₂ → s₁ = s₂)
+    : ∀ b ∈ model, ∀ φ ∈ basis, ∀ s₁ s₂ : ConcreteState Reg,
+        (pcSetoidWith isa basis).r s₁ s₂ →
+        isa.satisfies s₁ (isa.pc_lift b.sub φ) ↔
+        isa.satisfies s₂ (isa.pc_lift b.sub φ) := by
+  intro b _ φ _ s₁ s₂ h_equiv
+  have h_eq := h_state_eq s₁ s₂ h_equiv
+  subst h_eq; exact Iff.rfl
+
 end ApproachB
 
 end VexISA
