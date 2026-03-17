@@ -597,6 +597,7 @@ instance : ToString Amd64Reg where
     | .rbx => "rbx"
     | .r8 => "r8"
     | .r9 => "r9"
+    | .r12 => "r12"
 
 /-- SMT-LIB2 width suffix for memory operations. -/
 def Width.toSMTWidth : Width → String

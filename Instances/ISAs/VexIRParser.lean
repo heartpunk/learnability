@@ -60,6 +60,7 @@ def resolveReg (s : String) : Except String Amd64Reg :=
   | "rbx" | "ebx" | "bx" | "bl" | "bh"  => .ok .rbx
   | "r8"  | "r8d" | "r8w" | "r8b"       => .ok .r8
   | "r9"  | "r9d" | "r9w" | "r9b"       => .ok .r9
+  | "r12" | "r12d" | "r12w" | "r12b"    => .ok .r12
   | r => .error s!"unknown register: {r}"
 
 def typeToWidth (ty : String) : Except String Width :=
