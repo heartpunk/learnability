@@ -45,6 +45,7 @@ def evalAmd64CalculateConditionZero
   | .not32 x => mask32 (~~~(evalExpr state temps x))
   | .sar64 lhs rhs => signedShiftRight64 (evalExpr state temps lhs) (evalExpr state temps rhs)
   | .sar32 lhs rhs => signedShiftRight32 (evalExpr state temps lhs) (evalExpr state temps rhs)
+  | .ite cond t f => if evalExpr state temps cond != 0 then evalExpr state temps t else evalExpr state temps f
   | .load width addr => ByteMem.read width state.mem (evalExpr state temps addr)
 
 @[simp] def evalCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]

@@ -66,6 +66,7 @@ def SymExpr.RegOnly {Reg : Type} (allowed : Finset Reg) : SymExpr Reg → Prop
   | .sub32 l r | .shl32 l r | .and32 l r | .or32 l r | .xor32 l r | .add64 l r | .sub64 l r
   | .xor64 l r | .and64 l r | .or64 l r | .shl64 l r | .shr64 l r | .mul64 l r | .mul32 l r | .sar64 l r | .sar32 l r =>
       SymExpr.RegOnly allowed l ∧ SymExpr.RegOnly allowed r
+  | .ite c t f => SymExpr.RegOnly allowed c ∧ SymExpr.RegOnly allowed t ∧ SymExpr.RegOnly allowed f
   | .load _ _ _   => False
 
 /-- A SymPC is register-only when all embedded SymExprs are. -/
@@ -177,6 +178,11 @@ private theorem evalSymExpr_congr_of_regOnly_aux
       simp only [evalSymExpr,
         evalSymExpr_congr_of_regOnly_aux hRegs l hl,
         evalSymExpr_congr_of_regOnly_aux hRegs r hr]
+  | .ite c t f, ⟨hc, ht, hf⟩ => by
+      simp only [evalSymExpr,
+        evalSymExpr_congr_of_regOnly_aux hRegs c hc,
+        evalSymExpr_congr_of_regOnly_aux hRegs t ht,
+        evalSymExpr_congr_of_regOnly_aux hRegs f hf]
   | .load _ _ _, he   => by simp [SymExpr.RegOnly] at he
 
 theorem evalSymExpr_congr_of_regOnly

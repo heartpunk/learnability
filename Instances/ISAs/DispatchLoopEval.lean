@@ -147,6 +147,7 @@ def exprNodeCount {Reg : Type} : SymExpr Reg → Nat
   | .const _ => 1
   | .reg _ => 1
   | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x | .not64 x | .not32 x => 1 + exprNodeCount x
+  | .ite c t f => 1 + exprNodeCount c + exprNodeCount t + exprNodeCount f
   | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .add64 a b | .sub64 a b
   | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b | .sar64 a b | .sar32 a b =>
     1 + exprNodeCount a + exprNodeCount b
@@ -159,6 +160,7 @@ def memNodeCount {Reg : Type} : SymMem Reg → Nat
 def exprUnresolvedLoads {Reg : Type} : SymExpr Reg → Nat
   | .const _ | .reg _ => 0
   | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x | .not64 x | .not32 x => exprUnresolvedLoads x
+  | .ite c t f => exprUnresolvedLoads c + exprUnresolvedLoads t + exprUnresolvedLoads f
   | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .add64 a b | .sub64 a b
   | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b | .sar64 a b | .sar32 a b =>
     exprUnresolvedLoads a + exprUnresolvedLoads b
@@ -193,6 +195,7 @@ def exprSummary {Reg : Type} [ToString Reg] : SymExpr Reg → Nat → String
   | .sar64 a b, d => s!"sar64({exprSummary a (d-1)},{exprSummary b (d-1)})"
   | .sar32 a b, d => s!"sar32({exprSummary a (d-1)},{exprSummary b (d-1)})"
   | .not32 a, d => s!"not32({exprSummary a (d-1)})"
+  | .ite c t f, d => s!"ite({exprSummary c (d-1)},{exprSummary t (d-1)},{exprSummary f (d-1)})"
   | .mul32 a b, d => s!"mul32({exprSummary a (d-1)},{exprSummary b (d-1)})"
   | .load w m addr, d => s!"ld{w.byteCount*8}(mem[{memNodeCount m}],{exprSummary addr (d-1)})"
 end
@@ -338,6 +341,7 @@ def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymEx
   | .sext32to64 x => .sext32to64 (simplifyLoadStoreExpr x)
   | .not64 x => .not64 (simplifyLoadStoreExpr x)
   | .not32 x => .not32 (simplifyLoadStoreExpr x)
+  | .ite c t f => .ite (simplifyLoadStoreExpr c) (simplifyLoadStoreExpr t) (simplifyLoadStoreExpr f)
   | .sub32 a b => .sub32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .and32 a b => .and32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)  | .shl32 a b => .shl32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .or32 a b => .or32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
@@ -400,6 +404,7 @@ def simplifyLoadStoreExprR {Reg : Type} [DecidableEq Reg]
   | .sext32to64 x => .sext32to64 (simplifyLoadStoreExprR classify x)
   | .not64 x => .not64 (simplifyLoadStoreExprR classify x)
   | .not32 x => .not32 (simplifyLoadStoreExprR classify x)
+  | .ite c t f => .ite (simplifyLoadStoreExprR classify c) (simplifyLoadStoreExprR classify t) (simplifyLoadStoreExprR classify f)
   | .sub32 a b => .sub32 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .and32 a b => .and32 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)  | .shl32 a b => .shl32 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .or32 a b => .or32 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
@@ -555,6 +560,7 @@ def canonicalizeExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → SymExpr Reg
   | .sext32to64 x => .sext32to64 (canonicalizeExpr x)
   | .not64 x => .not64 (canonicalizeExpr x)
   | .not32 x => .not32 (canonicalizeExpr x)
+  | .ite c t f => .ite (canonicalizeExpr c) (canonicalizeExpr t) (canonicalizeExpr f)
   | .add64 a b =>
     let a' := canonicalizeExpr a; let b' := canonicalizeExpr b
     if (hash a') < (hash b') then .add64 a' b' else .add64 b' a'
@@ -651,6 +657,7 @@ def SymExpr.toSMTLib {Reg : Type} [ToString Reg] : SymExpr Reg → String
   | .not64 e => s!"(bvnot {SymExpr.toSMTLib e})"
   | .sar64 l r => s!"(bvashr {SymExpr.toSMTLib l} {SymExpr.toSMTLib r})"
   | .sar32 l r => s!"((_ zero_extend 32) (bvashr ((_ extract 31 0) {SymExpr.toSMTLib l}) ((_ extract 31 0) {SymExpr.toSMTLib r})))"
+  | .ite c t f => s!"(ite (not (= {SymExpr.toSMTLib c} (_ bv0 64))) {SymExpr.toSMTLib t} {SymExpr.toSMTLib f})"
   | .not32 e => s!"((_ zero_extend 32) (bvnot ((_ extract 31 0) {SymExpr.toSMTLib e})))"
   | .mul32 l r => s!"((_ zero_extend 32) (bvmul ((_ extract 31 0) {SymExpr.toSMTLib l}) ((_ extract 31 0) {SymExpr.toSMTLib r})))"
   | .load w m addr => s!"(load_{Width.toSMTWidth w} {SymMem.toSMTLib m} {SymExpr.toSMTLib addr})"
@@ -683,6 +690,7 @@ def SymExpr.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
   | .sext32to64 e, s => SymExpr.collectRegNames e s
   | .not64 e, s => SymExpr.collectRegNames e s
   | .not32 e, s => SymExpr.collectRegNames e s
+  | .ite c t f, s => SymExpr.collectRegNames f (SymExpr.collectRegNames t (SymExpr.collectRegNames c s))
   | .sar64 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
   | .sar32 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
   | .sub32 l r, s => SymExpr.collectRegNames r (SymExpr.collectRegNames l s)
@@ -716,6 +724,7 @@ def SymExpr.hasLoad {Reg : Type} : SymExpr Reg → Bool
   | .load _ _ _ => true
   | .const _ | .reg _ => false
   | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e | .not64 e | .not32 e => SymExpr.hasLoad e
+  | .ite c t f => SymExpr.hasLoad c || SymExpr.hasLoad t || SymExpr.hasLoad f
   | .sub32 l r | .shl32 l r | .and32 l r | .or32 l r | .xor32 l r | .add64 l r | .sub64 l r | .xor64 l r
   | .and64 l r | .or64 l r | .shl64 l r | .shr64 l r | .mul64 l r | .mul32 l r | .sar64 l r | .sar32 l r => SymExpr.hasLoad l || SymExpr.hasLoad r
 
@@ -742,6 +751,7 @@ def SymExpr.collectRegsHS {Reg : Type} [BEq Reg] [Hashable Reg]
   | .sext32to64 e, s => SymExpr.collectRegsHS e s
   | .not64 e, s => SymExpr.collectRegsHS e s
   | .not32 e, s => SymExpr.collectRegsHS e s
+  | .ite c t f, s => SymExpr.collectRegsHS f (SymExpr.collectRegsHS t (SymExpr.collectRegsHS c s))
   | .sar64 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
   | .sar32 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
   | .sub32 l r, s => SymExpr.collectRegsHS r (SymExpr.collectRegsHS l s)
@@ -1469,6 +1479,9 @@ def matchTemplateExpr {Reg : Type} [DecidableEq Reg]
     | _ => none
   | .not32 ta => match e with
     | .not32 ea => matchTemplateExpr bindings ta ea
+    | _ => none
+  | .ite tc tt tf => match e with
+    | .ite ec et ef => (matchTemplateExpr bindings tc ec).bind (fun b => (matchTemplateExpr b tt et).bind (matchTemplateExpr · tf ef))
     | _ => none
   | .load tw tm ta => match e with
     | .load ew em ea =>
@@ -3139,6 +3152,7 @@ def stripToSmallConst : SymExpr Amd64Reg → Option UInt64
 def exprLoadsViaRegAddr : SymExpr Amd64Reg → Bool
   | .load _ _ addr => addrUsesRegs addr
   | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e | .not64 e | .not32 e => exprLoadsViaRegAddr e
+  | .ite c t f => exprLoadsViaRegAddr c || exprLoadsViaRegAddr t || exprLoadsViaRegAddr f
   | .add64 a b | .sub64 a b | .xor64 a b | .and64 a b | .or64 a b
   | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b | .sar64 a b | .sar32 a b => exprLoadsViaRegAddr a || exprLoadsViaRegAddr b
   | _ => false
@@ -3151,6 +3165,7 @@ where
   | .add64 a b | .sub64 a b | .xor64 a b | .and64 a b | .or64 a b
   | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b | .sar64 a b | .sar32 a b => addrUsesRegs a || addrUsesRegs b
   | .low32 e | .uext32 e | .sext8to32 e | .sext32to64 e | .not64 e | .not32 e => addrUsesRegs e
+  | .ite c t f => addrUsesRegs c || addrUsesRegs t || addrUsesRegs f
 
 /-- Extract a constant (printable char or token code) from a SymExpr. -/
 def extractConstFromExpr (e : SymExpr Amd64Reg) : Option (CharClass) :=
