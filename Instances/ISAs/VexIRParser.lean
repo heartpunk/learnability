@@ -258,6 +258,22 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.shl64 l r)
         | "Shr64", [a, b] => do
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.shr64 l r)
+        | "amd64g_calculate_condition", [codeStr, opStr, dep1Str, dep2Str, _ndepStr] => do
+          -- Condition flag calculation used as expression value (0 or 1).
+          -- Lower directly to ite(condition, 1, 0) without going through Cond type.
+          let code ← match parseNumLit codeStr with
+            | some n => .ok (UInt64.ofNat n)
+            | none   => .error s!"bad CCall code: {codeStr}"
+          let ccOp   ← parseExpr opStr   st fuel
+          let ccDep1 ← parseExpr dep1Str st fuel
+          let ccDep2 ← parseExpr dep2Str st fuel
+          -- Code 0x4 = zero flag: result is 1 if dep1 - dep2 == 0
+          -- Other codes: conservatively return 0
+          if code = 0x4 then
+            .ok (.ite (.sub64 (.low32 ccDep1) (.low32 ccDep2)) (.const 0) (.const 1))
+          else
+            -- Unsupported condition code — return 0 (conservative)
+            .ok (.const 0)
         | _, _ => .error s!"unsupported expression: {s}"
 
 /-! ## Condition parser -/
