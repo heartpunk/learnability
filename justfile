@@ -39,7 +39,7 @@ _funcs_lisp := "lex,parse,parse_sexp,eat_tok,peek_tok"
 _funcs_calc := "parse_expr,parse_expression,parse_mult,parse_op,parse_primary,parse_sum,opp_parse_expression,rdp_parse_expression"
 _funcs_simplearithmeticparser := "_ZN6Parser16parse_expressionEv,_ZN6Parser10parse_termEv,_ZN6Parser12parse_factorEv,_ZN6Parser13parse_integerEv,_ZN6Parser15skip_whitespaceEv,_ZN6Parser5parseEv"
 _funcs_cgi_decode := "cgi_decode"
-_funcs_mjs := ""
+_funcs_mjs := "parse_statement,parse_expression,parse_assignment,parse_ternary,parse_logical_or,parse_logical_and,parse_bitwise_or,parse_bitwise_xor,parse_bitwise_and,parse_equality,parse_comparison,parse_shifts,parse_plus_minus,parse_mul_div_rem,parse_unary,parse_postfix,parse_call_dot_mem,parse_literal,parse_block,parse_block_or_stmt,parse_if,parse_while,parse_for,parse_for_in,parse_return,parse_let,parse_function,parse_object_literal,parse_array_literal,parse_statement_list,parse_mjs,parse_expr,pnext,exec_expr,mjs_execute"
 
 # ── Extraction ────────────────────────────────────────────────────
 
