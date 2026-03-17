@@ -2270,6 +2270,76 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
             phi_idx := phi_idx + 1
           b_idx := b_idx + 1
         log s!"    [closure-diag] showed {dumpCount} non-closed lifted PCs (first 10)"
+      -- Phase 2: Template basis SemClosed experiment.
+      -- Anti-unify non-closed lifted PCs with originals to discover template structure,
+      -- then check if one round of basis expansion makes SemClosed pass.
+      do
+        -- Step 1: Collect all non-closed lifted PCs with their originals
+        let mut nonClosedLifted : Array (SymPC Reg) := #[]
+        let mut nonClosedOriginals : Array (SymPC Reg) := #[]
+        for b in summaryArr do
+          for phi in closure do
+            let lifted := substSymPC b.sub phi
+            let liftedSimplified := simplifyLoadStorePCOpt addrClassify lifted
+            match SymPC.simplifyConst liftedSimplified with
+            | none => pure ()  -- trivial false
+            | some .true => pure ()  -- trivial true
+            | some pc' =>
+              let inClosure := pc' == .true || closure.any (fun phi_j => phi_j == pc')
+              unless inClosure do
+                nonClosedLifted := nonClosedLifted.push pc'
+                nonClosedOriginals := nonClosedOriginals.push phi
+        log s!"    [template-exp] {nonClosedLifted.size} non-closed lifted PCs from {summaryArr.size}×{closure.size} pairs"
+        -- Step 2: Anti-unify each (original, lifted) pair to discover template structure
+        if nonClosedLifted.size > 0 then
+          let mut totalHoles : Nat := 0
+          let mut maxHoles : Nat := 0
+          let paired := nonClosedOriginals.zip nonClosedLifted
+          for (orig, lifted) in paired do
+            let (template, _subs) := antiUnify orig lifted
+            let holes := template.holeCount
+            totalHoles := totalHoles + holes
+            if holes > maxHoles then maxHoles := holes
+          log s!"    [template-exp] anti-unification: avg_holes={totalHoles / nonClosedLifted.size} max_holes={maxHoles}"
+          -- Step 3: Build expanded basis = closure ∪ non-closed lifted PCs (deduped)
+          let mut expandedBasis : Array (SymPC Reg) := closure
+          let mut seen : Std.HashSet (SymPC Reg) :=
+            closure.foldl (fun s pc => s.insert pc) {}
+          for pc in nonClosedLifted do
+            unless seen.contains pc do
+              seen := seen.insert pc
+              expandedBasis := expandedBasis.push pc
+          log s!"    [template-exp] expanded basis: {expandedBasis.size} PCs (was {closure.size})"
+          -- Step 4: Re-check SemClosed against expanded basis.
+          -- For each branch b and each φ in expanded basis, is substSymPC b.sub φ
+          -- determined by the expanded basis? (Two-state CVC5 query)
+          let mut expandedLiftedPCs : Array (SymPC Reg) := #[]
+          let mut expandedTrivial : Nat := 0
+          for b in summaryArr do
+            for phi in expandedBasis do
+              let lifted := substSymPC b.sub phi
+              let liftedSimplified := simplifyLoadStorePCOpt addrClassify lifted
+              match SymPC.simplifyConst liftedSimplified with
+              | none => expandedTrivial := expandedTrivial + 1
+              | some .true => expandedTrivial := expandedTrivial + 1
+              | some pc' =>
+                let inBasis := expandedBasis.any (fun phi_j => phi_j == pc')
+                if inBasis then
+                  expandedTrivial := expandedTrivial + 1
+                else
+                  expandedLiftedPCs := expandedLiftedPCs.push pc'
+          let totalPairs := summaryArr.size * expandedBasis.size
+          log s!"    [template-exp] expanded SemClosed: trivial={expandedTrivial}/{totalPairs} smt_candidates={expandedLiftedPCs.size}"
+          if expandedLiftedPCs.size > 0 then
+            let results ← smtCheckSemClosedBatch expandedLiftedPCs expandedBasis log
+            let violations := results.filter (· == false) |>.size
+            log s!"    [template-exp] RESULT: {violations} violations out of {expandedLiftedPCs.size} SMT checks"
+            if violations == 0 then
+              log s!"    [template-exp] *** ONE-ROUND EXPANSION SUFFICES — template basis gives SemClosed ***"
+            else
+              log s!"    [template-exp] *** Template basis INSUFFICIENT — need approach D (memory regions) ***"
+          else
+            log s!"    [template-exp] *** ALL TRIVIALLY CLOSED — template basis gives SemClosed ***"
       return some (k, summaryArr)
     frontier := newBranches
   return none
