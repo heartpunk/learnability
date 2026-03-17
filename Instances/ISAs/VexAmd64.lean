@@ -25,6 +25,7 @@ inductive Amd64Reg where
   | r9
   | r12
   | fs_base
+  | xmm0
   deriving DecidableEq, Repr
 
 instance : Hashable Amd64Reg where
@@ -38,12 +39,13 @@ instance : Hashable Amd64Reg where
     | .r9 => 15
     | .r12 => 16
     | .fs_base => 17
+    | .xmm0 => 18
 
 instance : EnumReg Amd64Reg where
-  allRegs := [.rax, .rcx, .rdx, .rsi, .rbp, .rsp, .rdi, .rip, .cc_op, .cc_dep1, .cc_dep2, .cc_ndep, .r11, .rbx, .r8, .r9, .r12, .fs_base]
+  allRegs := [.rax, .rcx, .rdx, .rsi, .rbp, .rsp, .rdi, .rip, .cc_op, .cc_dep1, .cc_dep2, .cc_ndep, .r11, .rbx, .r8, .r9, .r12, .fs_base, .xmm0]
 
 instance : Fintype Amd64Reg :=
-  ⟨{.rax, .rcx, .rdx, .rsi, .rbp, .rsp, .rdi, .rip, .cc_op, .cc_dep1, .cc_dep2, .cc_ndep, .r11, .rbx, .r8, .r9, .r12, .fs_base}, by
+  ⟨{.rax, .rcx, .rdx, .rsi, .rbp, .rsp, .rdi, .rip, .cc_op, .cc_dep1, .cc_dep2, .cc_ndep, .r11, .rbx, .r8, .r9, .r12, .fs_base, .xmm0}, by
     intro reg
     cases reg <;> simp⟩
 
@@ -79,6 +81,7 @@ def mkAmd64StateCC
       | .r9 => 0
       | .r12 => 0
       | .fs_base => 0
+      | .xmm0 => 0
   , mem := mem }
 
 def mkAmd64State (rax rcx rdx rsi rbp rsp rdi rip : UInt64) (mem : ByteMem) : Amd64ConcreteState :=
@@ -105,6 +108,7 @@ instance : Repr Amd64ConcreteState where
       , state.read .r9
       , state.read .r12
       , state.read .fs_base
+      , state.read .xmm0
       , state.mem
       )
 
