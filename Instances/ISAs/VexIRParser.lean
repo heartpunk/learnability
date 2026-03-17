@@ -347,6 +347,9 @@ def handleTmpAssign (tmpIdx : Nat) (rhs : String) (st : ParseState)
       let expr ← parseExpr rhs st
       return st.addStmt (.wrTmp tmpIdx expr)
     else if op == "amd64g_calculate_condition" then
+      -- Try to parse as condition. If the condition code is unsupported,
+      -- still add to condMap (lowering will produce .not .true = always false)
+      -- AND emit as expression via ite(cond, 1, 0) for use in value context.
       let cond ← parseCond op argsStr st
       return st.addCond tmpIdx cond
     else
