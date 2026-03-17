@@ -28,6 +28,7 @@ inductive SymExpr (Reg : Type) where
   | shr64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | mul64 : SymExpr Reg → SymExpr Reg → SymExpr Reg
   | mul32 : SymExpr Reg → SymExpr Reg → SymExpr Reg
+  | not64 : SymExpr Reg → SymExpr Reg
   | load : Width → SymMem Reg → SymExpr Reg → SymExpr Reg
   deriving DecidableEq, Repr
 
@@ -154,6 +155,7 @@ mutual
   | .shr64 lhs rhs => shiftRight64 (evalSymExpr state lhs) (evalSymExpr state rhs)
   | .mul64 lhs rhs => evalSymExpr state lhs * evalSymExpr state rhs
   | .mul32 lhs rhs => mask32 (evalSymExpr state lhs * evalSymExpr state rhs)
+  | .not64 x => ~~~(evalSymExpr state x)
   | .load width mem addr => ByteMem.read width (evalSymMem state mem) (evalSymExpr state addr)
 
 @[simp] def evalSymMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
@@ -200,6 +202,7 @@ def substSymExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .shr64 lhs rhs => .shr64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .mul64 lhs rhs => .mul64 (substSymExpr sub lhs) (substSymExpr sub rhs)
   | .mul32 lhs rhs => .mul32 (substSymExpr sub lhs) (substSymExpr sub rhs)
+  | .not64 x => .not64 (substSymExpr sub x)
   | .load width mem addr => .load width (substSymMem sub mem) (substSymExpr sub addr)
 
 def substSymMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
@@ -307,6 +310,8 @@ theorem substSymExpr_id {Reg : Type} [DecidableEq Reg] [Fintype Reg] (expr : Sym
       simp [substSymExpr, substSymExpr_id]
   | mul32 lhs rhs =>
       simp [substSymExpr, substSymExpr_id]
+  | not64 x =>
+      simp [substSymExpr, substSymExpr_id]
   | load width mem addr =>
       simp [substSymExpr, substSymMem_id, substSymExpr_id]
 
@@ -367,6 +372,8 @@ theorem substSymExpr_compose {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       simp [substSymExpr, substSymExpr_compose]
   | mul32 lhs rhs =>
       simp [substSymExpr, substSymExpr_compose]
+  | not64 x =>
+      simp [substSymExpr, substSymExpr_compose]
   | load width mem addr =>
       simp [substSymExpr, substSymMem_compose, substSymExpr_compose]
 
@@ -417,6 +424,8 @@ theorem evalSymExpr_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | mul64 lhs rhs =>
       simp [substSymExpr, evalSymExpr_subst]
   | mul32 lhs rhs =>
+      simp [substSymExpr, evalSymExpr_subst]
+  | not64 x =>
       simp [substSymExpr, evalSymExpr_subst]
   | load width mem addr =>
       simp [substSymExpr, evalSymMem_subst, evalSymExpr_subst]
@@ -503,6 +512,7 @@ def hashSymExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → UInt64
   | .shr64 l r => mixHash 15 (mixHash (hashSymExpr l) (hashSymExpr r))
   | .mul64 l r => mixHash 42 (mixHash (hashSymExpr l) (hashSymExpr r))
   | .mul32 l r => mixHash 43 (mixHash (hashSymExpr l) (hashSymExpr r))
+  | .not64 x => mixHash 44 (hashSymExpr x)
   | .load w m a => mixHash 16 (mixHash (hash w.byteCount) (mixHash (hashSymMem m) (hashSymExpr a)))
 
 def hashSymMem {Reg : Type} [Hashable Reg] : SymMem Reg → UInt64

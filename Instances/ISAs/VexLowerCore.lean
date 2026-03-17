@@ -66,6 +66,7 @@ def lowerExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .shr64 lhs rhs => .shr64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .mul64 lhs rhs => .mul64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .mul32 lhs rhs => .mul32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .not64 x => .not64 (lowerExpr sub temps x)
   | .load width addr => .load width sub.mem (lowerExpr sub temps addr)
 
 def lowerCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]
