@@ -66,6 +66,7 @@ inductive TemplateExpr (Reg : Type) where
   | mul64 : TemplateExpr Reg → TemplateExpr Reg → TemplateExpr Reg
   | mul32 : TemplateExpr Reg → TemplateExpr Reg → TemplateExpr Reg
   | not64 : TemplateExpr Reg → TemplateExpr Reg
+  | not32 : TemplateExpr Reg → TemplateExpr Reg
   | load : Width → TemplateMem Reg → TemplateExpr Reg → TemplateExpr Reg
 
 /-- A template memory: like SymMem but expressions may have holes.
@@ -106,6 +107,7 @@ def embedExpr {Reg : Type} : SymExpr Reg → TemplateExpr Reg
   | .sext8to32 x => .sext8to32 (embedExpr x)
   | .sext32to64 x => .sext32to64 (embedExpr x)
   | .not64 x => .not64 (embedExpr x)
+  | .not32 x => .not32 (embedExpr x)
   | .sub32 a b => .sub32 (embedExpr a) (embedExpr b)
   | .and32 a b => .and32 (embedExpr a) (embedExpr b)
   | .or32 a b => .or32 (embedExpr a) (embedExpr b)
@@ -275,7 +277,7 @@ mutual
 def TemplateExpr.holeCount {Reg : Type} : TemplateExpr Reg → Nat
   | .hole _ => 1
   | .const _ | .reg _ => 0
-  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x | .not64 x => x.holeCount
+  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x | .not64 x | .not32 x => x.holeCount
   | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .add64 a b | .sub64 a b
   | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b =>
     a.holeCount + b.holeCount
@@ -311,6 +313,7 @@ def instantiateExpr {Reg : Type} (val : HoleVal Reg) : TemplateExpr Reg → SymE
   | .sext8to32 x => .sext8to32 (instantiateExpr val x)
   | .sext32to64 x => .sext32to64 (instantiateExpr val x)
   | .not64 x => .not64 (instantiateExpr val x)
+  | .not32 x => .not32 (instantiateExpr val x)
   | .sub32 a b => .sub32 (instantiateExpr val a) (instantiateExpr val b)
   | .and32 a b => .and32 (instantiateExpr val a) (instantiateExpr val b)
   | .or32 a b => .or32 (instantiateExpr val a) (instantiateExpr val b)
@@ -358,6 +361,7 @@ theorem instantiateExpr_embedExpr {Reg : Type} (val : HoleVal Reg) (e : SymExpr 
   | .sext8to32 x => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val x]
   | .sext32to64 x => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val x]
   | .not64 x => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val x]
+  | .not32 x => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val x]
   | .sub32 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
   | .and32 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]  | .shl32 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
   | .or32 a b => simp [embedExpr, instantiateExpr, instantiateExpr_embedExpr val a, instantiateExpr_embedExpr val b]
@@ -467,7 +471,7 @@ mutual
 def TemplateExpr.holesBelow {Reg : Type} (n : Nat) : TemplateExpr Reg → Prop
   | .hole h => h < n
   | .const _ | .reg _ => True
-  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x | .not64 x => x.holesBelow n
+  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x | .not64 x | .not32 x => x.holesBelow n
   | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .add64 a b | .sub64 a b
   | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b =>
     a.holesBelow n ∧ b.holesBelow n
@@ -495,6 +499,7 @@ theorem embedExpr_holesBelow {Reg : Type} (e : SymExpr Reg) (n : Nat) :
   | .sext8to32 x => exact embedExpr_holesBelow x n
   | .sext32to64 x => exact embedExpr_holesBelow x n
   | .not64 x => exact embedExpr_holesBelow x n
+  | .not32 x => exact embedExpr_holesBelow x n
   | .sub32 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
   | .and32 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩  | .shl32 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
   | .or32 a b => exact ⟨embedExpr_holesBelow a n, embedExpr_holesBelow b n⟩
@@ -548,6 +553,8 @@ theorem instantiateExpr_val_agree {Reg : Type} {n : Nat}
   | .sext32to64 x =>
     simp [instantiateExpr]; exact instantiateExpr_val_agree x h_below h_agree
   | .not64 x =>
+    simp [instantiateExpr]; exact instantiateExpr_val_agree x h_below h_agree
+  | .not32 x =>
     simp [instantiateExpr]; exact instantiateExpr_val_agree x h_below h_agree
   | .sub32 a b =>
     simp [instantiateExpr]
@@ -803,7 +810,7 @@ theorem TemplateExpr.holesBelow_mono {Reg : Type} {n m : Nat}
   match t with
   | .hole h' => exact Nat.lt_of_lt_of_le h h_le
   | .const _ | .reg _ => trivial
-  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x | .not64 x =>
+  | .low32 x | .uext32 x | .sext8to32 x | .sext32to64 x | .not64 x | .not32 x =>
     exact TemplateExpr.holesBelow_mono x h h_le
   | .sub32 a b | .shl32 a b | .and32 a b | .or32 a b | .xor32 a b | .add64 a b | .sub64 a b
   | .xor64 a b | .and64 a b | .or64 a b | .shl64 a b | .shr64 a b | .mul64 a b | .mul32 a b =>
@@ -1322,6 +1329,7 @@ def substTemplateExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .sext8to32 x => .sext8to32 (substTemplateExpr σ x)
   | .sext32to64 x => .sext32to64 (substTemplateExpr σ x)
   | .not64 x => .not64 (substTemplateExpr σ x)
+  | .not32 x => .not32 (substTemplateExpr σ x)
   | .sub32 a b => .sub32 (substTemplateExpr σ a) (substTemplateExpr σ b)
   | .and32 a b => .and32 (substTemplateExpr σ a) (substTemplateExpr σ b)
   | .or32 a b => .or32 (substTemplateExpr σ a) (substTemplateExpr σ b)
@@ -1386,6 +1394,7 @@ theorem embedExpr_substSymExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .sext8to32 x => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ x]
   | .sext32to64 x => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ x]
   | .not64 x => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ x]
+  | .not32 x => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ x]
   | .sub32 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
   | .and32 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]  | .shl32 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
   | .or32 a b => simp [substSymExpr, embedExpr, substTemplateExpr, embedExpr_substSymExpr σ a, embedExpr_substSymExpr σ b]
@@ -1430,6 +1439,7 @@ theorem substTemplateExpr_holesBelow {Reg : Type} [DecidableEq Reg] [Fintype Reg
   | .sext8to32 x => exact substTemplateExpr_holesBelow σ x n h
   | .sext32to64 x => exact substTemplateExpr_holesBelow σ x n h
   | .not64 x => exact substTemplateExpr_holesBelow σ x n h
+  | .not32 x => exact substTemplateExpr_holesBelow σ x n h
   | .sub32 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
   | .and32 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩  | .shl32 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
   | .or32 a b => exact ⟨substTemplateExpr_holesBelow σ a n h.1, substTemplateExpr_holesBelow σ b n h.2⟩
@@ -1494,6 +1504,8 @@ theorem substSymExpr_instantiateExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg
   | .sext32to64 x =>
     simp [instantiateExpr, substSymExpr, substTemplateExpr, substSymExpr_instantiateExpr σ v x]
   | .not64 x =>
+    simp [instantiateExpr, substSymExpr, substTemplateExpr, substSymExpr_instantiateExpr σ v x]
+  | .not32 x =>
     simp [instantiateExpr, substSymExpr, substTemplateExpr, substSymExpr_instantiateExpr σ v x]
   | .sub32 a b =>
     simp [instantiateExpr, substSymExpr, substTemplateExpr,

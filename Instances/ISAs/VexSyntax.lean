@@ -211,6 +211,7 @@ inductive Expr (Reg : Type) where
   | mul64 : Expr Reg → Expr Reg → Expr Reg
   | mul32 : Expr Reg → Expr Reg → Expr Reg
   | not64 : Expr Reg → Expr Reg
+  | not32 : Expr Reg → Expr Reg
   /--
   Read `width` bits from memory in little-endian order at the computed address, then zero-extend
   the result to `UInt64`. Missing bytes default to `0` because `ByteMem.readByte` zero-fills
