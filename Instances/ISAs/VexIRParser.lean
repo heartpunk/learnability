@@ -188,6 +188,7 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
         | "8Uto64",  [a] => parseExpr a st fuel
         | "16Uto32", [a] => parseExpr a st fuel
         | "16Uto64", [a] => parseExpr a st fuel
+        | "1Uto8",   [a] => parseExpr a st fuel
         | "1Uto64",  [a] => parseExpr a st fuel
         | "64to1",   [a] => parseExpr a st fuel
         | "1Uto32",  [a] => parseExpr a st fuel
@@ -262,7 +263,7 @@ private def isCondOp (op : String) : Bool :=
           "CmpLT32S", "CmpLE32S"] : List String)
 
 private def isCondPropOp (op : String) : Bool :=
-  op ∈ (["1Uto64", "64to1", "1Uto32", "32to1"] : List String)
+  op ∈ (["1Uto8", "1Uto64", "64to1", "1Uto32", "32to1"] : List String)
 
 /-! ## Statement processing -/
 
