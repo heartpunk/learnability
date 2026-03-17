@@ -56,6 +56,7 @@ def resolveReg (s : String) : Except String Amd64Reg :=
   | "cc_dep1"                            => .ok .cc_dep1
   | "cc_dep2"                            => .ok .cc_dep2
   | "cc_ndep"                            => .ok .cc_ndep
+  | "r11" | "r11d" | "r11w" | "r11b"    => .ok .r11
   | r => .error s!"unknown register: {r}"
 
 def typeToWidth (ty : String) : Except String Width :=
