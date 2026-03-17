@@ -145,6 +145,10 @@ private theorem lowerExpr_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       simp [evalExpr, lowerExpr, ih]
   | not32 x ih =>
       simp [evalExpr, lowerExpr, ih, mask32]
+  | sar64 lhs rhs ihL ihR =>
+      simp [evalExpr, lowerExpr, ihL, ihR, signedShiftRight64]
+  | sar32 lhs rhs ihL ihR =>
+      simp [evalExpr, lowerExpr, ihL, ihR, signedShiftRight32]
   | load width addr ih =>
       subst state
       simpa [evalExpr, lowerExpr] using

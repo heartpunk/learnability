@@ -77,6 +77,31 @@ to the full 64-bit `UInt64` result.
 @[simp] def shiftRight64 (value amount : UInt64) : UInt64 :=
   UInt64.shiftRight value (maskShift64 amount)
 
+/-- Signed arithmetic right shift on 64-bit value.
+    Sign bit is replicated into vacated positions. -/
+@[simp] def signedShiftRight64 (value amount : UInt64) : UInt64 :=
+  let n := (maskShift64 amount).toNat
+  let signBit := value.toNat / (2 ^ 63)
+  let shifted := value.toNat / (2 ^ n)
+  if signBit == 1 then
+    -- Fill top n bits with 1s
+    let mask := (2 ^ 64 - 1) - (2 ^ (64 - n) - 1)
+    UInt64.ofNat (shifted ||| mask)
+  else
+    UInt64.ofNat shifted
+
+/-- Signed arithmetic right shift on 32-bit value, zero-extended to 64. -/
+@[simp] def signedShiftRight32 (value amount : UInt64) : UInt64 :=
+  let v32 := value.toNat % (2 ^ 32)
+  let n := (amount.toNat % 32)
+  let signBit := v32 / (2 ^ 31)
+  let shifted := v32 / (2 ^ n)
+  if signBit == 1 then
+    let mask := (2 ^ 32 - 1) - (2 ^ (32 - n) - 1)
+    UInt64.ofNat ((shifted ||| mask) % (2 ^ 32))
+  else
+    UInt64.ofNat shifted
+
 abbrev ByteCell := UInt64 × UInt8
 abbrev ByteMem := List ByteCell
 
@@ -212,6 +237,8 @@ inductive Expr (Reg : Type) where
   | mul32 : Expr Reg → Expr Reg → Expr Reg
   | not64 : Expr Reg → Expr Reg
   | not32 : Expr Reg → Expr Reg
+  | sar64 : Expr Reg → Expr Reg → Expr Reg
+  | sar32 : Expr Reg → Expr Reg → Expr Reg
   /--
   Read `width` bits from memory in little-endian order at the computed address, then zero-extend
   the result to `UInt64`. Missing bytes default to `0` because `ByteMem.readByte` zero-fills
