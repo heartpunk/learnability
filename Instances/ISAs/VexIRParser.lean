@@ -257,6 +257,9 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
     let l ← parseExpr a st; let r ← parseExpr b st; .ok (.lt64 l r)
   | "CmpLE64U", [a, b] => do
     let l ← parseExpr a st; let r ← parseExpr b st; .ok (.le64 l r)
+  | "CmpEQ8",   [a, b] => do
+    let l ← parseExpr a st; let r ← parseExpr b st
+    .ok (.eq64 (.and64 l (.const 0xFF)) (.and64 r (.const 0xFF)))
   | "CmpEQ32",  [a, b] => do
     let l ← parseExpr a st; let r ← parseExpr b st
     .ok (.eq64 (.zext64 (.narrow32 l)) (.zext64 (.narrow32 r)))
@@ -299,7 +302,7 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
 
 private def isCondOp (op : String) : Bool :=
   op ∈ (["CmpEQ64", "CmpLT64U", "CmpLE64U", "CmpNE64", "CmpLE64S",
-          "CmpEQ32", "CmpLT32U", "CmpLE32U", "CmpNE32",
+          "CmpEQ8", "CmpEQ32", "CmpLT32U", "CmpLE32U", "CmpNE32",
           "CmpLT32S", "CmpLE32S"] : List String)
 
 private def isCondPropOp (op : String) : Bool :=
