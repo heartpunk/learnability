@@ -37,7 +37,7 @@ _funcs_cjson := "parse_value,parse_array,parse_object,parse_string,parse_number,
 _funcs_parson := "parse_value,parse_array_value,parse_object_value,parse_string_value,parse_number_value,parse_boolean_value,parse_null_value,process_string,parse_utf16,parse_utf16_hex,skip_quotes,json_validate"
 _funcs_lisp := "lex,parse,parse_sexp,eat_tok,peek_tok"
 _funcs_calc := "parse_expr,parse_expression,parse_mult,parse_op,parse_primary,parse_sum,opp_parse_expression,rdp_parse_expression"
-_funcs_simplearithmeticparser := ""
+_funcs_simplearithmeticparser := "_ZN6Parser16parse_expressionEv,_ZN6Parser10parse_termEv,_ZN6Parser12parse_factorEv,_ZN6Parser13parse_integerEv,_ZN6Parser15skip_whitespaceEv,_ZN6Parser5parseEv"
 _funcs_cgi_decode := "cgi_decode"
 _funcs_mjs := ""
 
