@@ -2126,6 +2126,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   let mut convRepSynSigs : Array (List Bool)           := #[computePCSignature closure initBranch.pc]
   let mut convRepSemSigs : Array (Option (Array Bool)) := #[none]
   -- Build initial frontier: skip + structurally-unique simplified seeds.
+  let mut subPool : SubPool Reg := {}
   let mut frontierSet : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {initBranch}
   let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
   for b in initialFrontier do
@@ -2133,17 +2134,19 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     | none => pure ()
     | some sb =>
       let zb := zeroNonProjected closedRegs ip_reg sb
-      unless frontierSet.contains zb do
-        frontierSet := frontierSet.insert zb
-        convRepPCs     := convRepPCs.push zb.pc
-        convRepSynSigs := convRepSynSigs.push (computePCSignature closure zb.pc)
+      let (internedSub, subPool') := subPool.intern zb.sub
+      subPool := subPool'
+      let zb' : Branch (SymSub Reg) (SymPC Reg) := ⟨internedSub, zb.pc⟩
+      unless frontierSet.contains zb' do
+        frontierSet := frontierSet.insert zb'
+        convRepPCs     := convRepPCs.push zb'.pc
+        convRepSynSigs := convRepSynSigs.push (computePCSignature closure zb'.pc)
         convRepSemSigs := convRepSemSigs.push none
-        frontier := frontier.push zb
+        frontier := frontier.push zb'
   -- Seed initial frontier into current set
   for b in frontier do
     current := current.insert b
   log s!"    initial frontier: {frontier.size} branches (skip + {initialFrontier.size} call-expanded)"
-  let mut subPool : SubPool Reg := {}
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     -- Pure composition: no summary interception, body has no call branches
@@ -2306,6 +2309,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     if newBranches.size == 0 then
       -- Collect all branches as array for the summary
       let summaryArr := current.toArray
+      log s!"    sub-pool: {subPool.pool.size} unique subs, {subPool.hits} hits, {subPool.misses} misses"
       unless diagnostics do return some (k, summaryArr)
       -- h_contains check: every body branch PC's conjuncts are in the closure.
       -- Note: h_contains is about branchingLoopModel (= original body block
