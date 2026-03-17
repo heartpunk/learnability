@@ -207,6 +207,8 @@ inductive Expr (Reg : Type) where
   `0x3F` before shifting.
   -/
   | shr64 : Expr Reg → Expr Reg → Expr Reg
+  /-- Multiply two 64-bit words with `UInt64` wraparound semantics. -/
+  | mul64 : Expr Reg → Expr Reg → Expr Reg
   /--
   Read `width` bits from memory in little-endian order at the computed address, then zero-extend
   the result to `UInt64`. Missing bytes default to `0` because `ByteMem.readByte` zero-fills
