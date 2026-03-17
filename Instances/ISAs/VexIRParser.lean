@@ -407,7 +407,7 @@ def parseStmtContent (content : String) (st : ParseState) : Except String ParseS
         | none   => .error s!"expected tmp guard, got: {guardStr}"
       let cond ← match st.lookupCond guardIdx with
         | some c => .ok c
-        | none   => .error s!"no condition tracked for t{guardIdx}"
+        | none   => .ok (.ne64 (.tmp guardIdx) (.const 0))  -- fallback: nonzero = true
       let target ← extractExitTarget afterParen
       return st.addStmt (.exit cond target)
   else if content.startsWith "PUT(" then
