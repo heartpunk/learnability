@@ -2039,7 +2039,8 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     (maxIter : Nat) (log : String → IO Unit)
     (smtCache : IO.Ref SMTCache)
     (initialFrontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[])
-    (addrClassify : Option (AddrClassifier Reg) := none) :
+    (addrClassify : Option (AddrClassifier Reg) := none)
+    (maxBranches : Nat := 10000) :
     IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)))) := do
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
@@ -2142,6 +2143,10 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       else
         current := current.insert b  -- ALL structurally distinct branches kept for summary
         semCands := semCands.push b
+    -- Branch cap: OOM safety valve
+    if current.size > maxBranches then
+      log s!"    BRANCH CAP: {current.size} > {maxBranches}, stopping early at K={k}"
+      return some (k, current.toArray)
     -- Phase 2: PC-signature convergence (syntactic fast-path + SMT semantic).
     -- For each candidate, compute its signature: which closure PCs does it imply?
     -- Fast path: syntactic sig matches an existing rep sig → collapse.
@@ -2618,7 +2623,8 @@ def splitBodyAndExpandCalls {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Re
 def stratifiedFixpoint
     (functions : Array FunctionSpec)
     (regions : Array MemRegion := #[])
-    (log : String → IO Unit) :
+    (log : String → IO Unit)
+    (maxBranches : Nat := 10000) :
     IO (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))) := do
   let ip_reg := Amd64Reg.rip
   -- Build address classifier from ELF memory regions.
@@ -2650,7 +2656,7 @@ def stratifiedFixpoint
   -- Use computeFunctionStabilization directly (returns branch array as summary).
   -- Don't double-run with computeStabilizationHS — that keeps two copies of deeply-nested
   -- symbolic branches alive simultaneously, causing OOM.
-  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log smtCache (addrClassify := addrClassify) with
+  match ← computeFunctionStabilization ip_reg nextSymBody {} 200 log smtCache (addrClassify := addrClassify) (maxBranches := maxBranches) with
   | some (k, summaryArr) =>
     let t1 ← IO.monoMsNow
     summaries := summaries.insert functions[0]!.entryAddr summaryArr
@@ -2684,7 +2690,7 @@ def stratifiedFixpoint
       log s!"    {fname}: split body {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, {branchesAdded} branches, {droppedExp} dropped)"
       -- Step 2: Run stabilization on non-call body, seeding call results as initial frontier
       let oldSummary := summaries.getD func.entryAddr #[]
-      match ← computeFunctionStabilization ip_reg nonCallBody {} 30 log smtCache (initialFrontier := callResults) (addrClassify := addrClassify) with
+      match ← computeFunctionStabilization ip_reg nonCallBody {} 30 log smtCache (initialFrontier := callResults) (addrClassify := addrClassify) (maxBranches := maxBranches) with
       | some (k, newSummary) =>
         let t1 ← IO.monoMsNow
         if newSummary.size != oldSummary.size then
@@ -4332,9 +4338,10 @@ def buildFuncEntries (functions : Array FunctionSpec) : Std.HashMap UInt64 Strin
     When golden prods are provided, structural comparison is run against them. -/
 def runPipeline (functions : Array FunctionSpec) (regions : Array MemRegion := #[])
     (log : String → IO Unit)
-    (golden : Std.HashMap String (List (List String)) := goldenProds) : IO Unit := do
+    (golden : Std.HashMap String (List (List String)) := goldenProds)
+    (maxBranches : Nat := 10000) : IO Unit := do
   log "=== Stratified Dispatch Loop Stabilization ==="
-  let summaries ← stratifiedFixpoint functions regions log
+  let summaries ← stratifiedFixpoint functions regions log (maxBranches := maxBranches)
   let funcEntries := buildFuncEntries functions
   -- Parser detection
   let parserResult ← detectParser functions summaries log
@@ -4482,9 +4489,10 @@ def pipelineToJson (functions : Array FunctionSpec)
 
 /-- Run pipeline and output structured JSON to stdout. Log goes to file only. -/
 def runPipelineJSON (functions : Array FunctionSpec) (regions : Array MemRegion := #[])
-    (log : String → IO Unit) : IO Unit := do
+    (log : String → IO Unit)
+    (maxBranches : Nat := 10000) : IO Unit := do
   log "=== Stratified Dispatch Loop Stabilization (JSON mode) ==="
-  let summaries ← stratifiedFixpoint functions regions log
+  let summaries ← stratifiedFixpoint functions regions log (maxBranches := maxBranches)
   let parserResult ← detectParser functions summaries log
   let ps := match parserResult with
     | .ok ps => some ps
@@ -4546,6 +4554,7 @@ structure CLIConfig where
   entry : Option String := none
   logPath : System.FilePath := ".lake/stabilization.log"
   showHelp : Bool := false
+  maxBranches : Nat := 10000
   deriving Inhabited
 
 /-- Parse comma-separated hex addresses. -/
@@ -4573,6 +4582,8 @@ private def parseCLIArgs : List String → CLIConfig → CLIConfig
     parseCLIArgs rest { cfg with functionsSpec := some spec }
   | "--entry" :: name :: rest, cfg => parseCLIArgs rest { cfg with entry := some name }
   | "--log" :: path :: rest, cfg => parseCLIArgs rest { cfg with logPath := path }
+  | "--max-branches" :: n :: rest, cfg =>
+    parseCLIArgs rest { cfg with maxBranches := n.toNat! }
   | arg :: rest, cfg =>
     if arg.startsWith "--" then
       parseCLIArgs rest cfg  -- skip unknown flags
@@ -4599,6 +4610,7 @@ private def printUsage : IO Unit := do
   IO.eprintln "  --entry NAME|ADDR    Scope to functions reachable from entry point"
   IO.eprintln "  --functions ADDRS    Comma-separated hex entry addresses to analyze"
   IO.eprintln "  --log PATH           Log file path (default: .lake/stabilization.log)"
+  IO.eprintln "  --max-branches N     Branch count cap before early stop (default: 10000)"
   IO.eprintln "  --test               Run test suite (via dispatchLoopTest)"
   IO.eprintln "  --subject NAME       Run specific test subject (with --test)"
   IO.eprintln "  --help, -h           Show this help message"
@@ -4657,9 +4669,9 @@ def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
           | some spec => resolveFunctionList functions spec
           | none => functions
         if cfg.jsonOutput then
-          runPipelineJSON functions (log := log)
+          runPipelineJSON functions (log := log) (maxBranches := cfg.maxBranches)
         else
-          runPipeline functions (log := log)
+          runPipeline functions (log := log) (maxBranches := cfg.maxBranches)
     | none =>
       -- Single JSON: per-function format
       log s!"Loading functions from {jsonPath}..."
@@ -4683,6 +4695,6 @@ def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
           filtered
         | none => functions
       if cfg.jsonOutput then
-        runPipelineJSON functions regions log
+        runPipelineJSON functions regions log (maxBranches := cfg.maxBranches)
       else
-        runPipeline functions regions log
+        runPipeline functions regions log (maxBranches := cfg.maxBranches)
