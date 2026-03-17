@@ -186,6 +186,7 @@ inductive Expr (Reg : Type) where
   /-- Bitwise AND on the low 32 bits, zero-extended to 64-bit. -/
   | and32 : Expr Reg → Expr Reg → Expr Reg
   | or32 : Expr Reg → Expr Reg → Expr Reg
+  | xor32 : Expr Reg → Expr Reg → Expr Reg
   /-- Add two 64-bit words with `UInt64` wraparound semantics. -/
   | add64 : Expr Reg → Expr Reg → Expr Reg
   /-- Subtract two 64-bit words with `UInt64` wraparound semantics. -/
