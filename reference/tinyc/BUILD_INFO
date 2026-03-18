@@ -1,10 +1,4 @@
-<<<<<<< conflict 1 of 1
-+++++++ yxkvzmyx f455a21b (rebase destination)
-%%%%%%% diff from: oqqtmuzq 1c97f471 "Add justfile + stalagmite flake input + per-function VEX extraction" (parents of rebased revision)
-\\\\\\\        to: wqpvuzkx 74d9a5a3 "Fix flake: lean4-nix overlay for pinned v4.27.0, extract all 9 stalagmite subjects" (rebased revision)
- subject: tinyc
- stalagmite_rev: eadeecfd0845859e78d7390270a7bee31f57bc71
- sources: tiny_orig.c
--built: 2026-03-17T01:01:46Z
-+built: 2026-03-17T01:16:32Z
->>>>>>> conflict 1 of 1 ends
+subject: tinyc
+stalagmite_rev: eadeecfd0845859e78d7390270a7bee31f57bc71
+sources: tiny_orig.c
+built: 2026-03-17T01:16:32Z
