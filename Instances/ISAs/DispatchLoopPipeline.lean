@@ -94,7 +94,7 @@ def pipelineToJson (functions : Array FunctionSpec)
         match parseBlocksWithAddresses func.blocks with
         | .error _ => pure ()
         | .ok pairs =>
-          let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+          let bodyArr := flatBodyDenotArray ip_reg pairs
           gs := gs.push (extractNTGrammar func.name func.entryAddr bodyArr funcEntries
                           lexerName tokenNames)
     gs
@@ -145,7 +145,7 @@ def pipelineToJson (functions : Array FunctionSpec)
         match parseBlocksWithAddresses f.blocks with
         | .error _ => pure ()
         | .ok pairs =>
-          let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+          let bodyArr := flatBodyDenotArray ip_reg pairs
           let lts := extractLTS ip_reg bodyArr funcEntries
           let transJson := lts.transitions.map fun t =>
             Lean.Json.mkObj [

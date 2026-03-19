@@ -991,6 +991,23 @@ unsafe def finsetToArrayImpl {α : Type} (s : Finset α) : Array α :=
 def finsetToArray {α : Type} (s : Finset α) : Array α :=
   #[]
 
+/-- Array-based variant of flatBodyDenot — avoids Finset DecidableEq overhead
+    that causes hangs on blocks with large symbolic terms (e.g., 22-store chains).
+    Produces the same branches but without dedup (callers don't need it — downstream
+    dedup happens via HashSet in computeFunctionStabilization). -/
+def flatBodyDenotArray {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (ip_reg : Reg) (blocks : List (UInt64 × Block Reg)) :
+    Array (Branch (SymSub Reg) (SymPC Reg)) := Id.run do
+  let isa := vexSummaryISA Reg
+  let mut result : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  for (addr, block) in blocks do
+    let blockDenot := CompTree.denot isa (blockToCompTree block)
+    let guard : Branch (SymSub Reg) (SymPC Reg) :=
+      ⟨isa.id_sub, SymPC.eq (SymExpr.reg ip_reg) (SymExpr.const addr)⟩
+    for b in finsetToArray blockDenot do
+      result := result.push (guard.compose isa b)
+  return result
+
 /-! ## Parse blocks with addresses -/
 
 /-- Parse block strings into (address, block) pairs. -/

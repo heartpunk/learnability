@@ -725,8 +725,7 @@ def stratifiedFixpoint
       log s!"  PARSE ERROR for {func.name}: {e}"
       return {}
     | .ok pairs =>
-      let body := flatBodyDenot ip_reg pairs
-      let bodyArr := finsetToArray body
+      let bodyArr := flatBodyDenotArray ip_reg pairs
       funcBlocks := funcBlocks.push (func.name, bodyArr)
       log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
   -- Phase 1: Compute leaf function (next_sym) fixpoint — no summaries needed
@@ -977,8 +976,7 @@ def wtoFixpoint
       log s!"  PARSE ERROR for {func.name}: {e}"
       return {}
     | .ok pairs =>
-      let body := flatBodyDenot ip_reg pairs
-      let bodyArr := finsetToArray body
+      let bodyArr := flatBodyDenotArray ip_reg pairs
       funcBlocks := funcBlocks.insert func.entryAddr (func.name, bodyArr)
       log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
   -- Initialize all summaries as empty

@@ -406,7 +406,7 @@ def printGrammarProductions (log : String → IO Unit)
     match parseBlocksWithAddresses func.blocks with
     | .error e => log s!"  Parse error for {func.name}: {e}"
     | .ok pairs =>
-      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      let bodyArr := flatBodyDenotArray ip_reg pairs
       printFunctionProductions log func.name func.entryAddr bodyArr funcEntries
 
 /-- Extract CFG info from body branches: count next_sym calls and collect called NT names. -/
@@ -901,7 +901,7 @@ def buildCallGraph
     match parseBlocksWithAddresses func.blocks with
     | .error _ => pure ()
     | .ok pairs =>
-      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      let bodyArr := flatBodyDenotArray ip_reg pairs
       for b in bodyArr do
         match extractRipTarget ip_reg b.sub with
         | some tgt =>
@@ -934,7 +934,7 @@ def findProducers
     | .error _ =>
       log s!"  {func.name}: PARSE ERROR"
     | .ok pairs =>
-      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      let bodyArr := flatBodyDenotArray ip_reg pairs
       -- Build block set to identify return transitions
       let mut funcBlocks : Std.HashSet UInt64 := {}
       for b in bodyArr do
@@ -1190,7 +1190,7 @@ def deriveTokenNames
     match parseBlocksWithAddresses lexerSpec.blocks with
     | .error _ => pure ()
     | .ok pairs =>
-      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      let bodyArr := flatBodyDenotArray ip_reg pairs
       let mut lexerBlocks : Std.HashSet UInt64 := {}
       for b in bodyArr do
         match extractRipGuard ip_reg b.pc with
@@ -1667,7 +1667,7 @@ def printLTSGrammar (log : String → IO Unit)
     match parseBlocksWithAddresses func.blocks with
     | .error e => log s!"  Parse error for {func.name}: {e}"
     | .ok pairs =>
-      let bodyArr := finsetToArray (flatBodyDenot ip_reg pairs)
+      let bodyArr := flatBodyDenotArray ip_reg pairs
       grammars := grammars.push (extractNTGrammar func.name func.entryAddr bodyArr funcEntries lexerName tokenNames)
   -- Print raw extracted grammar
   log "\n=== EBNF Grammar (LTS-based extraction) ==="
