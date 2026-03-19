@@ -201,11 +201,15 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
     -- Pure composition: no summary interception, body has no call branches
+    let t_compose ← IO.monoMsNow
     let (composedTagged, pairsComposed, skipped, dropped) :=
       composeBranchArrayIndexed ip_reg bodyArr frontier
+    let t_composed ← IO.monoMsNow
     -- Strip body indices (not used in this function)
     let composed := composedTagged.map (·.1)
+    log s!"      [trace] compose: {t_composed - t_compose}ms, {composed.size} raw branches"
     -- Simplify: load-after-store + constant folding + zero non-projected
+    let t_simplify ← IO.monoMsNow
     let mut simplified : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut droppedSimplify : Nat := 0
     for b in composed do
@@ -216,10 +220,13 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
         let (internedSub, subPool') := subPool.intern zb.sub
         subPool := subPool'
         simplified := simplified.push ⟨internedSub, zb.pc⟩
+    let t_simplified ← IO.monoMsNow
+    log s!"      [trace] simplify: {t_simplified - t_simplify}ms, {simplified.size} survived, {droppedSimplify} dropped"
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
     -- Phase 1: structural dedup — collect all branches not already in current
     -- Hash each branch ONCE upfront, then use cached hash for set operations
+    let t_dedup ← IO.monoMsNow
     let mut semCands : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     for b in simplified do
       let h := hash b
@@ -230,6 +237,8 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
         currentByHash := currentByHash.insert h (bucket.push b)
         current := current.insert b
         semCands := semCands.push b
+    let t_deduped ← IO.monoMsNow
+    log s!"      [trace] dedup: {t_deduped - t_dedup}ms, {dupes} dupes, {semCands.size} new candidates"
     -- Branch cap: OOM safety valve
     if current.size > maxBranches then
       log s!"    BRANCH CAP: {current.size} > {maxBranches}, stopping early at K={k}"
@@ -728,14 +737,17 @@ def stratifiedFixpoint
   -- Parse all function blocks into raw body arrays
   let mut funcBlocks : Array (String × Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := #[]
   for func in functions do
+    let t_parse ← IO.monoMsNow
     match parseBlocksWithAddresses func.blocks with
     | .error e =>
       log s!"  PARSE ERROR for {func.name}: {e}"
-      return {}
+      funcBlocks := funcBlocks.push (func.name, #[])
     | .ok pairs =>
+      let t_parsed ← IO.monoMsNow
       let bodyArr := flatBodyDenotArray ip_reg pairs
+      let t_body ← IO.monoMsNow
       funcBlocks := funcBlocks.push (func.name, bodyArr)
-      log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
+      log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches ({t_parsed - t_parse}ms parse, {t_body - t_parsed}ms body)"
   -- Phase 1: Compute leaf function (next_sym) fixpoint — no summaries needed
   let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
   -- Green-style SMT query cache: shared across all function stabilizations
@@ -979,13 +991,17 @@ def wtoFixpoint
   -- Parse all function blocks into raw body arrays
   let mut funcBlocks : Std.HashMap UInt64 (String × Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
   for func in functions do
+    let t_parse ← IO.monoMsNow
     match parseBlocksWithAddresses func.blocks with
     | .error e =>
       log s!"  PARSE ERROR for {func.name}: {e}"
-      return {}
+      funcBlocks := funcBlocks.insert func.entryAddr (func.name, #[])
     | .ok pairs =>
+      let t_parsed ← IO.monoMsNow
       let bodyArr := flatBodyDenotArray ip_reg pairs
+      let t_body ← IO.monoMsNow
       funcBlocks := funcBlocks.insert func.entryAddr (func.name, bodyArr)
+      log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches ({t_parsed - t_parse}ms parse, {t_body - t_parsed}ms body)"
       log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
   -- Initialize all summaries as empty
   let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
