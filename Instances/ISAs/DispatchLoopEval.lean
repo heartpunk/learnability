@@ -4917,6 +4917,82 @@ def runPipelineJSON (functions : Array FunctionSpec) (regions : Array MemRegion 
   let json := pipelineToJson functions ps
   IO.println json.pretty
 
+/-- Auto-detect WTO root: function with no incoming edges in the call graph.
+    Falls back to a function named "main", then to the first function. -/
+def autoDetectRoot (functions : Array FunctionSpec) (callGraph : Array (UInt64 × UInt64))
+    (log : String → IO Unit) : IO UInt64 := do
+  -- Try: function named "main"
+  match functions.find? (·.name == "main") with
+  | some f =>
+    log s!"  auto-root: found 'main' @ {hexAddr f.entryAddr}"
+    return f.entryAddr
+  | none => pure ()
+  -- Try: function not called by any other function
+  let calledSet : Std.HashSet UInt64 := callGraph.foldl (fun s (_, tgt) => s.insert tgt) {}
+  let roots := functions.filter fun f => !calledSet.contains f.entryAddr
+  if roots.size == 1 then
+    log s!"  auto-root: unique uncalled function '{roots[0]!.name}' @ {hexAddr roots[0]!.entryAddr}"
+    return roots[0]!.entryAddr
+  else if roots.size > 1 then
+    log s!"  auto-root: {roots.size} uncalled functions, picking '{roots[0]!.name}'"
+    return roots[0]!.entryAddr
+  -- Fallback: first function
+  log s!"  auto-root: all functions called, using first: '{functions[0]!.name}'"
+  return functions[0]!.entryAddr
+
+/-- Run pipeline using WTO-driven fixpoint: call graph → WTO → wtoFixpoint → detect → extract. -/
+def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion := #[])
+    (log : String → IO Unit)
+    (golden : Std.HashMap String (List (List String)) := goldenProds)
+    (maxBranches : Nat := 10000)
+    (diagnostics : Bool := false)
+    (maxIter : Nat := 200)
+    (entryAddr : Option UInt64 := none) : IO Unit := do
+  log "=== WTO Dispatch Loop Stabilization ==="
+  -- Build call graph and compute WTO
+  let callGraph ← buildCallGraph functions log
+  let root ← match entryAddr with
+    | some addr => pure addr
+    | none => autoDetectRoot functions callGraph log
+  let nodes := functions.map (·.entryAddr)
+  let wto := computeWTO nodes callGraph root
+  let nameOf (addr : UInt64) : String :=
+    match functions.find? (·.entryAddr == addr) with
+    | some f => f.name
+    | none => hexAddr addr
+  log s!"  WTO: {ppWTO wto nameOf}"
+  -- Run WTO fixpoint
+  let summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
+  let funcEntries := buildFuncEntries functions
+  -- Parser detection + grammar extraction (same as legacy pipeline)
+  let parserResult ← detectParser functions summaries log
+  let ps := match parserResult with
+    | .ok ps => some ps
+    | .error _ => none
+  printLTSGrammar log functions funcEntries summaries ps golden
+
+/-- Run WTO pipeline with JSON output. -/
+def runPipelineWTOJSON (functions : Array FunctionSpec) (regions : Array MemRegion := #[])
+    (log : String → IO Unit)
+    (maxBranches : Nat := 10000)
+    (diagnostics : Bool := false)
+    (maxIter : Nat := 200)
+    (entryAddr : Option UInt64 := none) : IO Unit := do
+  log "=== WTO Dispatch Loop Stabilization (JSON mode) ==="
+  let callGraph ← buildCallGraph functions log
+  let root ← match entryAddr with
+    | some addr => pure addr
+    | none => autoDetectRoot functions callGraph log
+  let nodes := functions.map (·.entryAddr)
+  let wto := computeWTO nodes callGraph root
+  let summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
+  let parserResult ← detectParser functions summaries log
+  let ps := match parserResult with
+    | .ok ps => some ps
+    | .error _ => none
+  let json := pipelineToJson functions ps
+  IO.println json.pretty
+
 /-! ## Entry-point scoping -/
 
 /-- BFS reachability from an entry address in a call graph. Pure computation. -/
@@ -4974,6 +5050,7 @@ structure CLIConfig where
   diagnostics : Bool := false
   maxIter : Nat := 200
   maxBranches : Nat := 10000
+  legacy : Bool := false  -- use old stratifiedFixpoint instead of WTO
   deriving Inhabited
 
 /-- Parse comma-separated hex addresses. -/
@@ -4998,6 +5075,7 @@ private def parseCLIArgs : List String → CLIConfig → CLIConfig
   | "-h" :: rest, cfg => parseCLIArgs rest { cfg with showHelp := true }
   | "--json" :: rest, cfg => parseCLIArgs rest { cfg with jsonOutput := true }
   | "--diagnostics" :: rest, cfg => parseCLIArgs rest { cfg with diagnostics := true }
+  | "--legacy" :: rest, cfg => parseCLIArgs rest { cfg with legacy := true }
   | "--functions" :: spec :: rest, cfg =>
     parseCLIArgs rest { cfg with functionsSpec := some spec }
   | "--entry" :: name :: rest, cfg => parseCLIArgs rest { cfg with entry := some name }
@@ -5035,6 +5113,7 @@ private def printUsage : IO Unit := do
   IO.eprintln "  --diagnostics        Run h_contains, closedness, template, atom-closed checks"
   IO.eprintln "  --max-iter N         Maximum composition iterations (default: 200)"
   IO.eprintln "  --max-branches N     Branch count cap before early stop (default: 10000)"
+  IO.eprintln "  --legacy             Use legacy 2-phase stratifiedFixpoint instead of WTO"
   IO.eprintln "  --test               Run test suite (via dispatchLoopTest)"
   IO.eprintln "  --subject NAME       Run specific test subject (with --test)"
   IO.eprintln "  --help, -h           Show this help message"
@@ -5092,10 +5171,17 @@ def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
         let functions := match cfg.functionsSpec with
           | some spec => resolveFunctionList functions spec
           | none => functions
-        if cfg.jsonOutput then
-          runPipelineJSON functions (log := log) (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter)
+        let resolvedEntry := cfg.entry.bind (resolveEntry functions)
+        if cfg.legacy then
+          if cfg.jsonOutput then
+            runPipelineJSON functions (log := log) (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter)
+          else
+            runPipeline functions (log := log) (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter)
         else
-          runPipeline functions (log := log) (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter)
+          if cfg.jsonOutput then
+            runPipelineWTOJSON functions (log := log) (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry)
+          else
+            runPipelineWTO functions (log := log) (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry)
     | none =>
       -- Single JSON: per-function format
       log s!"Loading functions from {jsonPath}..."
@@ -5118,7 +5204,14 @@ def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
           let filtered := resolveFunctionList functions spec
           filtered
         | none => functions
-      if cfg.jsonOutput then
-        runPipelineJSON functions regions log (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter)
+      let resolvedEntry := cfg.entry.bind (resolveEntry functions)
+      if cfg.legacy then
+        if cfg.jsonOutput then
+          runPipelineJSON functions regions log (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter)
+        else
+          runPipeline functions regions log (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter)
       else
-        runPipeline functions regions log (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter)
+        if cfg.jsonOutput then
+          runPipelineWTOJSON functions regions log (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry)
+        else
+          runPipelineWTO functions regions log (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry)
