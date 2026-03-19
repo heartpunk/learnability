@@ -3378,6 +3378,71 @@ def goldenProds : Std.HashMap String (List (List String)) :=
       ]
     |>.insert "statements" [["statement"], ["statement", "statements"]]
 
+/-- Strip angle brackets from golden grammar NT names: "<expr>" → "expr". -/
+private def stripAngleBrackets (s : String) : String :=
+  if s.startsWith "<" && s.endsWith ">" then
+    (s.drop 1 |>.dropEnd 1).toString
+  else s
+
+/-- Load golden grammar from a stalagmite-format JSON file.
+    Format: {"<nt>": [["sym1", "sym2"], ...], ...}
+    Strips angle brackets from NT names and terminal symbols. -/
+def loadGoldenGrammar (path : System.FilePath) : IO (Std.HashMap String (List (List String))) := do
+  let contents ← IO.FS.readFile path
+  match Lean.Json.parse contents with
+  | .error e => IO.eprintln s!"Golden grammar parse error: {e}"; return {}
+  | .ok json =>
+    match json with
+    | .obj kvs =>
+      let mut result : Std.HashMap String (List (List String)) := {}
+      for (key, val) in kvs.toArray do
+        let ntName := stripAngleBrackets key
+        match val with
+        | .arr prods =>
+          let mut prodList : List (List String) := []
+          for prod in prods.reverse do
+            match prod with
+            | .arr syms =>
+              let symList := syms.toList.filterMap fun s => match s with
+                | .str sym => some (stripAngleBrackets sym)
+                | _ => none
+              prodList := symList :: prodList
+            | _ => pure ()
+          result := result.insert ntName prodList
+        | _ => pure ()
+      return result
+    | _ => IO.eprintln s!"Golden grammar: expected JSON object"; return {}
+
+/-- Try to load golden grammar for a subject from the stalagmite data directory.
+    Looks for reference/../../../stalagmite/data/golden_grammars/golden_grammar_<subject>.json
+    relative to the input file, or an absolute fallback path. -/
+def loadGoldenForSubject (inputPath : System.FilePath) (log : String → IO Unit) :
+    IO (Std.HashMap String (List (List String))) := do
+  -- Extract subject name from path: reference/<subject>/blocks.json
+  let components := inputPath.toString.splitOn "/"
+  let subjectIdx := components.findIdx? (· == "reference")
+  match subjectIdx with
+  | some idx =>
+    if idx + 1 < components.length then
+      let subject := components[idx + 1]!
+      -- Try stalagmite path relative to project root
+      let projectRoot := "/".intercalate (components.take idx)
+      let goldenPath := s!"{projectRoot}/../stalagmite/data/golden_grammars/golden_grammar_{subject}.json"
+      if ← System.FilePath.pathExists goldenPath then
+        log s!"  Loading golden grammar from {goldenPath}"
+        loadGoldenGrammar goldenPath
+      else
+        -- Try absolute fallback
+        let fallback := s!"/home/heartpunk/code/stalagmite/data/golden_grammars/golden_grammar_{subject}.json"
+        if ← System.FilePath.pathExists fallback then
+          log s!"  Loading golden grammar from {fallback}"
+          loadGoldenGrammar fallback
+        else
+          log s!"  No golden grammar found for {subject}"
+          return goldenProds  -- fall back to hardcoded tinyc
+    else return goldenProds
+  | none => return goldenProds
+
 /-- BFS to find all blocks reachable from entry, following:
     - internal transitions (tgt in blocks)
     - return continuations after external calls (retOpt if tgt not in blocks) -/
@@ -4947,7 +5012,8 @@ def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion :
     (maxBranches : Nat := 10000)
     (diagnostics : Bool := false)
     (maxIter : Nat := 200)
-    (entryAddr : Option UInt64 := none) : IO Unit := do
+    (entryAddr : Option UInt64 := none)
+    (inputPath : Option System.FilePath := none) : IO Unit := do
   log "=== WTO Dispatch Loop Stabilization ==="
   -- Dedup functions by entry address: .localalias and other linker aliases
   -- produce multiple FunctionSpecs at the same address; keep first occurrence only.
@@ -4980,7 +5046,11 @@ def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion :
   let ps := match parserResult with
     | .ok ps => some ps
     | .error _ => none
-  printLTSGrammar log functions funcEntries summaries ps golden
+  -- Load subject-specific golden grammar if available
+  let goldenGrammar ← match inputPath with
+    | some path => loadGoldenForSubject path log
+    | none => pure golden
+  printLTSGrammar log functions funcEntries summaries ps goldenGrammar
 
 /-- Run WTO pipeline with JSON output. -/
 def runPipelineWTOJSON (functions : Array FunctionSpec) (regions : Array MemRegion := #[])
@@ -5192,7 +5262,7 @@ def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
           if cfg.jsonOutput then
             runPipelineWTOJSON functions (log := log) (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry)
           else
-            runPipelineWTO functions (log := log) (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry)
+            runPipelineWTO functions (log := log) (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry) (inputPath := cfg.jsonPath)
     | none =>
       -- Single JSON: per-function format
       log s!"Loading functions from {jsonPath}..."
@@ -5225,4 +5295,4 @@ def dispatchLoopEvalMain (args : List String := []) : IO Unit := do
         if cfg.jsonOutput then
           runPipelineWTOJSON functions regions log (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry)
         else
-          runPipelineWTO functions regions log (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry)
+          runPipelineWTO functions regions log (maxBranches := cfg.maxBranches) (diagnostics := cfg.diagnostics) (maxIter := cfg.maxIter) (entryAddr := resolvedEntry) (inputPath := cfg.jsonPath)
