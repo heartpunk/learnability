@@ -85,11 +85,69 @@ The OPCODE is the guard constant. The EFFECT is the substitution delta.
    The actual constant values are in the PC guards but anonymized by the
    grammar extraction. Need to preserve them.
 
+## tinyc `c` — Compilation Rules (not just execution)
+
+The tree-walking compiler `c()` dispatches on AST node type (VAR=0, CST=1,
+ADD=2, SUB=3, LT=4, SET=5, IF1=6, IF2=7, WHILE=8, DO=9, EMPTY=10, SEQ=11,
+EXPR=12, PROG=13). 261 converged branches from 116 body branches.
+
+Grammar extraction showed the recursive tree structure:
+- `c -> tok7 c c` = binary op (compile left, compile right, emit op)
+- `c -> tok5` = leaf (emit single instruction)
+- `c -> tok4 c` = unary (compile child, emit)
+
+Through the AU lens, each branch captures a **compilation rule**:
+```
+compile(ADD(e1, e2)) = compile(e1) ++ compile(e2) ++ [IADD]
+compile(CST(n))      = [IPUSH, n]
+compile(VAR(x))      = [IFETCH, x]
+```
+
+The substitution for each branch contains what gets written to the bytecode
+array, how the code pointer advances, and which children get recursively
+compiled. This is the compiler's **translation scheme** — a denotational-ish
+mapping from AST to bytecode.
+
+## Staging Caveat (Davies-Pfenning / Flatt)
+
+The compiler `c` gives us compilation rules, NOT execution semantics.
+Per Davies-Pfenning's modal analysis of staging and Flatt's work on
+multi-stage evaluation: compilation is a staging boundary. The compiler
+evaluates AST structure at compile time (stage 0) to produce bytecode
+that executes at runtime (stage 1). Our symbolic summaries capture the
+stage-0 behavior (what bytecode gets emitted for each AST node type)
+but not the stage-1 behavior (what that bytecode does when executed).
+
+The stage-1 behavior is captured separately by `run`'s summaries.
+
+This means:
+- **`c` alone does NOT give us operational semantics** — it gives us the
+  compilation scheme (how AST maps to bytecode)
+- **`run` alone gives operational semantics** — but at the bytecode level,
+  not the source-language level
+- **`c` + `run` together** could give source-level semantics by composing
+  the compilation scheme with the bytecode semantics, but this composition
+  is itself a staging operation and may not be straightforward to automate
+
+For extracting source-level K rules (like `rule <k> if true then S1 else S2
+=> S1 ...</k>`), we'd need either:
+1. An AST-walking interpreter (not present in tinyc — it compiles then runs)
+2. Composition of `c`'s compilation rules with `run`'s execution rules
+3. A direct interpreter subject (like lisp's `run_lisp`)
+
+This is a fundamental limitation of the compiler+VM architecture, not of
+our extraction approach. An AST-walking interpreter like lisp's `run_lisp`
+would give source-level semantics directly.
+
 ## Conclusion
 
-The converged symbolic summaries already contain all data needed for
-operational semantics extraction. The gap is purely in the interpretation
-layer — reading substitution effects and formatting as K rules instead
-of grammar productions. No new symbolic execution, no new instrumentation,
-no heuristics. The co-refinement projection algorithm (already proven and
-implemented) discovers the right state components automatically.
+The converged symbolic summaries contain all data needed for operational
+semantics extraction at whatever level the implementation operates:
+- **Bytecode interpreter** (`run`): execution-level rules (opcode dispatch)
+- **Tree-walking compiler** (`c`): compilation-level rules (AST→bytecode)
+- **AST-walking interpreter** (lisp `run_lisp`): source-level rules (direct)
+
+The gap is purely in the interpretation layer. The co-refinement projection
+algorithm (already proven and implemented) discovers the right state
+components automatically. No heuristics needed — the formal framework
+guarantees convergence and soundness.
