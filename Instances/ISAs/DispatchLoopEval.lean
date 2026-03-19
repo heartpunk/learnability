@@ -4949,6 +4949,17 @@ def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion :
     (maxIter : Nat := 200)
     (entryAddr : Option UInt64 := none) : IO Unit := do
   log "=== WTO Dispatch Loop Stabilization ==="
+  -- Dedup functions by entry address: .localalias and other linker aliases
+  -- produce multiple FunctionSpecs at the same address; keep first occurrence only.
+  let mut seenAddrs : Std.HashSet UInt64 := {}
+  let mut dedupFuncs : Array FunctionSpec := #[]
+  for f in functions do
+    unless seenAddrs.contains f.entryAddr do
+      seenAddrs := seenAddrs.insert f.entryAddr
+      dedupFuncs := dedupFuncs.push f
+  if dedupFuncs.size < functions.size then
+    log s!"  dedup: {functions.size} → {dedupFuncs.size} functions (removed {functions.size - dedupFuncs.size} aliases)"
+  let functions := dedupFuncs
   -- Build call graph and compute WTO
   let callGraph ← buildCallGraph functions log
   let root ← match entryAddr with
