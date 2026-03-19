@@ -1,0 +1,4 @@
+subject: lua
+source: lua 5.4.7
+key: luaV_execute (VM dispatch), llex (lexer), lparser (parser)
+extracted: 2026-03-19T04:05:04-07:00

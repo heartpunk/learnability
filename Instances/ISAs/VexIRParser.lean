@@ -311,20 +311,28 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
         | "I64StoF64", [_, a] => do
           -- Int-to-float conversion. Pass through the integer value.
           let e ← parseExpr a st fuel; .ok e
+        | "I64StoF64", [a] => do
+          let e ← parseExpr a st fuel; .ok e
         | "I64UtoF64", [_, a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "I64UtoF64", [a] => do
           let e ← parseExpr a st fuel; .ok e
         | "I32StoF64", [_, a] => do
           let e ← parseExpr a st fuel; .ok e
+        | "I32StoF64", [a] => do
+          let e ← parseExpr a st fuel; .ok e
         | "I32UtoF64", [_, a] => do
           let e ← parseExpr a st fuel; .ok e
-        | "F64toI64S", [_, a] => do
+        | "I32UtoF64", [a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "F64toI64S", [_, a] | "F64toI64S", [a] => do
           -- Float-to-int conversion. Pass through as opaque.
           let e ← parseExpr a st fuel; .ok e
-        | "F64toI64U", [_, a] => do
+        | "F64toI64U", [_, a] | "F64toI64U", [a] => do
           let e ← parseExpr a st fuel; .ok e
-        | "F64toI32S", [_, a] => do
+        | "F64toI32S", [_, a] | "F64toI32S", [a] => do
           let e ← parseExpr a st fuel; .ok (.narrow32 e)
-        | "F64toI32U", [_, a] => do
+        | "F64toI32U", [_, a] | "F64toI32U", [a] => do
           let e ← parseExpr a st fuel; .ok (.narrow32 e)
         | "F64toF32", [a] => do
           let e ← parseExpr a st fuel; .ok e
