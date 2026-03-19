@@ -242,16 +242,13 @@ def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion :
   -- Run WTO fixpoint
   let summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
   let funcEntries := buildFuncEntries functions
-  -- Parser detection + grammar extraction (same as legacy pipeline)
-  let parserResult ← detectParser functions summaries log
-  let ps := match parserResult with
-    | .ok ps => some ps
-    | .error _ => none
-  -- Load subject-specific golden grammar if available
+  -- Grammar extraction — skip legacy parser detection in WTO mode
+  -- (detectParser's IsTokenConfig heuristics are noisy and often wrong;
+  -- the WTO pipeline doesn't need them for fixpoint computation)
   let goldenGrammar ← match inputPath with
     | some path => loadGoldenForSubject path log
     | none => pure golden
-  printLTSGrammar log functions funcEntries summaries ps goldenGrammar
+  printLTSGrammar log functions funcEntries summaries none goldenGrammar
 
 /-- Run WTO pipeline with JSON output. -/
 def runPipelineWTOJSON (functions : Array FunctionSpec) (regions : Array MemRegion := #[])
@@ -268,11 +265,7 @@ def runPipelineWTOJSON (functions : Array FunctionSpec) (regions : Array MemRegi
   let nodes := functions.map (·.entryAddr)
   let wto := computeWTO nodes callGraph root
   let summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
-  let parserResult ← detectParser functions summaries log
-  let ps := match parserResult with
-    | .ok ps => some ps
-    | .error _ => none
-  let json := pipelineToJson functions ps
+  let json := pipelineToJson functions none
   IO.println json.pretty
 
 /-! ## Entry-point scoping -/
