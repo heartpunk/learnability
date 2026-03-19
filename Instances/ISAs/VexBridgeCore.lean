@@ -107,44 +107,46 @@ private theorem lowerExpr_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       rw [hState]
       simpa [lowerExpr] using ConcreteState.read_applySymSub sub input reg
   | tmp tmp => simp [lowerExpr, hTemps]
-  | narrow32 expr ih => simp [evalExpr, lowerExpr, ih, mask32]
-  | zext64 expr ih => simp [evalExpr, lowerExpr, ih, mask32]
+  | narrow32 expr ih =>
+      simp only [evalExpr, lowerExpr, foldUn]; split <;> simp_all [evalSymExpr, mask32]
+  | zext64 expr ih =>
+      simp only [evalExpr, lowerExpr, foldUn]; split <;> simp_all [evalSymExpr, mask32]
   | sext8to32 expr ih => simp [evalExpr, lowerExpr, ih, signExtend8to32]
   | sext32to64 expr ih => simp [evalExpr, lowerExpr, ih, signExtend32to64]
   | add32 lhs rhs ihL ihR =>
-      simp [evalExpr, lowerExpr, ihL, ihR, mask32]
+      simp only [evalExpr, lowerExpr]; split <;> simp_all [evalSymExpr, mask32]
   | sub32 lhs rhs ihL ihR =>
-      simp [evalExpr, lowerExpr, ihL, ihR, mask32]
+      simp only [evalExpr, lowerExpr, foldBin32]; split <;> simp_all [evalSymExpr, mask32]
   | shl32 lhs rhs ihL ihR =>
-      simp [evalExpr, lowerExpr, ihL, ihR, shiftLeft32]
+      simp only [evalExpr, lowerExpr, foldBin32]; split <;> simp_all [evalSymExpr, shiftLeft32]
   | and32 lhs rhs ihL ihR =>
-      simp [evalExpr, lowerExpr, ihL, ihR, mask32]
+      simp only [evalExpr, lowerExpr, foldBin32]; split <;> simp_all [evalSymExpr, mask32]
   | or32 lhs rhs ihL ihR =>
-      simp [evalExpr, lowerExpr, ihL, ihR, mask32]
+      simp only [evalExpr, lowerExpr, foldBin32]; split <;> simp_all [evalSymExpr, mask32]
   | xor32 lhs rhs ihL ihR =>
-      simp [evalExpr, lowerExpr, ihL, ihR, mask32]
+      simp only [evalExpr, lowerExpr, foldBin32]; split <;> simp_all [evalSymExpr, mask32]
   | add64 lhs rhs ihL ihR =>
-      simp [lowerExpr, ihL, ihR]
+      simp only [lowerExpr, foldBin64]; split <;> simp_all [evalSymExpr]
   | sub64 lhs rhs ihL ihR =>
-      simp [lowerExpr, ihL, ihR]
+      simp only [lowerExpr, foldBin64]; split <;> simp_all [evalSymExpr]
   | xor64 lhs rhs ihL ihR =>
-      simp [lowerExpr, ihL, ihR]
+      simp only [lowerExpr, foldBin64]; split <;> simp_all [evalSymExpr]
   | and64 lhs rhs ihL ihR =>
-      simp [lowerExpr, ihL, ihR]
+      simp only [lowerExpr, foldBin64]; split <;> simp_all [evalSymExpr]
   | or64 lhs rhs ihL ihR =>
-      simp [lowerExpr, ihL, ihR]
+      simp only [lowerExpr, foldBin64]; split <;> simp_all [evalSymExpr]
   | shl64 lhs rhs ihL ihR =>
-      simp [lowerExpr, ihL, ihR]
+      simp only [lowerExpr, foldBin64]; split <;> simp_all [evalSymExpr]
   | shr64 lhs rhs ihL ihR =>
-      simp [lowerExpr, ihL, ihR]
+      simp only [lowerExpr, foldBin64]; split <;> simp_all [evalSymExpr]
   | mul64 lhs rhs ihL ihR =>
-      simp [lowerExpr, ihL, ihR]
+      simp only [lowerExpr, foldBin64]; split <;> simp_all [evalSymExpr]
   | mul32 lhs rhs ihL ihR =>
-      simp [evalExpr, lowerExpr, ihL, ihR, mask32]
+      simp only [evalExpr, lowerExpr, foldBin32]; split <;> simp_all [evalSymExpr, mask32]
   | not64 x ih =>
-      simp [evalExpr, lowerExpr, ih]
+      simp only [evalExpr, lowerExpr, foldUn]; split <;> simp_all [evalSymExpr]
   | not32 x ih =>
-      simp [evalExpr, lowerExpr, ih, mask32]
+      simp only [evalExpr, lowerExpr, foldUn]; split <;> simp_all [evalSymExpr, mask32]
   | sar64 lhs rhs ihL ihR =>
       simp [evalExpr, lowerExpr, ihL, ihR, signedShiftRight64]
   | sar32 lhs rhs ihL ihR =>

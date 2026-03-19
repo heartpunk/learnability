@@ -42,32 +42,64 @@ def PartialSummary.finish {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 
 abbrev LowerState (Reg : Type) := SymSub Reg × SymTempEnv Reg
 
+/-- Eagerly fold constant-constant operations during lowering.
+    Prevents exponential expression growth when temps form long chains
+    of constant computations (e.g., array initialization loops). -/
+@[simp, inline] def foldBin64 {Reg : Type}
+    (op : SymExpr Reg → SymExpr Reg → SymExpr Reg)
+    (f : UInt64 → UInt64 → UInt64)
+    (a b : SymExpr Reg) : SymExpr Reg :=
+  match a, b with
+  | .const x, .const y => .const (f x y)
+  | _, _ => op a b
+
+@[simp, inline] def foldBin32 {Reg : Type}
+    (op : SymExpr Reg → SymExpr Reg → SymExpr Reg)
+    (f : UInt64 → UInt64 → UInt64)
+    (a b : SymExpr Reg) : SymExpr Reg :=
+  match a, b with
+  | .const x, .const y => .const (f x y)
+  | _, _ => op a b
+
+@[simp, inline] def foldUn {Reg : Type}
+    (op : SymExpr Reg → SymExpr Reg)
+    (f : UInt64 → UInt64)
+    (a : SymExpr Reg) : SymExpr Reg :=
+  match a with
+  | .const x => .const (f x)
+  | _ => op a
+
 def lowerExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub : SymSub Reg) (temps : SymTempEnv Reg) : Expr Reg → SymExpr Reg
   | .const value => .const value
   | .get reg => sub.regs reg
   | .tmp tmp => temps tmp
-  | .narrow32 expr => .low32 (lowerExpr sub temps expr)
-  | .zext64 expr => .uext32 (lowerExpr sub temps expr)
+  | .narrow32 expr => foldUn .low32 mask32 (lowerExpr sub temps expr)
+  | .zext64 expr => foldUn .uext32 mask32 (lowerExpr sub temps expr)
   | .sext8to32 expr => .sext8to32 (lowerExpr sub temps expr)
   | .sext32to64 expr => .sext32to64 (lowerExpr sub temps expr)
-  | .add32 lhs rhs => .uext32 (.add64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs))
-  | .sub32 lhs rhs => .sub32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .shl32 lhs rhs => .shl32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .and32 lhs rhs => .and32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .or32 lhs rhs => .or32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .xor32 lhs rhs => .xor32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .add64 lhs rhs => .add64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .sub64 lhs rhs => .sub64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .xor64 lhs rhs => .xor64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .and64 lhs rhs => .and64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .or64 lhs rhs => .or64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .shl64 lhs rhs => .shl64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .shr64 lhs rhs => .shr64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .mul64 lhs rhs => .mul64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .mul32 lhs rhs => .mul32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
-  | .not64 x => .not64 (lowerExpr sub temps x)
-  | .not32 x => .not32 (lowerExpr sub temps x)
+  | .add32 lhs rhs =>
+      let l := lowerExpr sub temps lhs
+      let r := lowerExpr sub temps rhs
+      match l, r with
+      | .const x, .const y => .const (mask32 (x + y))
+      | _, _ => .uext32 (.add64 l r)
+  | .sub32 lhs rhs => foldBin32 .sub32 (fun x y => mask32 (x - y)) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .shl32 lhs rhs => foldBin32 .shl32 shiftLeft32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .and32 lhs rhs => foldBin32 .and32 (fun x y => mask32 (x &&& y)) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .or32 lhs rhs => foldBin32 .or32 (fun x y => mask32 (x ||| y)) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .xor32 lhs rhs => foldBin32 .xor32 (fun x y => mask32 (x ^^^ y)) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .add64 lhs rhs => foldBin64 .add64 (· + ·) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .sub64 lhs rhs => foldBin64 .sub64 (· - ·) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .xor64 lhs rhs => foldBin64 .xor64 (· ^^^ ·) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .and64 lhs rhs => foldBin64 .and64 (· &&& ·) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .or64 lhs rhs => foldBin64 .or64 (· ||| ·) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .shl64 lhs rhs => foldBin64 .shl64 shiftLeft64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .shr64 lhs rhs => foldBin64 .shr64 shiftRight64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .mul64 lhs rhs => foldBin64 .mul64 (· * ·) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .mul32 lhs rhs => foldBin32 .mul32 (fun x y => mask32 (x * y)) (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
+  | .not64 x => foldUn .not64 (~~~ ·) (lowerExpr sub temps x)
+  | .not32 x => foldUn .not32 (fun v => mask32 (~~~ v)) (lowerExpr sub temps x)
   | .sar64 lhs rhs => .sar64 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .sar32 lhs rhs => .sar32 (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .ite cond t f => .ite (lowerExpr sub temps cond) (lowerExpr sub temps t) (lowerExpr sub temps f)
