@@ -271,6 +271,8 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.or64 l r)
         | "And8", [a, b] => do
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.and64 l r)
+        | "Sub8", [a, b] => do
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.sub64 l r)
         | "Add64", [a, b] => do
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.add64 l r)
         | "Sub64", [a, b] => do
@@ -378,14 +380,14 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.or64 l r)
         | "NotV128", [a] => do
           let e ← parseExpr a st fuel; .ok (.not64 e)
-        | "Add64Fx2", [a, b] => do
+        | "Add64Fx2", [a, b] | "Add64F0x2", [a, b] => do
           -- SIMD double add (2x f64). Pass through first operand.
           let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
-        | "Sub64Fx2", [a, b] => do
+        | "Sub64Fx2", [a, b] | "Sub64F0x2", [a, b] => do
           let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
-        | "Mul64Fx2", [a, b] => do
+        | "Mul64Fx2", [a, b] | "Mul64F0x2", [a, b] => do
           let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
-        | "Div64Fx2", [a, b] => do
+        | "Div64Fx2", [a, b] | "Div64F0x2", [a, b] => do
           let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
         | "SetV128lo64", [a, b] => do
           -- Set the low 64 bits of a V128 to the given value.
@@ -471,6 +473,10 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
     let l ← parseExpr a st; let r ← parseExpr b st
     let bias : Expr Amd64Reg := .const 0x8000_0000_0000_0000
     .ok (.le64 (.add64 l bias) (.add64 r bias))
+  | "CmpLT64S", [a, b] => do
+    let l ← parseExpr a st; let r ← parseExpr b st
+    let bias : Expr Amd64Reg := .const 0x8000_0000_0000_0000
+    .ok (.lt64 (.add64 l bias) (.add64 r bias))
   | "amd64g_calculate_condition",
       [codeStr, opStr, dep1Str, dep2Str, ndepStr] => do
     let code ← match parseNumLit codeStr with
@@ -486,7 +492,7 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
 private def isCondOp (op : String) : Bool :=
   op ∈ (["CmpEQ64", "CmpLT64U", "CmpLE64U", "CmpNE64", "CmpLE64S",
           "CmpEQ8", "CmpEQ16", "CmpEQ32", "CmpLT32U", "CmpLE32U", "CmpNE8", "CmpNE16", "CmpNE32",
-          "CmpLT32S", "CmpLE32S"] : List String)
+          "CmpLT32S", "CmpLE32S", "CmpLT64S"] : List String)
 
 private def isCondPropOp (op : String) : Bool :=
   op ∈ (["1Uto8", "1Uto64", "64to1", "1Uto32", "32to1"] : List String)
