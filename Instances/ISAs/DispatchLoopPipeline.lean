@@ -1,4 +1,4 @@
-import Instances.ISAs.DispatchLoopEval
+import Instances.ISAs.DispatchLoopWTO
 import Instances.ISAs.DispatchLoopGrammar
 
 set_option autoImplicit false
