@@ -61,7 +61,8 @@ def resolveReg (s : String) : Except String Amd64Reg :=
   | "r8"  | "r8d" | "r8w" | "r8b"       => .ok .r8
   | "r9"  | "r9d" | "r9w" | "r9b"       => .ok .r9
   | "r12" | "r12d" | "r12w" | "r12b"    => .ok .r12
-  -- r13-r15: callee-saved, map to r12 (imprecise but allows parsing)
+  -- r10, r13-r15: map to r12 (imprecise but allows parsing)
+  | "r10" | "r10d" | "r10w" | "r10b"    => .ok .r12
   | "r13" | "r13d" | "r13w" | "r13b"    => .ok .r12
   | "r14" | "r14d" | "r14w" | "r14b"    => .ok .r12
   | "r15" | "r15d" | "r15w" | "r15b"    => .ok .r12
