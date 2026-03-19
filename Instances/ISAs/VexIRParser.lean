@@ -63,14 +63,27 @@ def resolveReg (s : String) : Except String Amd64Reg :=
   | "r12" | "r12d" | "r12w" | "r12b"    => .ok .r12
   | "fs"  | "fs_base"                   => .ok .fs_base
   | "xmm0" | "xmm0lq"                  => .ok .xmm0
+  -- SSE registers (and sub-register variants): map all to xmm0
+  -- since we model float/SIMD ops as opaque
+  | "xmm1" | "xmm1lq" | "xmm2" | "xmm2lq"
+  | "xmm3" | "xmm3lq" | "xmm4" | "xmm4lq"
+  | "xmm5" | "xmm5lq" | "xmm6" | "xmm6lq"
+  | "xmm7" | "xmm7lq" | "xmm8" | "xmm8lq"
+  | "xmm9" | "xmm9lq" | "xmm10" | "xmm10lq"
+  | "xmm11" | "xmm11lq" | "xmm12" | "xmm12lq"
+  | "xmm13" | "xmm13lq" | "xmm14" | "xmm14lq"
+  | "xmm15" | "xmm15lq"                => .ok .xmm0
+  -- SSE rounding mode: map to xmm0 (opaque)
+  | "sseround"                          => .ok .xmm0
   | r => .error s!"unknown register: {r}"
 
 def typeToWidth (ty : String) : Except String Width :=
   match myTrim ty with
   | "I8"  | "Ity_I8"  => .ok .w8
   | "I16" | "Ity_I16" => .ok .w16
-  | "I32" | "Ity_I32" => .ok .w32
-  | "I64" | "Ity_I64" => .ok .w64
+  | "I32" | "Ity_I32" | "F32" | "Ity_F32" => .ok .w32
+  | "I64" | "Ity_I64" | "F64" | "Ity_F64" => .ok .w64
+  | "V128" | "Ity_V128" => .ok .w64  -- 128-bit SIMD: treat as 64-bit (low half)
   | t => .error s!"unknown VEX type: {t}"
 
 def parseHexStr (s : String) : Option Nat :=
@@ -272,6 +285,114 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.shl64 l r)
         | "Shr64", [a, b] => do
           let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.shr64 l r)
+        | "128HIto64", [a] => do
+          -- High 64 bits of a 128-bit value. We model 128-bit as low 64 only,
+          -- so approximate high half as 0.
+          let _ ← parseExpr a st fuel; .ok (.const 0)
+        | "128to64", [a] => do
+          -- Low 64 bits of 128-bit value — identity in our model.
+          let e ← parseExpr a st fuel; .ok e
+        | "V128to64", [a] => do
+          -- Low 64 bits of 128-bit SIMD vector — identity in our model.
+          let e ← parseExpr a st fuel; .ok e
+        | "V128HIto64", [a] => do
+          -- High 64 bits of 128-bit SIMD vector. Approximate as 0.
+          let _ ← parseExpr a st fuel; .ok (.const 0)
+        | "DivModS128to64", [a, b] => do
+          -- 128-bit signed division producing quotient:remainder packed in 128 bits.
+          -- Approximate as the low 64 bits of the dividend (dataflow preservation).
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        | "DivModU128to64", [a, b] => do
+          -- Unsigned variant of the above.
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        -- Floating-point / SSE operations: model as opaque (return const 0 or
+        -- pass through integer bits). These don't affect control flow in typical
+        -- parser code, so opaque representation is sufficient for grammar extraction.
+        | "I64StoF64", [_, a] => do
+          -- Int-to-float conversion. Pass through the integer value.
+          let e ← parseExpr a st fuel; .ok e
+        | "I64UtoF64", [_, a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "I32StoF64", [_, a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "I32UtoF64", [_, a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "F64toI64S", [_, a] => do
+          -- Float-to-int conversion. Pass through as opaque.
+          let e ← parseExpr a st fuel; .ok e
+        | "F64toI64U", [_, a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "F64toI32S", [_, a] => do
+          let e ← parseExpr a st fuel; .ok (.narrow32 e)
+        | "F64toI32U", [_, a] => do
+          let e ← parseExpr a st fuel; .ok (.narrow32 e)
+        | "F64toF32", [a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "F32toF64", [a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "AddF64", [_, a, b] => do
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        | "SubF64", [_, a, b] => do
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        | "MulF64", [_, a, b] => do
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        | "DivF64", [_, a, b] => do
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        | "NegF64", [a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "AbsF64", [a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "SqrtF64", [_, a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "CmpF64", [_, a, b] => do
+          -- Float comparison returning integer flags. Approximate as 0 (unordered).
+          let _ ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok (.const 0)
+        | "CmpF64", [a, b] => do
+          -- 2-arg form of float comparison.
+          let _ ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok (.const 0)
+        | "ReinterpF64asI64", [a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "ReinterpI64asF64", [a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "ReinterpF32asI32", [a] => do
+          let e ← parseExpr a st fuel; .ok (.narrow32 e)
+        | "ReinterpI32asF32", [a] => do
+          let e ← parseExpr a st fuel; .ok e
+        | "Shr32", [a, b] => do
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel
+          .ok (.narrow32 (.shr64 (.zext64 (.narrow32 l)) r))
+        -- 128-bit SIMD vector operations: model as low 64 bits of first operand
+        | "XorV128", [a, b] => do
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.xor64 l r)
+        | "AndV128", [a, b] => do
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.and64 l r)
+        | "OrV128", [a, b] => do
+          let l ← parseExpr a st fuel; let r ← parseExpr b st fuel; .ok (.or64 l r)
+        | "NotV128", [a] => do
+          let e ← parseExpr a st fuel; .ok (.not64 e)
+        | "Add64Fx2", [a, b] => do
+          -- SIMD double add (2x f64). Pass through first operand.
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        | "Sub64Fx2", [a, b] => do
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        | "Mul64Fx2", [a, b] => do
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        | "Div64Fx2", [a, b] => do
+          let l ← parseExpr a st fuel; let _ ← parseExpr b st fuel; .ok l
+        | "SetV128lo64", [a, b] => do
+          -- Set the low 64 bits of a V128 to the given value.
+          let _ ← parseExpr a st fuel; let e ← parseExpr b st fuel; .ok e
+        | "16to8",  [a] => do
+          let e ← parseExpr a st fuel; .ok (.and64 e (.const 0xFF))
+        | "32to8",  [a] => do
+          let e ← parseExpr a st fuel; .ok (.and64 e (.const 0xFF))
+        | "32to16", [a] => do
+          let e ← parseExpr a st fuel; .ok (.and64 e (.const 0xFFFF))
+        | "16Sto32", [a] => do
+          -- Sign-extend 16 to 32: approximate as zero-extend
+          let e ← parseExpr a st fuel; .ok (.and64 e (.const 0xFFFF))
+        | "16Sto64", [a] => do
+          let e ← parseExpr a st fuel; .ok (.and64 e (.const 0xFFFF))
         | "amd64g_calculate_condition", [codeStr, opStr, dep1Str, dep2Str, _ndepStr] => do
           -- Condition flag calculation used as expression value (0 or 1).
           -- Lower directly to ite(condition, 1, 0) without going through Cond type.
