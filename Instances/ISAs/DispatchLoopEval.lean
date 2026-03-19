@@ -2978,6 +2978,154 @@ partial def ppWTO (elems : Array WTOElem)
       s!"({nameOf head} {bodyStr})"
   " ".intercalate (elems.toList.map ppElem)
 
+/-! ## WTO-based Fixpoint
+
+Replaces the hardcoded 2-phase `stratifiedFixpoint` with a generic N-phase
+structure driven by the WTO of the call graph. The convergence theorem
+doesn't care about lexer/NT classification — it just needs summaries
+available when composing.
+
+Implements Bourdoncle's recursive iteration strategy:
+- `vertex f` → analyze f once with current summaries
+- `component head body` → repeat { analyze head; interpretWTO body }
+  until head's summary stabilizes -/
+
+/-- Flatten a WTO into a work-list for iterative interpretation.
+    Each entry: (addr, isComponentHead, componentBodyElems).
+    Component heads get `some body`; vertices get `none`. -/
+def flattenWTOWork : Array WTOElem → Array (UInt64 × Option (Array WTOElem))
+  | elems => elems.foldl (fun acc e => match e with
+    | .vertex addr => acc.push (addr, none)
+    | .component head body => acc.push (head, some body)) #[]
+
+/-- WTO-driven fixpoint: analyze functions in weak topological order.
+    For each vertex, analyze once. For each component, iterate until
+    the head's summary stabilizes. -/
+def wtoFixpoint
+    (functions : Array FunctionSpec)
+    (wto : Array WTOElem)
+    (regions : Array MemRegion := #[])
+    (log : String → IO Unit)
+    (maxIter : Nat := 200)
+    (maxBranches : Nat := 10000)
+    (diagnostics : Bool := false)
+    : IO (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))) := do
+  let ip_reg := Amd64Reg.rip
+  let addrClassify : Option (AddrClassifier Amd64Reg) :=
+    if regions.size > 0 then
+      some (classifyAddr regions [Amd64Reg.rsp, Amd64Reg.rbp])
+    else none
+  -- Parse all function blocks into raw body arrays
+  let mut funcBlocks : Std.HashMap UInt64 (String × Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  for func in functions do
+    match parseBlocksWithAddresses func.blocks with
+    | .error e =>
+      log s!"  PARSE ERROR for {func.name}: {e}"
+      return {}
+    | .ok pairs =>
+      let body := flatBodyDenot ip_reg pairs
+      let bodyArr := finsetToArray body
+      funcBlocks := funcBlocks.insert func.entryAddr (func.name, bodyArr)
+      log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
+  -- Initialize all summaries as empty
+  let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  for func in functions do
+    summaries := summaries.insert func.entryAddr #[]
+  -- Shared SMT cache
+  let smtCache ← IO.mkRef ({} : SMTCache)
+  -- Name lookup for logging
+  let nameOf (addr : UInt64) : String :=
+    match functions.find? (·.entryAddr == addr) with
+    | some f => f.name
+    | none => s!"0x{String.ofList (Nat.toDigits 16 addr.toNat)}"
+  log s!"\n=== WTO Fixpoint ==="
+  log s!"  WTO: {ppWTO wto nameOf}"
+  -- Process top-level WTO elements
+  for elem in wto do
+    match elem with
+    | .vertex addr =>
+      log s!"\n  --- vertex: {nameOf addr} ---"
+      match funcBlocks.get? addr with
+      | none => pure ()
+      | some (fname, rawBody) =>
+        let t0 ← IO.monoMsNow
+        let (nonCallBody, callResults, callsExp, branchesAdded, droppedExp) :=
+          splitBodyAndExpandCalls ip_reg rawBody summaries
+        log s!"    {fname}: split {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, +{branchesAdded}, -{droppedExp})"
+        match ← computeFunctionStabilization ip_reg nonCallBody {} maxIter log smtCache
+            (initialFrontier := callResults) (addrClassify := addrClassify)
+            (maxBranches := maxBranches) (diagnostics := diagnostics) with
+        | some (k, summaryArr) =>
+          let t1 ← IO.monoMsNow
+          log s!"    {fname}: converged K={k}, {summaryArr.size} branches, {t1 - t0}ms"
+          summaries := summaries.insert addr summaryArr
+        | none =>
+          log s!"    {fname}: DID NOT CONVERGE"
+    | .component head body =>
+      log s!"\n  === component head: {nameOf head} ==="
+      -- Bourdoncle's recursive strategy: iterate {head; body} until head stabilizes
+      -- For nested components in body, we flatten: analyze each body element once per round
+      let bodyWork := flattenWTOWork body
+      let mut round : Nat := 0
+      let mut stable := false
+      while !stable && round < maxIter do
+        round := round + 1
+        log s!"\n  --- component round {round}, head: {nameOf head} ---"
+        let oldSize := (summaries.getD head #[]).size
+        -- Analyze head
+        match funcBlocks.get? head with
+        | none => stable := true
+        | some (fname, rawBody) =>
+          let t0 ← IO.monoMsNow
+          let (nonCallBody, callResults, callsExp, branchesAdded, droppedExp) :=
+            splitBodyAndExpandCalls ip_reg rawBody summaries
+          log s!"    {fname}: split {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, +{branchesAdded}, -{droppedExp})"
+          match ← computeFunctionStabilization ip_reg nonCallBody {} maxIter log smtCache
+              (initialFrontier := callResults) (addrClassify := addrClassify)
+              (maxBranches := maxBranches) (diagnostics := diagnostics) with
+          | some (k, summaryArr) =>
+            let t1 ← IO.monoMsNow
+            log s!"    {fname}: converged K={k}, {summaryArr.size} branches, {t1 - t0}ms"
+            summaries := summaries.insert head summaryArr
+          | none =>
+            log s!"    {fname}: DID NOT CONVERGE"
+            stable := true  -- bail on divergence
+        -- Analyze body elements
+        for (addr, nested) in bodyWork do
+          match funcBlocks.get? addr with
+          | none => pure ()
+          | some (fname, rawBody) =>
+            let t0 ← IO.monoMsNow
+            let (nonCallBody, callResults, callsExp, branchesAdded, droppedExp) :=
+              splitBodyAndExpandCalls ip_reg rawBody summaries
+            log s!"    {fname}: split {rawBody.size} → {nonCallBody.size} non-call + {callResults.size} call-expanded ({callsExp} calls, +{branchesAdded}, -{droppedExp})"
+            -- Nested component heads get iterated too
+            let iterLimit := match nested with
+              | some _ => maxIter  -- nested component head: may need iteration
+              | none => maxIter
+            match ← computeFunctionStabilization ip_reg nonCallBody {} iterLimit log smtCache
+                (initialFrontier := callResults) (addrClassify := addrClassify)
+                (maxBranches := maxBranches) (diagnostics := diagnostics) with
+            | some (k, summaryArr) =>
+              let t1 ← IO.monoMsNow
+              log s!"    {fname}: converged K={k}, {summaryArr.size} branches, {t1 - t0}ms"
+              summaries := summaries.insert addr summaryArr
+            | none =>
+              log s!"    {fname}: DID NOT CONVERGE"
+        -- Check if head stabilized
+        let newSize := (summaries.getD head #[]).size
+        if newSize == oldSize then
+          stable := true
+          log s!"  component head {nameOf head} stable after {round} rounds"
+  log s!"\n=== WTO Fixpoint complete ==="
+  for func in functions do
+    let summary := summaries.getD func.entryAddr #[]
+    log s!"  {func.name}: {summary.size} branches"
+  let cacheContents ← smtCache.get
+  log s!"\n=== SMT Cache Summary ==="
+  log s!"  cache entries: {cacheContents.size}"
+  return summaries
+
 /-! ## DFA & CFG Extraction -/
 
 /-- Strip rip-guard conjuncts from a PC, returning only the data guard. -/
