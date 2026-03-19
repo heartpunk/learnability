@@ -1636,6 +1636,330 @@ def structuralGoldenCompare (log : String → IO Unit)
   if totalExtra > 0 then
     log s!"  ({totalExtra} extra productions total)"
 
+/-! ## Name-Independent Structural Grammar Comparison (V2) -/
+
+/-- Arity fingerprint for a non-terminal: (number_of_productions, sorted list of production lengths).
+    Used as a cheap pre-filter: only NTs with identical fingerprints can possibly match. -/
+structure ArityFingerprint where
+  numProds : Nat
+  sortedLengths : List Nat
+  deriving BEq, Hashable, Inhabited, Repr
+
+/-- Compute the arity fingerprint for a list of productions (each production is a list of symbols). -/
+def arityFingerprint (prods : List (List String)) : ArityFingerprint :=
+  let lengths := prods.map (·.length)
+  { numProds := prods.length
+    sortedLengths := lengths.mergeSort (· ≤ ·) }
+
+/-- A flattened grammar: NT name → list of productions, each production a list of symbol strings.
+    Both extracted and golden grammars get normalized into this form. -/
+abbrev FlatGrammar := Std.HashMap String (List (List String))
+
+/-- Flatten an extracted grammar array into a FlatGrammar, rendering symbols to strings. -/
+def flattenExtracted (grammars : Array ExtractedNTGrammar) (tokenNames : TokenNameTable) :
+    FlatGrammar := Id.run do
+  let mut result : FlatGrammar := {}
+  for g in grammars do
+    let prods := g.prods.toList.map fun prod =>
+      prod.toList.map fun sym => renderSym tokenNames sym
+    result := result.insert g.funcName prods
+    match g.repNTName with
+    | some repName =>
+      let repProds := g.repNTProds.toList.map fun prod =>
+        prod.toList.map fun sym => renderSym tokenNames sym
+      result := result.insert repName repProds
+    | none => pure ()
+  result
+
+/-- Classify a symbol as terminal or non-terminal within a grammar context.
+    A symbol is an NT if it appears as a key in the grammar. -/
+def symIsNT (sym : String) (grammarKeys : Std.HashSet String) : Bool :=
+  grammarKeys.contains sym
+
+/-- Abstractly classify a symbol within a production: either as "NT-ref" or "terminal-leaf".
+    Returns (isNT, symbolName). -/
+structure SymClass where
+  isNT : Bool
+  name : String
+  deriving BEq, Hashable, Inhabited
+
+/-- Classify symbols in a production given the grammar's NT set. -/
+def classifyProd (prod : List String) (ntSet : Std.HashSet String) : List SymClass :=
+  prod.map fun sym => { isNT := ntSet.contains sym, name := sym }
+
+/-- Check if two productions are structurally compatible: same length, same NT/terminal pattern.
+    Returns a list of (extractedSym, goldenSym) pairs for all positions if compatible. -/
+def productionsCompatible (extProd goldenProd : List SymClass) : Option (List (SymClass × SymClass)) :=
+  if extProd.length != goldenProd.length then none
+  else
+    let pairs := extProd.zip goldenProd
+    let allCompatible := pairs.all fun (e, g) => e.isNT == g.isNT
+    if allCompatible then some pairs else none
+
+/-- Attempt to match two productions under a (partial) symbol map.
+    Returns an updated map if consistent, or none if there's a conflict.
+    The map sends extracted symbol names to golden symbol names. -/
+def matchProductionUnderMap (extProd goldenProd : List String)
+    (extNTs goldenNTs : Std.HashSet String)
+    (symMap : Std.HashMap String String) :
+    Option (Std.HashMap String String) := Id.run do
+  if extProd.length != goldenProd.length then return none
+  let mut m := symMap
+  for (eSym, gSym) in extProd.zip goldenProd do
+    let eIsNT := extNTs.contains eSym
+    let gIsNT := goldenNTs.contains gSym
+    -- Both must be same class (both NT or both terminal)
+    if eIsNT != gIsNT then return none
+    -- Check consistency with existing map
+    match m.get? eSym with
+    | some existing =>
+      if existing != gSym then return none
+    | none =>
+      -- Check no other extracted symbol maps to this golden symbol (injectivity)
+      let conflict := m.toArray.any fun (_, v) => v == gSym
+      if conflict then return none
+      m := m.insert eSym gSym
+  return some m
+
+/-- Score for matching a single NT pair: counts how many productions match under a renaming. -/
+structure NTMatchScore where
+  matched : Nat     -- number of golden productions matched
+  total : Nat       -- total golden productions
+  extraExt : Nat    -- extracted productions with no golden match
+  deriving Inhabited
+
+/-- Try to match two sets of productions under a symbol map, returning the best score and updated map. -/
+def scoreNTMatch (extProds goldenProds : List (List String))
+    (extNTs goldenNTs : Std.HashSet String)
+    (symMap : Std.HashMap String String) :
+    NTMatchScore × Std.HashMap String String := Id.run do
+  let mut m := symMap
+  let mut matched : Nat := 0
+  let mut usedGolden : Std.HashSet Nat := {}
+  let goldenArr := goldenProds.toArray
+  -- Greedy: for each extracted production, try to find a matching golden production
+  for eProd in extProds do
+    let mut foundMatch := false
+    for idx in [:goldenArr.size] do
+      if usedGolden.contains idx then continue
+      match matchProductionUnderMap eProd goldenArr[idx]! extNTs goldenNTs m with
+      | some newMap =>
+        m := newMap
+        matched := matched + 1
+        usedGolden := usedGolden.insert idx
+        foundMatch := true
+        break
+      | none => continue
+    if !foundMatch then pure ()
+  let extraExt := extProds.length - matched
+  return ({ matched := matched, total := goldenProds.length, extraExt := extraExt }, m)
+
+/-- Result of the full structural comparison. -/
+structure StructuralCompareResult where
+  /-- Mapping from extracted NT names to golden NT names. -/
+  ntAlignment : List (String × String)
+  /-- Per-NT match scores. -/
+  perNT : List (String × String × NTMatchScore)
+  /-- Total matched productions across all NTs. -/
+  totalMatched : Nat
+  /-- Total golden productions across all NTs. -/
+  totalGolden : Nat
+  /-- Extracted NTs that could not be mapped. -/
+  unmappedExtracted : List String
+  /-- Golden NTs that could not be mapped. -/
+  unmappedGolden : List String
+  /-- The final symbol map (terminals + NTs). -/
+  symMap : Std.HashMap String String
+  deriving Inhabited
+
+/-- Check if two sorted length lists are compatible allowing a per-production offset of at most `maxDelta`.
+    Each extracted length can be up to maxDelta larger than the corresponding golden length.
+    Lists must have the same length. -/
+def lengthsCompatible (extLengths goldenLengths : List Nat) (maxDelta : Nat := 1) : Bool :=
+  if extLengths.length != goldenLengths.length then false
+  else
+    let pairs := extLengths.zip goldenLengths
+    pairs.all fun (e, g) =>
+      -- Allow extracted to be 0 to maxDelta larger than golden
+      e >= g && e <= g + maxDelta
+
+/-- Phase 1: compute candidate NT pairs based on arity fingerprints.
+    Uses flexible matching: same number of productions, and sorted production lengths
+    are compatible allowing a per-production offset (accounting for systematic `token` inflation). -/
+def fingerprintCandidates (extGrammar goldenGrammar : FlatGrammar) :
+    List (String × String) := Id.run do
+  let mut candidates : List (String × String) := []
+  let extEntries := extGrammar.toArray
+  let goldenEntries := goldenGrammar.toArray
+  for (eName, eProds) in extEntries do
+    let eFP := arityFingerprint eProds
+    for (gName, gProds) in goldenEntries do
+      let gFP := arityFingerprint gProds
+      -- Exact match or flexible match (same prod count, lengths within +1)
+      if eFP == gFP ||
+         (eFP.numProds == gFP.numProds &&
+          lengthsCompatible eFP.sortedLengths gFP.sortedLengths) then
+        candidates := candidates ++ [(eName, gName)]
+  candidates
+
+/-- Compare two match candidates: prefer higher match ratio, breaking ties by absolute count.
+    Returns true if (m1, t1) is strictly better than (m2, t2).
+    Uses cross-multiplication to avoid floating point: m1/t1 > m2/t2 iff m1*t2 > m2*t1. -/
+def betterMatchScore (m1 t1 m2 t2 : Nat) : Bool :=
+  -- Treat 0/0 as worse than any positive match
+  if m1 == 0 && m2 == 0 then false
+  else if m1 == 0 then false
+  else if m2 == 0 then true
+  else
+    let cross1 := m1 * (if t2 == 0 then 1 else t2)
+    let cross2 := m2 * (if t1 == 0 then 1 else t1)
+    cross1 > cross2 || (cross1 == cross2 && m1 > m2)
+
+/-- Phase 2: greedy bipartite matching of NT pairs.
+    Iteratively pick the best-scoring unmatched (extracted, golden) pair.
+    Prefers higher match ratio (matched/total), then absolute count as tiebreaker.
+    The symbol map is built incrementally as NTs get matched. -/
+def greedyNTAlignment (extGrammar goldenGrammar : FlatGrammar)
+    (candidates : List (String × String)) :
+    StructuralCompareResult := Id.run do
+  let extNTs : Std.HashSet String := extGrammar.toArray.foldl (fun s (k, _) => s.insert k) {}
+  let goldenNTs : Std.HashSet String := goldenGrammar.toArray.foldl (fun s (k, _) => s.insert k) {}
+  let mut sMap : Std.HashMap String String := {}
+  let mut matchedExt : Std.HashSet String := {}
+  let mut matchedGolden : Std.HashSet String := {}
+  let mut alignment : List (String × String) := []
+  let mut perNT : List (String × String × NTMatchScore) := []
+  let mut totalMatched : Nat := 0
+  let mut totalGolden : Nat := 0
+  -- Iterate: pick the best unmatched pair each round (prefer highest match ratio)
+  let mut changed := true
+  let mut fuel := candidates.length + 1
+  while changed && fuel > 0 do
+    fuel := fuel - 1
+    changed := false
+    let mut bestMatched : Nat := 0
+    let mut bestTotal : Nat := 0
+    let mut bestPair : Option (String × String) := none
+    let mut bestMap : Std.HashMap String String := sMap
+    let mut bestNTScore : NTMatchScore := { matched := 0, total := 0, extraExt := 0 }
+    for (eName, gName) in candidates do
+      if matchedExt.contains eName || matchedGolden.contains gName then continue
+      let eProds := extGrammar.getD eName []
+      let gProds := goldenGrammar.getD gName []
+      let fullMap := sMap.insert eName gName
+      let (score, newMap) := scoreNTMatch eProds gProds extNTs goldenNTs fullMap
+      if score.matched > 0 && betterMatchScore score.matched score.total bestMatched bestTotal then
+        bestMatched := score.matched
+        bestTotal := score.total
+        bestPair := some (eName, gName)
+        bestMap := newMap
+        bestNTScore := score
+    match bestPair with
+    | some (eName, gName) =>
+      sMap := bestMap
+      matchedExt := matchedExt.insert eName
+      matchedGolden := matchedGolden.insert gName
+      alignment := alignment ++ [(eName, gName)]
+      perNT := perNT ++ [(eName, gName, bestNTScore)]
+      totalMatched := totalMatched + bestNTScore.matched
+      totalGolden := totalGolden + bestNTScore.total
+      changed := true
+    | none => pure ()
+  -- After greedy alignment, try unmatched NTs with relaxed criteria.
+  -- Require at least 2 matched productions or 100% of a small golden NT to accept.
+  for (eName, _) in extGrammar.toArray do
+    if matchedExt.contains eName then continue
+    let eProds := extGrammar.getD eName []
+    let mut bestMatched : Nat := 0
+    let mut bestTotal : Nat := 0
+    let mut bestGName : Option String := none
+    let mut bestRen := sMap
+    let mut bestNTScore : NTMatchScore := { matched := 0, total := 0, extraExt := 0 }
+    for (gName, _gProds) in goldenGrammar.toArray do
+      if matchedGolden.contains gName then continue
+      let gProds := goldenGrammar.getD gName []
+      let fullMap := sMap.insert eName gName
+      let (score, newMap) := scoreNTMatch eProds gProds extNTs goldenNTs fullMap
+      -- Quality gate: require ≥50% golden coverage, or all golden prods matched
+      let acceptable := score.matched > 0 &&
+        (score.matched * 2 >= score.total || score.matched == score.total)
+      if acceptable && betterMatchScore score.matched score.total bestMatched bestTotal then
+        bestMatched := score.matched
+        bestTotal := score.total
+        bestGName := some gName
+        bestRen := newMap
+        bestNTScore := score
+    if bestMatched > 0 then
+      match bestGName with
+      | some gName =>
+        sMap := bestRen
+        matchedExt := matchedExt.insert eName
+        matchedGolden := matchedGolden.insert gName
+        alignment := alignment ++ [(eName, gName)]
+        perNT := perNT ++ [(eName, gName, bestNTScore)]
+        totalMatched := totalMatched + bestNTScore.matched
+        totalGolden := totalGolden + bestNTScore.total
+      | none => pure ()
+  let unmappedExt := extGrammar.toArray.toList.filterMap fun (k, _) =>
+    if matchedExt.contains k then none else some k
+  let unmappedGolden := goldenGrammar.toArray.toList.filterMap fun (k, _) =>
+    if matchedGolden.contains k then none else some k
+  -- Add unmatched golden NTs to total count
+  for (gName, _) in goldenGrammar.toArray do
+    if !matchedGolden.contains gName then
+      totalGolden := totalGolden + (goldenGrammar.getD gName []).length
+  { ntAlignment := alignment
+    perNT := perNT
+    totalMatched := totalMatched
+    totalGolden := totalGolden
+    unmappedExtracted := unmappedExt
+    unmappedGolden := unmappedGolden
+    symMap := sMap }
+
+/-- Name-independent structural grammar comparison.
+    Unlike structuralGoldenCompare which matches by NT name, this compares grammar structure
+    by finding the best alignment between extracted and golden NTs based on production shapes. -/
+def structuralGoldenCompareV2 (log : String → IO Unit)
+    (grammars : Array ExtractedNTGrammar)
+    (tokenNames : TokenNameTable)
+    (golden : Std.HashMap String (List (List String)) := goldenProds) : IO Unit := do
+  -- Flatten extracted grammar
+  let extGrammar := flattenExtracted grammars tokenNames
+  -- Phase 1: arity fingerprint pre-filter
+  let candidates := fingerprintCandidates extGrammar golden
+  -- Phase 2: greedy bipartite matching
+  let result := greedyNTAlignment extGrammar golden candidates
+  -- Report results
+  log "\n=== Structural Grammar Comparison V2 (name-independent) ==="
+  log s!"  Fingerprint candidates: {candidates.length} pairs from {extGrammar.size} extracted × {golden.size} golden NTs"
+  if result.ntAlignment.isEmpty then
+    log "  No structural NT matches found."
+  else
+    log s!"  NT alignment ({result.ntAlignment.length} pairs):"
+    for (eName, gName) in result.ntAlignment do
+      log s!"    {eName} ↔ {gName}"
+  -- Per-NT scores
+  for (eName, gName, score) in result.perNT do
+    let mark := if score.matched == score.total && score.total > 0 then " ✓" else ""
+    let extraStr := if score.extraExt > 0 then s!" (+{score.extraExt} extra)" else ""
+    log s!"    {eName} ↔ {gName}: {score.matched}/{score.total}{mark}{extraStr}"
+  -- Symbol map (terminal mappings only, not NTs)
+  let termMappings := result.symMap.toArray.filter fun (k, _) =>
+    !(extGrammar.toArray.any fun (eName, _) => eName == k)
+  if !termMappings.isEmpty then
+    let termPairs := termMappings.map fun (e, g) => s!"{e} ↔ {g}"
+    log s!"  Terminal mapping: {", ".intercalate termPairs.toList}"
+  -- Unmapped NTs
+  if !result.unmappedExtracted.isEmpty then
+    log s!"  Unmapped extracted NTs: {", ".intercalate result.unmappedExtracted}"
+  if !result.unmappedGolden.isEmpty then
+    log s!"  Unmapped golden NTs: {", ".intercalate result.unmappedGolden}"
+  -- Total score (only over matched golden NTs, not all golden NTs)
+  let matchedGoldenTotal := result.perNT.foldl (fun acc (_, _, s) => acc + s.total) 0
+  let mark := if result.totalMatched == matchedGoldenTotal && matchedGoldenTotal > 0 then " ✓" else ""
+  log s!"  Matched: {result.totalMatched}/{matchedGoldenTotal} productions (across {result.ntAlignment.length} NT pairs){mark}"
+  log s!"  Coverage: {result.ntAlignment.length}/{golden.size} golden NTs aligned"
+
 /-- Print EBNF grammar for all NT functions using LTS-based extraction.
     Uses ParserStructure for lexer identification and token names when available. -/
 def printLTSGrammar (log : String → IO Unit)
@@ -1683,4 +2007,6 @@ def printLTSGrammar (log : String → IO Unit)
     | none => pure ()
   -- Structural comparison against golden grammar
   structuralGoldenCompare log grammars tokenNames golden
+  -- Name-independent structural comparison (V2)
+  structuralGoldenCompareV2 log grammars tokenNames golden
 
