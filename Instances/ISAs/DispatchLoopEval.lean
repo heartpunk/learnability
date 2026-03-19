@@ -2842,6 +2842,142 @@ def stratifiedFixpoint
   log s!"  cache entries: {cacheContents.size}"
   return summaries
 
+/-! ## Weak Topological Ordering (Bourdoncle's Algorithm)
+
+Bourdoncle's hierarchical decomposition ("Efficient Chaotic Iteration
+Strategies with Widenings", 1993) computes the optimal iteration structure
+for fixpoint computation over a call graph.
+
+- Trivial SCCs (single vertex, no self-loop) → `WTOElem.vertex`
+- Non-trivial SCCs → select head (first DFS-visited), recursively compute
+  WTO of the SCC body, wrap in `WTOElem.component head body`
+
+The recursive iteration strategy (Theorem 5): only check the **head** of each
+component for stabilization — if the head hasn't changed, the whole component
+is stable. For nested mutual recursion, inner loops converge before outer
+loops re-iterate. -/
+
+/-- A WTO element: either a single vertex or a component (head + body). -/
+inductive WTOElem where
+  | vertex : UInt64 → WTOElem
+  | component : UInt64 → Array WTOElem → WTOElem
+  deriving Inhabited
+
+/-- Get the head address of a WTO element. -/
+def WTOElem.head : WTOElem → UInt64
+  | .vertex addr => addr
+  | .component addr _ => addr
+
+/-- DFS frame for iterative Tarjan: (node, successor_index, min_dfn). -/
+structure TarjanFrame where
+  node : UInt64
+  succIdx : Nat
+  minDfn : Nat
+  deriving Inhabited
+
+/-- Bourdoncle's WTO via modified Tarjan's SCC algorithm.
+    Returns the WTO as an array of elements in topological order.
+    Fuel bounds recursion depth (≤ number of nodes); never exhausted in practice. -/
+def computeWTO (nodes : Array UInt64) (edges : Array (UInt64 × UInt64))
+    (root : UInt64) (fuel : Nat := nodes.size + 1) : Array WTOElem :=
+  match fuel with
+  | 0 => #[]
+  | fuel + 1 => Id.run do
+  -- Adjacency list
+  let mut adj : Std.HashMap UInt64 (Array UInt64) := {}
+  for (src, tgt) in edges do
+    adj := adj.insert src ((adj.getD src #[]).push tgt)
+  -- DFS state
+  let mut dfn : Std.HashMap UInt64 Nat := {}
+  let mut num : Nat := 0
+  let mut stack : Array UInt64 := #[]
+  let mut onStack : Std.HashSet UInt64 := {}
+  let mut result : Array WTOElem := #[]
+  -- The node set for quick membership checks
+  let nodeSet : Std.HashSet UInt64 := nodes.foldl (fun s n => s.insert n) {}
+  let mut workStack : Array TarjanFrame := #[]
+  -- Process starting from root, then any unreachable nodes
+  let mut toVisit : Array UInt64 := #[root]
+  for n in nodes do
+    unless n == root do toVisit := toVisit.push n
+  for startNode in toVisit do
+    if dfn.contains startNode then continue
+    -- Push initial frame
+    num := num + 1
+    dfn := dfn.insert startNode num
+    stack := stack.push startNode
+    onStack := onStack.insert startNode
+    workStack := workStack.push ⟨startNode, 0, num⟩
+    while !workStack.isEmpty do
+      let frame := workStack.back!
+      let succs := adj.getD frame.node #[]
+      if frame.succIdx < succs.size then
+        let succ := succs[frame.succIdx]!
+        -- Advance successor index
+        workStack := workStack.pop.push { frame with succIdx := frame.succIdx + 1 }
+        if !nodeSet.contains succ then
+          continue  -- skip edges to nodes outside our scope
+        if !dfn.contains succ then
+          -- Tree edge: visit successor
+          num := num + 1
+          dfn := dfn.insert succ num
+          stack := stack.push succ
+          onStack := onStack.insert succ
+          workStack := workStack.push ⟨succ, 0, num⟩
+        else if onStack.contains succ then
+          -- Back edge: update min
+          let succDfn := dfn.getD succ 0
+          let curFrame := workStack.back!
+          if succDfn < curFrame.minDfn then
+            workStack := workStack.pop.push { curFrame with minDfn := succDfn }
+      else
+        -- All successors processed
+        workStack := workStack.pop
+        let nodeDfn := dfn.getD frame.node 0
+        if frame.minDfn == nodeDfn then
+          -- SCC head: pop the component from stack
+          let mut component : Array UInt64 := #[]
+          while !stack.isEmpty do
+            let top := stack.back!
+            stack := stack.pop
+            onStack := onStack.erase top
+            component := component.push top
+            if top == frame.node then break
+          if component.size == 1 then
+            -- Check for self-loop
+            let hasSelfLoop := (adj.getD frame.node #[]).any (· == frame.node)
+            if hasSelfLoop then
+              result := result.push (.component frame.node #[])
+            else
+              result := result.push (.vertex frame.node)
+          else
+            -- Non-trivial SCC: head is frame.node, rest are body
+            -- Recursively compute WTO of the body members
+            let bodyNodes := component.filter (· != frame.node)
+            let bodyEdges := edges.filter fun (s, t) =>
+              bodyNodes.any (· == s) && (bodyNodes.any (· == t) || t == frame.node)
+            let bodyWTO := computeWTO bodyNodes bodyEdges frame.node fuel
+            result := result.push (.component frame.node bodyWTO)
+        else
+          -- Propagate min to parent
+          if !workStack.isEmpty then
+            let parent := workStack.back!
+            if frame.minDfn < parent.minDfn then
+              workStack := workStack.pop.push { parent with minDfn := frame.minDfn }
+  return result
+termination_by fuel
+
+/-- Pretty-print a WTO for logging. -/
+partial def ppWTO (elems : Array WTOElem)
+    (nameOf : UInt64 → String := fun a => s!"0x{String.ofList (Nat.toDigits 16 a.toNat)}") :
+    String :=
+  let rec ppElem : WTOElem → String
+    | .vertex addr => nameOf addr
+    | .component head body =>
+      let bodyStr := ", ".intercalate (body.toList.map ppElem)
+      s!"({nameOf head} {bodyStr})"
+  " ".intercalate (elems.toList.map ppElem)
+
 /-! ## DFA & CFG Extraction -/
 
 /-- Strip rip-guard conjuncts from a PC, returning only the data guard. -/
