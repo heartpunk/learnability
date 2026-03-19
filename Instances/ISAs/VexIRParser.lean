@@ -305,6 +305,9 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
   | "CmpEQ8",   [a, b] => do
     let l ← parseExpr a st; let r ← parseExpr b st
     .ok (.eq64 (.and64 l (.const 0xFF)) (.and64 r (.const 0xFF)))
+  | "CmpEQ16",  [a, b] => do
+    let l ← parseExpr a st; let r ← parseExpr b st
+    .ok (.eq64 (.and64 l (.const 0xFFFF)) (.and64 r (.const 0xFFFF)))
   | "CmpEQ32",  [a, b] => do
     let l ← parseExpr a st; let r ← parseExpr b st
     .ok (.eq64 (.zext64 (.narrow32 l)) (.zext64 (.narrow32 r)))
@@ -328,6 +331,12 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
   | "CmpNE32",  [a, b] => do
     let l ← parseExpr a st; let r ← parseExpr b st
     .ok (.ne64 (.zext64 (.narrow32 l)) (.zext64 (.narrow32 r)))
+  | "CmpNE16",  [a, b] => do
+    let l ← parseExpr a st; let r ← parseExpr b st
+    .ok (.ne64 (.and64 l (.const 0xFFFF)) (.and64 r (.const 0xFFFF)))
+  | "CmpNE8",   [a, b] => do
+    let l ← parseExpr a st; let r ← parseExpr b st
+    .ok (.ne64 (.and64 l (.const 0xFF)) (.and64 r (.const 0xFF)))
   | "CmpLE64S", [a, b] => do
     -- Signed 64-bit LE: bias by 2^63 then unsigned compare (same pattern as CmpLT32S)
     let l ← parseExpr a st; let r ← parseExpr b st
@@ -347,7 +356,7 @@ def parseCond (op : String) (argsStr : String) (st : ParseState)
 
 private def isCondOp (op : String) : Bool :=
   op ∈ (["CmpEQ64", "CmpLT64U", "CmpLE64U", "CmpNE64", "CmpLE64S",
-          "CmpEQ8", "CmpEQ32", "CmpLT32U", "CmpLE32U", "CmpNE32",
+          "CmpEQ8", "CmpEQ16", "CmpEQ32", "CmpLT32U", "CmpLE32U", "CmpNE8", "CmpNE16", "CmpNE32",
           "CmpLT32S", "CmpLE32S"] : List String)
 
 private def isCondPropOp (op : String) : Bool :=
