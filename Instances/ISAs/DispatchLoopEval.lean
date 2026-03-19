@@ -2051,6 +2051,99 @@ def SubPool.intern {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [
     else (sub, { sp with pool := sp.pool.insert h sub, misses := sp.misses + 1 })
   | none => (sub, { sp with pool := sp.pool.insert h sub, misses := sp.misses + 1 })
 
+/-! ## Path History — ordered composition event tracking
+
+Branches carry an append-only path history alongside the flat PC. The flat
+`pc` field remains for all existing uses (dedup, simplification, SMT, hashing).
+The `history` field preserves the sequential ordering of composition events
+for grammar extraction: which guards were encountered, which functions were
+called/returned, and in what order.
+
+PathHistory is a cons-list (persistent/immutable). Branches sharing a common
+prefix (same body branch composed with different frontier branches) share the
+prefix in memory. Cost per branch: O(composition depth) extra pointers. -/
+
+/-- A path event: what happened at a composition step. -/
+inductive PathEvent (Reg : Type) where
+  | guard : SymPC Reg → PathEvent Reg       -- a PC guard encountered
+  | call : UInt64 → PathEvent Reg           -- called function at this address
+  | ret : UInt64 → PathEvent Reg            -- returned from function
+  | entry : UInt64 → PathEvent Reg          -- entered this function
+
+/-- Persistent path history — cons-list for prefix sharing. -/
+inductive PathHistory (Reg : Type) where
+  | root : PathHistory Reg
+  | cons : PathEvent Reg → PathHistory Reg → PathHistory Reg
+
+/-- Convert path history to array (most recent event first). -/
+def PathHistory.toArray {Reg : Type} : PathHistory Reg → Array (PathEvent Reg)
+  | .root => #[]
+  | .cons e h => #[e] ++ h.toArray
+
+/-- Length of path history. -/
+def PathHistory.length {Reg : Type} : PathHistory Reg → Nat
+  | .root => 0
+  | .cons _ h => 1 + h.length
+
+/-- Append a guard event to the history. -/
+def PathHistory.guard {Reg : Type} (pc : SymPC Reg) (h : PathHistory Reg) : PathHistory Reg :=
+  .cons (.guard pc) h
+
+/-- Append a call event to the history. -/
+def PathHistory.call {Reg : Type} (target : UInt64) (h : PathHistory Reg) : PathHistory Reg :=
+  .cons (.call target) h
+
+/-- Append a return event to the history. -/
+def PathHistory.ret {Reg : Type} (target : UInt64) (h : PathHistory Reg) : PathHistory Reg :=
+  .cons (.ret target) h
+
+/-- Append an entry event to the history. -/
+def PathHistory.entry {Reg : Type} (addr : UInt64) (h : PathHistory Reg) : PathHistory Reg :=
+  .cons (.entry addr) h
+
+/-- Split body branches into non-call (kept in body) and call-expanded
+    (seeded into initial frontier), with path history tracking.
+
+    Like `splitBodyAndExpandCalls` but records `.call target` and `.ret target`
+    events on each call-expanded branch, preserving the sequential call order
+    for grammar extraction. -/
+def splitBodyAndExpandCallsH {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+    (ip_reg : Reg)
+    (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
+    (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg)))) :
+    (Array (Branch (SymSub Reg) (SymPC Reg))  -- nonCallBody
+    × Array (Branch (SymSub Reg) (SymPC Reg) × PathHistory Reg)  -- callResults with history
+    × Nat × Nat × Nat) := Id.run do  -- callsExpanded, branchesAdded, dropped
+  let isa := vexSummaryISA Reg
+  let mut nonCallBody : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+  let mut callResults : Array (Branch (SymSub Reg) (SymPC Reg) × PathHistory Reg) := #[]
+  let mut callsExpanded : Nat := 0
+  let mut branchesAdded : Nat := 0
+  let mut dropped : Nat := 0
+  for b in bodyArr do
+    match extractRipTarget ip_reg b.sub with
+    | some target =>
+      match summaries.get? target with
+      | some summaryBranches =>
+        callsExpanded := callsExpanded + 1
+        for sb in summaryBranches do
+          let composed := b.compose isa sb
+          match simplifyBranch composed with
+          | none => dropped := dropped + 1
+          | some b' =>
+            -- Record call → guard → ret in history (most recent first in cons-list)
+            let hist := PathHistory.root
+              |>.call target
+              |>.guard (isa.pc_lift b.sub sb.pc)
+              |>.ret target
+            callResults := callResults.push (b', hist)
+            branchesAdded := branchesAdded + 1
+      | none =>
+        nonCallBody := nonCallBody.push b
+    | none =>
+      nonCallBody := nonCallBody.push b
+  return (nonCallBody, callResults, callsExpanded, branchesAdded, dropped)
+
 /-- Per-function stabilization with optional initial frontier seeding.
     When initialFrontier is non-empty, those branches are added to the
     initial state (along with skip) instead of starting from skip alone.
