@@ -1,4 +1,4 @@
-import Instances.ISAs.DispatchLoopEval
+import Instances.ISAs.DispatchLoopStabilization
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
