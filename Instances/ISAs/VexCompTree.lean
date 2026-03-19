@@ -57,7 +57,7 @@ def pathToCompTree {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 private theorem partialInit_matches' {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (input : ConcreteState Reg) :
     PartialSummaryMatches input (input, TempEnv.empty) PartialSummary.init :=
-  ⟨by simp [PartialSummary.init], fun tmp => by simp [PartialSummary.init, TempEnv.empty, SymTempEnv.empty]⟩
+  ⟨by simp [PartialSummary.init], fun tmp => by simp [PartialSummary.init, TempEnv.empty, SymTempEnv.get_empty]⟩
 
 private theorem treeBehavior_blockToCompTree_from {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (ip_reg : Reg) (ps : PartialSummary Reg) (stmts : List (Stmt Reg)) (next : UInt64)

@@ -13,7 +13,7 @@ private theorem lowerInit_matches {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   constructor
   · simp
   · intro tmp
-    simp [TempEnv.empty, SymTempEnv.empty]
+    simp [TempEnv.empty, SymTempEnv.get_empty]
 
 private theorem partialInit_matches {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (input : ConcreteState Reg) :
@@ -21,7 +21,7 @@ private theorem partialInit_matches {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   constructor
   · simp [PartialSummary.init]
   · intro tmp
-    simp [PartialSummary.init, TempEnv.empty, SymTempEnv.empty]
+    simp [PartialSummary.init, TempEnv.empty, SymTempEnv.get_empty]
 
 private theorem lowerStmt_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (input : ConcreteState Reg) (ip_reg : Reg) (stmt : Stmt Reg)

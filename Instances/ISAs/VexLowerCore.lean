@@ -73,7 +73,7 @@ def lowerExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub : SymSub Reg) (temps : SymTempEnv Reg) : Expr Reg → SymExpr Reg
   | .const value => .const value
   | .get reg => sub.regs reg
-  | .tmp tmp => temps tmp
+  | .tmp tmp => temps.get tmp
   | .narrow32 expr => foldUn .low32 mask32 (lowerExpr sub temps expr)
   | .zext64 expr => foldUn .uext32 mask32 (lowerExpr sub temps expr)
   | .sext8to32 expr => .sext8to32 (lowerExpr sub temps expr)

@@ -67,7 +67,7 @@ instance {Reg : Type} [DecidableEq Reg] [Fintype Reg] : DecidableEq (SymSub Reg)
     · exact isFalse (fun h => hMem (congrArg SymSub.mem h))
   · exact isFalse (fun h => hRegs (congrArg SymSub.regs h))
 
-abbrev SymTempEnv (Reg : Type) := Nat → SymExpr Reg
+abbrev SymTempEnv (Reg : Type) := Std.HashMap Nat (SymExpr Reg)
 
 structure Summary (Reg : Type) where
   sub : SymSub Reg
@@ -120,21 +120,29 @@ def SymSub.writeMem {Reg : Type} (sub : SymSub Reg) (mem : SymMem Reg) : SymSub 
   simp [SymSub.write, h]
 
 
-def SymTempEnv.empty {Reg : Type} : SymTempEnv Reg := fun _ => .const 0
+def SymTempEnv.empty {Reg : Type} : SymTempEnv Reg := {}
 
-def SymTempEnv.write {Reg : Type}
+@[inline] def SymTempEnv.get {Reg : Type} (temps : SymTempEnv Reg) (tmp : Nat) : SymExpr Reg :=
+  temps.getD tmp (.const 0)
+
+@[inline] def SymTempEnv.write {Reg : Type}
     (temps : SymTempEnv Reg) (tmp : Nat) (expr : SymExpr Reg) : SymTempEnv Reg :=
-  fun tmp' => if tmp' = tmp then expr else temps tmp'
+  temps.insert tmp expr
 
-@[simp] theorem SymTempEnv.write_same {Reg : Type}
+@[simp] theorem SymTempEnv.get_write_same {Reg : Type}
     (temps : SymTempEnv Reg) (tmp : Nat) (expr : SymExpr Reg) :
-    SymTempEnv.write temps tmp expr tmp = expr := by
-  simp [SymTempEnv.write]
+    (SymTempEnv.write temps tmp expr).get tmp = expr := by
+  simp [SymTempEnv.get, SymTempEnv.write]
 
-@[simp] theorem SymTempEnv.write_other {Reg : Type}
+@[simp] theorem SymTempEnv.get_write_other {Reg : Type}
     (temps : SymTempEnv Reg) {tmp tmp' : Nat} (expr : SymExpr Reg)
-    (h : tmp' ≠ tmp) : SymTempEnv.write temps tmp expr tmp' = temps tmp' := by
-  simp [SymTempEnv.write, h]
+    (h : tmp' ≠ tmp) : (SymTempEnv.write temps tmp expr).get tmp' = temps.get tmp' := by
+  unfold SymTempEnv.get SymTempEnv.write
+  simp [Std.HashMap.getD_insert, Ne.symm h]
+
+@[simp] theorem SymTempEnv.get_empty {Reg : Type} (tmp : Nat) :
+    (SymTempEnv.empty : SymTempEnv Reg).get tmp = .const 0 := by
+  simp [SymTempEnv.get, SymTempEnv.empty]
 
 mutual
 @[simp] def evalSymExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
