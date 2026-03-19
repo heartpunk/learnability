@@ -122,7 +122,9 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     | some clf => rawClosure.map (simplifyLoadStorePCR clf)
     | none => rawClosure
   let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
+  let mut currentByHash : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
   current := current.insert initBranch
+  currentByHash := currentByHash.insert (hash initBranch) #[initBranch]
   -- initialFrontier seeded into current AFTER closedness check (needs projection)
   -- Compute closed projection (same as computeStabilizationHS)
   let mut dataPCRegs : Std.HashSet Reg := {}
@@ -193,6 +195,8 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   -- Seed initial frontier into current set
   for b in frontier do
     current := current.insert b
+    let h := hash b
+    currentByHash := currentByHash.insert h ((currentByHash.getD h #[]).push b)
   log s!"    initial frontier: {frontier.size} branches (skip + {initialFrontier.size} call-expanded)"
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
@@ -215,12 +219,16 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
     -- Phase 1: structural dedup — collect all branches not already in current
+    -- Hash each branch ONCE upfront, then use cached hash for set operations
     let mut semCands : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
     for b in simplified do
-      if current.contains b then
+      let h := hash b
+      let bucket := currentByHash.getD h #[]
+      if bucket.any (· == b) then
         dupes := dupes + 1
       else
-        current := current.insert b  -- ALL structurally distinct branches kept for summary
+        currentByHash := currentByHash.insert h (bucket.push b)
+        current := current.insert b
         semCands := semCands.push b
     -- Branch cap: OOM safety valve
     if current.size > maxBranches then
