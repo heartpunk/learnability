@@ -583,8 +583,9 @@ instance {Reg : Type} [Hashable Reg] : Hashable (SymPC Reg) := ⟨hashSymPC⟩
 
 instance {Reg : Type} [Hashable Reg] [EnumReg Reg] : Hashable (SymSub Reg) where
   hash sub :=
-    let regHash := EnumReg.allRegs.foldl (fun acc r => mixHash acc (hash (sub.regs r))) 0
-    mixHash regHash (hash sub.mem)
+    -- Register-only hash: skip deep memory chain traversal for performance.
+    -- Memory differences still caught by structural equality on hash collision.
+    EnumReg.allRegs.foldl (fun acc r => mixHash acc (hash (sub.regs r))) 0
 
 instance {Reg : Type} [Hashable Reg] [EnumReg Reg] : Hashable (Summary Reg) where
   hash s := mixHash (hash s.sub) (hash s.pc)
