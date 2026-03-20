@@ -535,38 +535,52 @@ theorem evalSymPC_subst {Reg : Type} [DecidableEq Reg] [Fintype Reg]
 /-! ## Hashable instances for fast HashSet-based computation -/
 
 mutual
-def hashSymExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → UInt64
+/-- Depth-limited hash for SymExpr. Recurses at most `d` levels.
+    Provides good discrimination from top-level structure while avoiding
+    O(tree_depth) traversal of deep expression trees. -/
+def hashSymExprD {Reg : Type} [Hashable Reg] (d : Nat) : SymExpr Reg → UInt64
   | .const v => mixHash 1 (hash v)
   | .reg r => mixHash 2 (hash r)
-  | .low32 e => mixHash 3 (hashSymExpr e)
-  | .uext32 e => mixHash 4 (hashSymExpr e)
-  | .sext8to32 e => mixHash 5 (hashSymExpr e)
-  | .sext32to64 e => mixHash 6 (hashSymExpr e)
-  | .sub32 l r => mixHash 7 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .shl32 l r => mixHash 8 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .and32 l r => mixHash 17 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .or32 l r => mixHash 41 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .xor32 l r => mixHash 41 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .add64 l r => mixHash 9 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .sub64 l r => mixHash 10 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .xor64 l r => mixHash 11 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .and64 l r => mixHash 12 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .or64 l r => mixHash 13 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .shl64 l r => mixHash 14 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .shr64 l r => mixHash 15 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .mul64 l r => mixHash 42 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .mul32 l r => mixHash 43 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .not64 x => mixHash 44 (hashSymExpr x)
-  | .not32 x => mixHash 45 (hashSymExpr x)
-  | .sar64 l r => mixHash 46 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .sar32 l r => mixHash 47 (mixHash (hashSymExpr l) (hashSymExpr r))
-  | .ite c t f => mixHash 48 (mixHash (hashSymExpr c) (mixHash (hashSymExpr t) (hashSymExpr f)))
-  | .load w m a => mixHash 16 (mixHash (hash w.byteCount) (mixHash (hashSymMem m) (hashSymExpr a)))
+  | _ => if d == 0 then 0 else match ‹SymExpr Reg› with
+  | .low32 e => mixHash 3 (hashSymExprD (d-1) e)
+  | .uext32 e => mixHash 4 (hashSymExprD (d-1) e)
+  | .sext8to32 e => mixHash 5 (hashSymExprD (d-1) e)
+  | .sext32to64 e => mixHash 6 (hashSymExprD (d-1) e)
+  | .sub32 l r => mixHash 7 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .shl32 l r => mixHash 8 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .and32 l r => mixHash 17 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .or32 l r => mixHash 41 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .xor32 l r => mixHash 41 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .add64 l r => mixHash 9 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .sub64 l r => mixHash 10 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .xor64 l r => mixHash 11 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .and64 l r => mixHash 12 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .or64 l r => mixHash 13 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .shl64 l r => mixHash 14 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .shr64 l r => mixHash 15 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .mul64 l r => mixHash 42 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .mul32 l r => mixHash 43 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .not64 x => mixHash 44 (hashSymExprD (d-1) x)
+  | .not32 x => mixHash 45 (hashSymExprD (d-1) x)
+  | .sar64 l r => mixHash 46 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .sar32 l r => mixHash 47 (mixHash (hashSymExprD (d-1) l) (hashSymExprD (d-1) r))
+  | .ite c t f => mixHash 48 (mixHash (hashSymExprD (d-1) c) (mixHash (hashSymExprD (d-1) t) (hashSymExprD (d-1) f)))
+  | .load w m a => mixHash 16 (mixHash (hash w.byteCount) (mixHash (hashSymMemD (d-1) m) (hashSymExprD (d-1) a)))
+  | .const _ => 0  -- unreachable, handled above
+  | .reg _ => 0    -- unreachable, handled above
 
-def hashSymMem {Reg : Type} [Hashable Reg] : SymMem Reg → UInt64
+/-- Depth-limited hash for SymMem. -/
+def hashSymMemD {Reg : Type} [Hashable Reg] (d : Nat) : SymMem Reg → UInt64
   | .base => 17
-  | .store w m a v => mixHash 18 (mixHash (hash w.byteCount) (mixHash (hashSymMem m) (mixHash (hashSymExpr a) (hashSymExpr v))))
+  | .store w m a v =>
+    if d == 0 then 18
+    else mixHash 18 (mixHash (hash w.byteCount) (mixHash (hashSymMemD (d-1) m) (mixHash (hashSymExprD (d-1) a) (hashSymExprD (d-1) v))))
 end
+
+/-- Default hash depth: 4 levels gives O(~256) nodes max per hash.
+    Provides good discrimination while avoiding O(10K+) traversals. -/
+def hashSymExpr {Reg : Type} [Hashable Reg] : SymExpr Reg → UInt64 := hashSymExprD 4
+def hashSymMem {Reg : Type} [Hashable Reg] : SymMem Reg → UInt64 := hashSymMemD 4
 
 instance {Reg : Type} [Hashable Reg] : Hashable (SymExpr Reg) := ⟨hashSymExpr⟩
 instance {Reg : Type} [Hashable Reg] : Hashable (SymMem Reg) := ⟨hashSymMem⟩
