@@ -59,6 +59,9 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
   if missPairs.size > 0 then
     let chunkSize := 1000
     let totalChunks := (missPairs.size + chunkSize - 1) / chunkSize
+    if pairs.size > 10000 then
+      IO.eprintln s!"      [smt-trace] starting script gen: {missPairs.size} misses in {totalChunks} chunks"
+      (← IO.getStderr).flush
     -- Step 2a: generate all chunk scripts
     let t_gen_start ← IO.monoMsNow
     let mut chunkScripts : Array (Nat × String) := #[]  -- (chunkIdx, script)
@@ -81,6 +84,10 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
         script := script ++ "(pop)\n"
       script := script ++ "(exit)\n"
       chunkScripts := chunkScripts.push (chunkIdx, script)
+      if pairs.size > 10000 && (chunkIdx % 50 == 0 || chunkIdx == totalChunks - 1) then
+        let t_now ← IO.monoMsNow
+        IO.eprintln s!"      [smt-trace] script gen {chunkIdx+1}/{totalChunks}: {t_now - t_gen_start}ms elapsed, {script.length} bytes"
+        (← IO.getStderr).flush
       chunkStart := chunkEnd
       chunkIdx := chunkIdx + 1
     let t_gen_end ← IO.monoMsNow
