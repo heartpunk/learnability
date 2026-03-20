@@ -384,10 +384,13 @@ def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion :
     | some (addr, _vals) =>
       let name := funcEntries.getD addr "unknown"
       log s!"  Lexer identified: {name} @ {hexAddr addr}"
-      -- Build token name table from lexer's summary branches
-      let lexerBranches := summaries.getD addr #[]
+      -- Build token name table from lexer's BODY branches (not projected summaries,
+      -- which have zeroed memory and lose the token-writing stores)
       let lexerSpec := functions.find? (·.entryAddr == addr) |>.getD ⟨name, addr, []⟩
-      let tokenNameTable ← deriveTokenNames lexerSpec lexerBranches log
+      let lexerBodyBranches := match parseBlocksWithAddresses lexerSpec.blocks with
+        | .ok pairs => flatBodyDenotArray Amd64Reg.rip pairs
+        | .error _ => #[]
+      let tokenNameTable ← deriveTokenNames lexerSpec lexerBodyBranches log
       log s!"  Token names: {tokenNameTable.size} entries"
       pure (addr, name, tokenNameTable)
     | none =>

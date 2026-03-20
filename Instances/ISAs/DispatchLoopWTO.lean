@@ -250,9 +250,13 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     --   (for each closure PC phi_i, is branch.pc AND NOT phi_i UNSAT?) and
     --   compare against rep semantic sigs.
     let mut semCollapsed : Nat := 0
+    let t_smt_start ← IO.monoMsNow
     if semCands.size > 0 then
       -- Compute syntactic sigs for all candidates
+      let t_synsig ← IO.monoMsNow
       let candSynSigs := semCands.map (fun c => computePCSignature closure c.pc)
+      let t_synsig_done ← IO.monoMsNow
+      log s!"      [trace] syntactic sigs: {t_synsig_done - t_synsig}ms for {semCands.size} candidates × {closure.size} closure"
       -- Fast path: which candidates have a syntactic sig matching an existing rep?
       let mut synMatched : Std.HashSet Nat := {}
       for ci in [:semCands.size] do
@@ -329,7 +333,9 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
                   semMatched := semMatched.insert ci
                   matched := true
               ri := ri + 1
+      let t_smt_end ← IO.monoMsNow
       log s!"    smt conv: {totalSMTQueries}q (hits={totalSMTCacheHits} misses={totalSMTQueries - totalSMTCacheHits}) → syn-collapsed={synMatched.size} sem-collapsed={semMatched.size}"
+      log s!"      [trace] smt phase: {t_smt_end - t_smt_start}ms ({totalSMTQueries} queries, {semCands.size} candidates, {closure.size} closure PCs)"
       -- Classify: collapse or promote to new equivalence class
       for ci in [:semCands.size] do
         if synMatched.contains ci || semMatched.contains ci then
