@@ -171,11 +171,14 @@ def dispatchLoopEvalFromFiles (blocksJson : System.FilePath) (elfBinary : System
       log s!"  WARNING: {result.orphanCount} blocks not in any function symbol range"
     runPipeline result.functions (log := log)
 
-/-- Standard log function: writes to both stdout and a log file. -/
+/-- Standard log function: writes to both stdout and a log file.
+    Flushes stdout after each line to ensure output appears immediately
+    even when stdout is redirected (e.g., in parallel runners). -/
 def mkLogger (logPath : System.FilePath) : IO (String → IO Unit) := do
   IO.FS.writeFile logPath ""
   return fun msg => do
     IO.println msg
+    (← IO.getStdout).flush
     let h ← IO.FS.Handle.mk logPath .append
     h.putStrLn msg
 

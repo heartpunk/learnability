@@ -15,8 +15,8 @@ terminal_subjects := "libtsm st"
 interpreter_subjects := "lua quickjs"
 all_subjects := subjects + " " + terminal_subjects + " " + interpreter_subjects
 
-# Max concurrent analysis jobs (memory-limited: QuickJS peaks at ~12GB)
-parallel_jobs := "4"
+# Max concurrent analysis jobs
+parallel_jobs := "8"
 
 # Remote builder for cross-arch extraction (assumes ambient ssh + nix)
 remote := "abraxas"
@@ -261,7 +261,7 @@ analyze-all-parallel *flags: build
     esac
     FUNCS_FLAG=""
     if [[ -n "\$FUNCS" ]]; then FUNCS_FLAG="--functions \$FUNCS"; fi
-    .lake/build/bin/dispatchLoopEval "\$INPUT" \$FUNCS_FLAG "\$@" > ".lake/\${s}_analysis.log" 2>&1 \
+    stdbuf -oL -eL .lake/build/bin/dispatchLoopEval "\$INPUT" \$FUNCS_FLAG "\$@" > ".lake/\${s}_analysis.log" 2>&1 \
         && echo "  \$s DONE" || echo "  \$s FAILED"
     EOF
     chmod +x "$HELPER"
