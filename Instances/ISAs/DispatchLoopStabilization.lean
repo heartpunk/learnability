@@ -35,6 +35,7 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
     (tmpFile : System.FilePath := ".lake/smt_cached.smt2") :
     IO (Array Bool × Nat) := do
   if pairs.size == 0 then return (#[], 0)
+  let t0 ← IO.monoMsNow
   let c ← cache.get
   -- Phase 1: check cache, collect misses.
   -- missOrigIdx[j] = index into `pairs`; missPairs[j] = the (A,B) pair.
@@ -51,14 +52,20 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
       missOrigIdx := missOrigIdx.push pairIdx
       missPairs := missPairs.push (a, b)
     pairIdx := pairIdx + 1
+  let t1 ← IO.monoMsNow
+  if pairs.size > 10000 then
+    IO.eprintln s!"      [smt-trace] cache check: {t1 - t0}ms, {pairs.size} pairs → {hits} hits, {missPairs.size} misses"
   -- Phase 2: batch CVC5 for cache misses
   if missPairs.size > 0 then
     let chunkSize := 1000
+    let totalChunks := (missPairs.size + chunkSize - 1) / chunkSize
     let mut allMissResults : Array Bool := #[]
     let mut chunkStart := 0
+    let mut chunkIdx := 0
     while chunkStart < missPairs.size do
       let chunkEnd := min (chunkStart + chunkSize) missPairs.size
       let chunk := missPairs.extract chunkStart chunkEnd
+      let t_script_start ← IO.monoMsNow
       let mut regNames : Std.HashSet String := {}
       let mut needsMem := false
       for (a, b) in chunk do
@@ -72,11 +79,18 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
         script := script ++ "(check-sat)\n"
         script := script ++ "(pop)\n"
       script := script ++ "(exit)\n"
+      let t_script_end ← IO.monoMsNow
       IO.FS.writeFile tmpFile script
+      let t_write_end ← IO.monoMsNow
       let smtOut ← IO.Process.output { cmd := "cvc5", args := #["--incremental", tmpFile.toString] }
+      let t_cvc5_end ← IO.monoMsNow
       allMissResults := allMissResults ++ parseSMTResults smtOut.stdout
+      if pairs.size > 10000 && (chunkIdx % 50 == 0 || chunkIdx == totalChunks - 1) then
+        IO.eprintln s!"      [smt-trace] chunk {chunkIdx+1}/{totalChunks}: script {t_script_end - t_script_start}ms, write {t_write_end - t_script_end}ms, cvc5 {t_cvc5_end - t_write_end}ms ({script.length} bytes)"
       chunkStart := chunkEnd
+      chunkIdx := chunkIdx + 1
     -- Store results in cache and in output array
+    let t_store_start ← IO.monoMsNow
     let mut c' ← cache.get
     let mut missIdx : Nat := 0
     for (a, b) in missPairs do
@@ -86,6 +100,9 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
       c' := c'.insert (smtImplCacheKey a b) isUnsat
       missIdx := missIdx + 1
     cache.set c'
+    let t_store_end ← IO.monoMsNow
+    if pairs.size > 10000 then
+      IO.eprintln s!"      [smt-trace] store results: {t_store_end - t_store_start}ms, total smt: {t_store_end - t0}ms"
   -- Phase 3: unwrap
   return (results.map (fun r => r.getD false), hits)
 
