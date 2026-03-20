@@ -280,8 +280,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       if smtCandIdxs.size > 0 && closure.size > 0 then
         let n := closure.size
         -- Build batch of PCs needing semantic sig computation:
-        -- (1) reps with uncomputed sem sigs, (2) SMT candidate branch PCs.
-        -- Use Array.extract to avoid [i]! on SymPC/Branch arrays.
+        let t_batch_build ← IO.monoMsNow
         let mut batchPCs      : Array (SymPC Reg) := #[]
         let mut batchIsRep    : Array Bool        := #[]
         let mut batchRepIdxs  : Array Nat         := #[]
@@ -293,20 +292,29 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
               batchPCs := batchPCs.push pc
             batchIsRep    := batchIsRep.push true
             batchRepIdxs  := batchRepIdxs.push ri
-            batchCandIdxs := batchCandIdxs.push 0  -- dummy
+            batchCandIdxs := batchCandIdxs.push 0
           | _ => pure ()
         for ci in smtCandIdxs do
           for b in semCands.extract ci (ci + 1) do
             batchPCs := batchPCs.push b.pc
           batchIsRep    := batchIsRep.push false
-          batchRepIdxs  := batchRepIdxs.push 0  -- dummy
+          batchRepIdxs  := batchRepIdxs.push 0
           batchCandIdxs := batchCandIdxs.push ci
+        let t_batch_built ← IO.monoMsNow
+        log s!"      [trace] batch build: {t_batch_built - t_batch_build}ms, {batchPCs.size} PCs × {n} closure = {batchPCs.size * n} pairs"
         -- Batch CVC5 with caching: for each pc in batchPCs, n queries (one per closure PC).
+        let t_pairs_start ← IO.monoMsNow
         let mut convPairs : Array (SymPC Reg × SymPC Reg) := #[]
         for pc in batchPCs do
           for phi in closure do
             convPairs := convPairs.push (pc, phi)
+        let t_pairs_end ← IO.monoMsNow
+        log s!"      [trace] convPairs array: {t_pairs_end - t_pairs_start}ms for {convPairs.size} pairs"
+        let t_smt_call ← IO.monoMsNow
+        log s!"      [trace] entering smtCheckImplCached: {convPairs.size} pairs"
         let (allSemResults, convHits) ← smtCheckImplCached smtCache convPairs ".lake/smt_semsig.smt2"
+        let t_smt_done ← IO.monoMsNow
+        log s!"      [trace] smtCheckImplCached done: {t_smt_done - t_smt_call}ms, {convHits} hits"
         totalSMTQueries := convPairs.size
         totalSMTCacheHits := convHits
         -- Assign sem sigs: allSemResults[si*n .. (si+1)*n] for batchPCs[si]
