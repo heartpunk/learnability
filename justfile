@@ -238,35 +238,54 @@ analyze-all-parallel *flags: build
     set -euo pipefail
     JOBS={{parallel_jobs}}
     echo "Build complete. Running all subjects with $JOBS parallel jobs..."
-    # Run subjects in parallel — each resolves its own input/functions
-    for s in {{all_subjects}}; do
-        (
-            FUNCS="" INPUT="reference/$s/blocks.json"
-            case "$s" in
-                tinyc)                   FUNCS="{{_funcs_tinyc}}" ;;
-                json)                    FUNCS="{{_funcs_json}}" ;;
-                cjson)                   FUNCS="{{_funcs_cjson}}" ;;
-                parson)                  FUNCS="{{_funcs_parson}}" ;;
-                lisp)                    FUNCS="{{_funcs_lisp}}" ;;
-                calc)                    FUNCS="{{_funcs_calc}}" ;;
-                simplearithmeticparser)  FUNCS="{{_funcs_simplearithmeticparser}}" ;;
-                cgi_decode)              FUNCS="{{_funcs_cgi_decode}}" ;;
-                mjs)                     FUNCS="{{_funcs_mjs}}" ;;
-                libtsm)                  FUNCS="{{_funcs_libtsm}}"; INPUT="{{_input_libtsm}}" ;;
-                st)                      FUNCS="{{_funcs_st}}"; INPUT="{{_input_st}}" ;;
-                lua)                     FUNCS="{{_funcs_lua}}"; INPUT="{{_input_lua}}" ;;
-                quickjs)                 FUNCS="{{_funcs_quickjs}}"; INPUT="{{_input_quickjs}}" ;;
-            esac
-            FUNCS_FLAG=""
-            if [[ -n "$FUNCS" ]]; then FUNCS_FLAG="--functions $FUNCS"; fi
-            echo "═══ $s ═══"
-            lake exe dispatchLoopEval "$INPUT" $FUNCS_FLAG {{flags}} > ".lake/${s}_analysis.log" 2>&1 \
-                && echo "  $s DONE" || echo "  $s FAILED (see .lake/${s}_analysis.log)"
-        ) &
-        # Limit concurrent jobs
-        while [[ $(jobs -r | wc -l) -ge $JOBS ]]; do sleep 1; done
-    done
-    wait
+    # Write a helper script that resolves subject → command, then use xargs -P
+    HELPER=$(mktemp)
+    cat > "$HELPER" << 'SCRIPT'
+    #!/usr/bin/env bash
+    s="$1"; shift
+    FUNCS="" INPUT="reference/$s/blocks.json"
+    case "$s" in
+        tinyc)                   FUNCS="FUNCS_TINYC" ;;
+        json)                    FUNCS="FUNCS_JSON" ;;
+        cjson)                   FUNCS="FUNCS_CJSON" ;;
+        parson)                  FUNCS="FUNCS_PARSON" ;;
+        lisp)                    FUNCS="FUNCS_LISP" ;;
+        calc)                    FUNCS="FUNCS_CALC" ;;
+        simplearithmeticparser)  FUNCS="FUNCS_SAP" ;;
+        cgi_decode)              FUNCS="FUNCS_CGI" ;;
+        mjs)                     FUNCS="FUNCS_MJS" ;;
+        libtsm)                  FUNCS="FUNCS_LIBTSM"; INPUT="INPUT_LIBTSM" ;;
+        st)                      FUNCS="FUNCS_ST"; INPUT="INPUT_ST" ;;
+        lua)                     FUNCS="FUNCS_LUA"; INPUT="INPUT_LUA" ;;
+        quickjs)                 FUNCS="FUNCS_QUICKJS"; INPUT="INPUT_QUICKJS" ;;
+    esac
+    FUNCS_FLAG=""
+    if [[ -n "$FUNCS" ]]; then FUNCS_FLAG="--functions $FUNCS"; fi
+    echo "═══ $s ═══"
+    lake exe dispatchLoopEval "$INPUT" $FUNCS_FLAG "$@" > ".lake/${s}_analysis.log" 2>&1 \
+        && echo "  $s DONE" || echo "  $s FAILED"
+    SCRIPT
+    # Bake in the actual function lists via sed
+    sed -i "s|FUNCS_TINYC|{{_funcs_tinyc}}|" "$HELPER"
+    sed -i "s|FUNCS_JSON|{{_funcs_json}}|" "$HELPER"
+    sed -i "s|FUNCS_CJSON|{{_funcs_cjson}}|" "$HELPER"
+    sed -i "s|FUNCS_PARSON|{{_funcs_parson}}|" "$HELPER"
+    sed -i "s|FUNCS_LISP|{{_funcs_lisp}}|" "$HELPER"
+    sed -i "s|FUNCS_CALC|{{_funcs_calc}}|" "$HELPER"
+    sed -i "s|FUNCS_SAP|{{_funcs_simplearithmeticparser}}|" "$HELPER"
+    sed -i "s|FUNCS_CGI|{{_funcs_cgi_decode}}|" "$HELPER"
+    sed -i "s|FUNCS_MJS|{{_funcs_mjs}}|" "$HELPER"
+    sed -i "s|FUNCS_LIBTSM|{{_funcs_libtsm}}|" "$HELPER"
+    sed -i "s|INPUT_LIBTSM|{{_input_libtsm}}|" "$HELPER"
+    sed -i "s|FUNCS_ST|{{_funcs_st}}|" "$HELPER"
+    sed -i "s|INPUT_ST|{{_input_st}}|" "$HELPER"
+    sed -i "s|FUNCS_LUA|{{_funcs_lua}}|" "$HELPER"
+    sed -i "s|INPUT_LUA|{{_input_lua}}|" "$HELPER"
+    sed -i "s|FUNCS_QUICKJS|{{_funcs_quickjs}}|" "$HELPER"
+    sed -i "s|INPUT_QUICKJS|{{_input_quickjs}}|" "$HELPER"
+    chmod +x "$HELPER"
+    echo "{{all_subjects}}" | tr ' ' '\n' | xargs -P "$JOBS" -I {} bash "$HELPER" {} {{flags}}
+    rm -f "$HELPER"
     echo "=== Summary ==="
     for s in {{all_subjects}}; do
         if [[ -f ".lake/${s}_analysis.log" ]]; then
