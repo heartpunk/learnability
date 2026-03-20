@@ -1,4 +1,4 @@
-import Instances.ISAs.DispatchLoopEval
+import Instances.ISAs.DispatchLoopPipeline
 
 /-!
 # DispatchLoopTestSubjects — Test subject definitions for grammar extraction
