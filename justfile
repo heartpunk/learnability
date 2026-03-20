@@ -223,13 +223,19 @@ analyze-json subject: build
     fi
     lake exe dispatchLoopEval "$INPUT" $FUNCS_FLAG --json
 
-# Analyze all subjects
+# Analyze all subjects (sequential)
 analyze-all *flags: build
-    for s in {{all_subjects}}; do \
-        echo "═══ $s ═══"; \
-        just analyze $s {{flags}} || true; \
-        echo; \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    RUNDIR=".lake/runs/$(date -Iseconds)"
+    mkdir -p "$RUNDIR"
+    echo "Results in $RUNDIR"
+    for s in {{all_subjects}}; do
+        echo "═══ $s ═══"
+        just analyze $s {{flags}} 2>&1 | tee "$RUNDIR/${s}.log" || true
+        echo
     done
+    ln -sfn "$(basename $RUNDIR)" .lake/runs/latest
 
 # Analyze all subjects in parallel (max jobs limited by memory)
 # Builds once sequentially first, then runs analysis jobs in parallel via lake exe
