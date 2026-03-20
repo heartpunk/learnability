@@ -165,6 +165,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       let t_synsig_done ← IO.monoMsNow
       log s!"      [trace] syntactic sigs: {t_synsig_done - t_synsig}ms for {semCands.size} candidates × {closure.size} closure"
       -- Fast path: which candidates have a syntactic sig matching an existing rep?
+      let t_synmatch ← IO.monoMsNow
       let mut synMatched : Std.HashSet Nat := {}
       for ci in [:semCands.size] do
         let csig := candSynSigs[ci]!
@@ -174,11 +175,13 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
             synMatched := synMatched.insert ci
             ri := convRepSynSigs.size  -- break
           ri := ri + 1
+      let t_synmatched ← IO.monoMsNow
       -- Collect SMT candidates: those with no syntactic match
       let mut smtCandIdxs : Array Nat := #[]
       for ci in [:semCands.size] do
         unless synMatched.contains ci do
           smtCandIdxs := smtCandIdxs.push ci
+      log s!"      [trace] syn matching: {t_synmatched - t_synmatch}ms, {synMatched.size} matched, {smtCandIdxs.size} need SMT (reps={convRepSynSigs.size})"
       -- Semantic path: only if there are unmatched candidates and closure is non-empty
       let mut candSemSigsArr : Array (Option (Array Bool)) := Array.replicate semCands.size none
       let mut totalSMTQueries := 0
