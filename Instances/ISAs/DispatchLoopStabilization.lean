@@ -55,17 +55,18 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
   let t1 ← IO.monoMsNow
   if pairs.size > 10000 then
     IO.eprintln s!"      [smt-trace] cache check: {t1 - t0}ms, {pairs.size} pairs → {hits} hits, {missPairs.size} misses"
-  -- Phase 2: batch CVC5 for cache misses
+  -- Phase 2: batch CVC5 for cache misses (parallel across cores)
   if missPairs.size > 0 then
     let chunkSize := 1000
     let totalChunks := (missPairs.size + chunkSize - 1) / chunkSize
-    let mut allMissResults : Array Bool := #[]
+    -- Step 2a: generate all chunk scripts
+    let t_gen_start ← IO.monoMsNow
+    let mut chunkScripts : Array (Nat × String) := #[]  -- (chunkIdx, script)
     let mut chunkStart := 0
     let mut chunkIdx := 0
     while chunkStart < missPairs.size do
       let chunkEnd := min (chunkStart + chunkSize) missPairs.size
       let chunk := missPairs.extract chunkStart chunkEnd
-      let t_script_start ← IO.monoMsNow
       let mut regNames : Std.HashSet String := {}
       let mut needsMem := false
       for (a, b) in chunk do
@@ -79,16 +80,45 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
         script := script ++ "(check-sat)\n"
         script := script ++ "(pop)\n"
       script := script ++ "(exit)\n"
-      let t_script_end ← IO.monoMsNow
-      IO.FS.writeFile tmpFile script
-      let t_write_end ← IO.monoMsNow
-      let smtOut ← IO.Process.output { cmd := "cvc5", args := #["--incremental", tmpFile.toString] }
-      let t_cvc5_end ← IO.monoMsNow
-      allMissResults := allMissResults ++ parseSMTResults smtOut.stdout
-      if pairs.size > 10000 && (chunkIdx % 50 == 0 || chunkIdx == totalChunks - 1) then
-        IO.eprintln s!"      [smt-trace] chunk {chunkIdx+1}/{totalChunks}: script {t_script_end - t_script_start}ms, write {t_write_end - t_script_end}ms, cvc5 {t_cvc5_end - t_write_end}ms ({script.length} bytes)"
+      chunkScripts := chunkScripts.push (chunkIdx, script)
       chunkStart := chunkEnd
       chunkIdx := chunkIdx + 1
+    let t_gen_end ← IO.monoMsNow
+    if pairs.size > 10000 then
+      IO.eprintln s!"      [smt-trace] generated {totalChunks} scripts in {t_gen_end - t_gen_start}ms"
+    -- Step 2b: run CVC5 in parallel batches of maxParallel
+    let maxParallel := min 8 totalChunks
+    let mut allChunkResults : Array (Nat × Array Bool) := #[]
+    let mut batchStart := 0
+    let mut batchNum := 0
+    while batchStart < chunkScripts.size do
+      let batchEnd := min (batchStart + maxParallel) chunkScripts.size
+      let batch := chunkScripts.extract batchStart batchEnd
+      let t_batch_start ← IO.monoMsNow
+      -- Write all scripts and launch all CVC5 processes
+      let tasks ← batch.mapM fun (ci, script) => do
+        let chunkFile := s!".lake/smt_chunk_{ci}.smt2"
+        IO.FS.writeFile chunkFile script
+        let task ← IO.asTask (prio := .default) do
+          let out ← IO.Process.output { cmd := "cvc5", args := #["--incremental", chunkFile] }
+          return (ci, parseSMTResults out.stdout)
+        return task
+      -- Wait for all tasks in this batch
+      for task in tasks do
+        match task.get with
+        | .ok (ci, chunkRes) =>
+          allChunkResults := allChunkResults.push (ci, chunkRes)
+        | .error e => throw e
+      let t_batch_end ← IO.monoMsNow
+      if pairs.size > 10000 then
+        IO.eprintln s!"      [smt-trace] batch {batchNum+1}: chunks {batchStart+1}-{batchEnd}/{totalChunks}, {t_batch_end - t_batch_start}ms ({maxParallel} parallel)"
+      batchStart := batchEnd
+      batchNum := batchNum + 1
+    -- Step 2c: merge results in chunk order
+    let sortedResults := allChunkResults.qsort (fun a b => a.1 < b.1)
+    let mut allMissResults : Array Bool := #[]
+    for (_, chunkRes) in sortedResults do
+      allMissResults := allMissResults ++ chunkRes
     -- Store results in cache and in output array
     let t_store_start ← IO.monoMsNow
     let mut c' ← cache.get
