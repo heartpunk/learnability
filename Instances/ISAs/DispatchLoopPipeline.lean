@@ -359,13 +359,89 @@ def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion :
   -- Run WTO fixpoint
   let summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
   let funcEntries := buildFuncEntries functions
-  -- Grammar extraction — skip legacy parser detection in WTO mode
-  -- (detectParser's IsTokenConfig heuristics are noisy and often wrong;
-  -- the WTO pipeline doesn't need them for fixpoint computation)
+  -- Extract generic dispatch tables + LTS for each function
+  log s!"\n=== Dispatch Table Extraction ==="
+  let mut dispatchTables : Array FunctionDispatchTable := #[]
+  let mut ltsMap : Std.HashMap UInt64 GenericExtractedLTS := {}
+  for func in functions do
+    let branches := summaries.getD func.entryAddr #[]
+    if branches.size > 0 then
+      let dt := extractDispatchTable func.entryAddr func.name branches
+      let lts := constructLTS func.entryAddr branches
+      dispatchTables := dispatchTables.push dt
+      ltsMap := ltsMap.insert func.entryAddr lts
+      log s!"  {func.name}: {dt.groups.size} dispatch groups, {dt.dimensions.size} dimensions, {lts.transitions.size} LTS transitions, {lts.states.size} states"
+  -- Grammar interpretation layer: identify lexer, classify functions, extract terminals
+  log s!"\n=== Grammar Interpretation ==="
+  let producers ← findProducers functions summaries log
+  -- Find best producer (lexer): function with most distinct output values
+  let lexerInfo := producers.foldl (fun best (addr, vals) =>
+    match best with
+    | none => some (addr, vals)
+    | some (_, bestVals) => if vals.size > bestVals.size then some (addr, vals) else best)
+    (none : Option (UInt64 × Array UInt64))
+  let (lexerAddr, lexerName, tokenNames) ← match lexerInfo with
+    | some (addr, _vals) =>
+      let name := funcEntries.getD addr "unknown"
+      log s!"  Lexer identified: {name} @ {hexAddr addr}"
+      -- Build token name table from lexer's summary branches
+      let lexerBranches := summaries.getD addr #[]
+      let lexerSpec := functions.find? (·.entryAddr == addr) |>.getD ⟨name, addr, []⟩
+      let tokenNameTable ← deriveTokenNames lexerSpec lexerBranches log
+      log s!"  Token names: {tokenNameTable.size} entries"
+      pure (addr, name, tokenNameTable)
+    | none =>
+      log s!"  No lexer identified — grammar extraction will use raw dispatch keys"
+      pure (0, "unknown", ({} : TokenNameTable))
+  -- Classify functions by call-graph relationship to lexer
+  -- Direct caller: has an edge to lexer in call graph → grammar NT
+  -- Transitive: reaches lexer through other functions → wrapper
+  -- None: never reaches lexer → helper
+  let directCallsLexer := fun (caller : UInt64) => callGraph.any fun (s, t) => s == caller && t == lexerAddr
+  -- BFS reachability for transitive check
+  let reachesLexer := fun (start : UInt64) => Id.run do
+    let mut visited : Std.HashSet UInt64 := {}
+    let mut queue : Array UInt64 := #[start]
+    while !queue.isEmpty do
+      let cur := queue.back!
+      queue := queue.pop
+      if visited.contains cur then continue
+      visited := visited.insert cur
+      if cur == lexerAddr then return true
+      for (src, tgt) in callGraph do
+        if src == cur && !visited.contains tgt then
+          queue := queue.push tgt
+    return false
+  let mut grammarNTs : Array FunctionSpec := #[]
+  let mut wrappers : Array FunctionSpec := #[]
+  let mut helpers : Array FunctionSpec := #[]
+  for func in functions do
+    if func.entryAddr == lexerAddr then continue
+    if directCallsLexer func.entryAddr then
+      grammarNTs := grammarNTs.push func
+    else if reachesLexer func.entryAddr then
+      wrappers := wrappers.push func
+    else
+      helpers := helpers.push func
+  log s!"  Grammar NTs (direct lexer callers): {grammarNTs.map (·.name)}"
+  log s!"  Wrappers (transitive): {wrappers.map (·.name)}"
+  log s!"  Helpers (no lexer path): {helpers.map (·.name)}"
+  -- Build ParserStructure for printLTSGrammar
+  let parserStructure : Option ParserStructure :=
+    if lexerAddr != 0 && grammarNTs.size > 0 then
+      some {
+        lexerAddr := lexerAddr
+        lexerName := lexerName
+        tokenNames := tokenNames
+        classifiers := grammarNTs
+        entryClassifier := grammarNTs[0]!.entryAddr
+      }
+    else none
+  -- Load golden grammar and run extraction
   let goldenGrammar ← match inputPath with
     | some path => loadGoldenForSubject path log
     | none => pure golden
-  printLTSGrammar log functions funcEntries summaries none goldenGrammar
+  printLTSGrammar log functions funcEntries summaries parserStructure goldenGrammar
 
 /-- Run WTO pipeline with JSON output. -/
 def runPipelineWTOJSON (functions : Array FunctionSpec) (regions : Array MemRegion := #[])
