@@ -6,6 +6,23 @@ set_option relaxedAutoImplicit false
 
 open VexISA VexIRParser
 
+/-! ## Generic Dispatch Table Extraction
+
+Extract dispatch structure from converged summaries as a domain-independent
+intermediate representation. Each function's behavior is decomposed into
+dispatch groups keyed by equality comparisons in the PC guards.
+
+This feeds into domain-specific interpretation layers (grammar, state machine,
+opsem) and can be wrapped as a Cslib.LTS for formal simulation/bisimulation. -/
+
+/-- Extract all eq(expr, const) comparisons from a PC guard.
+    Returns the expression being compared and the constant value. -/
+def extractComparisons {Reg : Type} : SymPC Reg → Array (SymExpr Reg × UInt64)
+  | .eq e (.const v) => #[(e, v)]
+  | .eq (.const v) e => #[(e, v)]
+  | .and φ ψ => extractComparisons φ ++ extractComparisons ψ
+  | _ => #[]
+
 /-! ## Run stabilization -/
 
 /-- Build funcEntries map from function specs. -/
