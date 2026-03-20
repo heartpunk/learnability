@@ -16,7 +16,7 @@ interpreter_subjects := "lua quickjs"
 all_subjects := subjects + " " + terminal_subjects + " " + interpreter_subjects
 
 # Max concurrent analysis jobs (memory-limited: QuickJS peaks at ~12GB)
-parallel_jobs := "3"
+parallel_jobs := "4"
 
 # Remote builder for cross-arch extraction (assumes ambient ssh + nix)
 remote := "abraxas"
