@@ -20,10 +20,13 @@ Equivalence queries (A ↔ B) are decomposed into two implication queries. -/
 abbrev SMTCache := Std.HashMap UInt64 Bool
 
 /-- Cache key for an implication query "does A imply B?",
-    i.e. is (A ∧ ¬B) UNSAT?  Canonicalizes the combined formula
-    so semantically identical queries hash the same. -/
+    i.e. is (A ∧ ¬B) UNSAT?  Uses depth-limited hash directly rather than
+    full canonicalization (which traverses the entire expression tree —
+    89% of CPU for QuickJS per GDB sampling). More cache misses for
+    semantically equivalent but syntactically different queries, but
+    those are rare in practice and the cost is just a redundant CVC5 call. -/
 def smtImplCacheKey {Reg : Type} [Hashable Reg] (a b : SymPC Reg) : UInt64 :=
-  hash (canonicalizePC (.and a (.not b)))
+  mixHash (hash a) (hash b)
 
 /-- Run a batch of SMT implication queries with caching (backed by CVC5).
     Each query (A, B) checks: is (A ∧ ¬B) UNSAT? (i.e. does A → B?)
