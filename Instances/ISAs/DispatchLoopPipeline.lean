@@ -23,6 +23,106 @@ def extractComparisons {Reg : Type} : SymPC Reg → Array (SymExpr Reg × UInt64
   | .and φ ψ => extractComparisons φ ++ extractComparisons ψ
   | _ => #[]
 
+/-- A dispatch key: the full tuple of equality comparisons from a branch's PC.
+    For a parser: [(rax, 5)]. For a type system: [(node_tag, 3), (subtype_tag, 7)].
+    For a state machine: [(state_var, 2), (input_byte, 0x1B)]. -/
+structure DispatchKey where
+  comparisons : Array (SymExpr Amd64Reg × UInt64)
+  deriving Inhabited
+
+instance : BEq DispatchKey where
+  beq a b := a.comparisons == b.comparisons
+
+instance : Hashable DispatchKey where
+  hash dk := dk.comparisons.foldl (fun acc (e, v) => mixHash acc (mixHash (hash e) (hash v))) 0
+
+/-- A group of branches sharing the same dispatch key. -/
+structure BranchGroup where
+  key : DispatchKey
+  branches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))
+  callTargets : Array UInt64  -- functions called within this group
+
+/-- Per-function dispatch table. -/
+structure FunctionDispatchTable where
+  funcAddr : UInt64
+  funcName : String
+  groups : Array BranchGroup
+  dimensions : Array (SymExpr Amd64Reg)  -- which expressions are dispatched on
+
+/-- A generic LTS transition with effect metadata. -/
+structure GenericLTSTransition where
+  src : UInt64
+  label : DispatchKey
+  tgt : UInt64
+  effects : Option (SymSub Amd64Reg)  -- what this transition does to state
+
+/-- A generic extracted LTS: states are addresses, labels are dispatch keys. -/
+structure GenericExtractedLTS where
+  transitions : Array GenericLTSTransition
+  states : Std.HashSet UInt64
+  init : UInt64
+
+/-- Extract dispatch table from a function's converged summary branches. -/
+def extractDispatchTable (funcAddr : UInt64) (funcName : String)
+    (branches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) :
+    FunctionDispatchTable := Id.run do
+  let ip_reg := Amd64Reg.rip
+  -- Group branches by dispatch key
+  let mut groupMap : Std.HashMap UInt64 (DispatchKey × Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  let mut allDims : Std.HashSet UInt64 := {}  -- hash of dimension exprs for dedup
+  let mut dimList : Array (SymExpr Amd64Reg) := #[]
+  for b in branches do
+    let comps := extractComparisons b.pc
+    -- Filter out rip-guard comparisons (structural routing, not dispatch)
+    let dataComps := comps.filter fun (e, _) => match e with
+      | .reg r => !(r == ip_reg)
+      | _ => true
+    let key : DispatchKey := ⟨dataComps⟩
+    let h := hash key
+    let (_, arr) := groupMap.getD h (key, #[])
+    groupMap := groupMap.insert h (key, arr.push b)
+    -- Collect dimensions
+    for (e, _) in dataComps do
+      let eh := hash e
+      unless allDims.contains eh do
+        allDims := allDims.insert eh
+        dimList := dimList.push e
+  -- Build groups with call targets
+  let mut groups : Array BranchGroup := #[]
+  for (_, (key, branchArr)) in groupMap.toArray do
+    let mut targets : Std.HashSet UInt64 := {}
+    for b in branchArr do
+      match extractRipTarget ip_reg b.sub with
+      | some tgt => targets := targets.insert tgt
+      | none => pure ()
+    groups := groups.push ⟨key, branchArr, targets.toArray⟩
+  return ⟨funcAddr, funcName, groups, dimList⟩
+
+/-- Construct a generic LTS from dispatch tables. -/
+def constructLTS (funcAddr : UInt64)
+    (branches : Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) :
+    GenericExtractedLTS := Id.run do
+  let ip_reg := Amd64Reg.rip
+  let mut transitions : Array GenericLTSTransition := #[]
+  let mut states : Std.HashSet UInt64 := {}
+  states := states.insert funcAddr
+  for b in branches do
+    let src := match extractRipGuard ip_reg b.pc with
+      | some addr => addr
+      | none => funcAddr
+    let tgt := match extractRipTarget ip_reg b.sub with
+      | some addr => addr
+      | none => 0  -- unknown target
+    let comps := extractComparisons b.pc
+    let dataComps := comps.filter fun (e, _) => match e with
+      | .reg r => !(r == ip_reg)
+      | _ => true
+    let key : DispatchKey := ⟨dataComps⟩
+    states := states.insert src
+    if tgt != 0 then states := states.insert tgt
+    transitions := transitions.push ⟨src, key, tgt, some b.sub⟩
+  return ⟨transitions, states, funcAddr⟩
+
 /-! ## Run stabilization -/
 
 /-- Build funcEntries map from function specs. -/
