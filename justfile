@@ -232,14 +232,41 @@ analyze-all *flags: build
     done
 
 # Analyze all subjects in parallel (max jobs limited by memory)
+# Builds once sequentially first, then runs analysis jobs in parallel via lake exe
 analyze-all-parallel *flags: build
     #!/usr/bin/env bash
     set -euo pipefail
     JOBS={{parallel_jobs}}
-    echo "Running all subjects with $JOBS parallel jobs..."
-    echo "{{all_subjects}}" | tr ' ' '\n' | \
-        xargs -P "$JOBS" -I {} bash -c \
-            'echo "═══ {} ═══" && just analyze {} {{flags}} > .lake/{}_analysis.log 2>&1 && echo "  {} DONE" || echo "  {} FAILED (see .lake/{}_analysis.log)"'
+    echo "Build complete. Running all subjects with $JOBS parallel jobs..."
+    # Run subjects in parallel — each resolves its own input/functions
+    for s in {{all_subjects}}; do
+        (
+            FUNCS="" INPUT="reference/$s/blocks.json"
+            case "$s" in
+                tinyc)                   FUNCS="{{_funcs_tinyc}}" ;;
+                json)                    FUNCS="{{_funcs_json}}" ;;
+                cjson)                   FUNCS="{{_funcs_cjson}}" ;;
+                parson)                  FUNCS="{{_funcs_parson}}" ;;
+                lisp)                    FUNCS="{{_funcs_lisp}}" ;;
+                calc)                    FUNCS="{{_funcs_calc}}" ;;
+                simplearithmeticparser)  FUNCS="{{_funcs_simplearithmeticparser}}" ;;
+                cgi_decode)              FUNCS="{{_funcs_cgi_decode}}" ;;
+                mjs)                     FUNCS="{{_funcs_mjs}}" ;;
+                libtsm)                  FUNCS="{{_funcs_libtsm}}"; INPUT="{{_input_libtsm}}" ;;
+                st)                      FUNCS="{{_funcs_st}}"; INPUT="{{_input_st}}" ;;
+                lua)                     FUNCS="{{_funcs_lua}}"; INPUT="{{_input_lua}}" ;;
+                quickjs)                 FUNCS="{{_funcs_quickjs}}"; INPUT="{{_input_quickjs}}" ;;
+            esac
+            FUNCS_FLAG=""
+            if [[ -n "$FUNCS" ]]; then FUNCS_FLAG="--functions $FUNCS"; fi
+            echo "═══ $s ═══"
+            lake exe dispatchLoopEval "$INPUT" $FUNCS_FLAG {{flags}} > ".lake/${s}_analysis.log" 2>&1 \
+                && echo "  $s DONE" || echo "  $s FAILED (see .lake/${s}_analysis.log)"
+        ) &
+        # Limit concurrent jobs
+        while [[ $(jobs -r | wc -l) -ge $JOBS ]]; do sleep 1; done
+    done
+    wait
     echo "=== Summary ==="
     for s in {{all_subjects}}; do
         if [[ -f ".lake/${s}_analysis.log" ]]; then
