@@ -237,12 +237,16 @@ analyze-all-parallel *flags: build
     #!/usr/bin/env bash
     set -euo pipefail
     JOBS={{parallel_jobs}}
+    RUNDIR=".lake/runs/$(date -Iseconds)"
+    mkdir -p "$RUNDIR"
     echo "Build complete. Running all subjects with $JOBS parallel jobs..."
+    echo "Results in $RUNDIR"
     # Generate a runner script with justfile variables already interpolated
     HELPER=$(mktemp)
     cat > "$HELPER" <<EOF
     #!/usr/bin/env bash
     s="\$1"; shift
+    RUNDIR="\$2"; shift
     FUNCS="" INPUT="reference/\$s/blocks.json"
     case "\$s" in
         tinyc)                   FUNCS="{{_funcs_tinyc}}" ;;
@@ -261,21 +265,23 @@ analyze-all-parallel *flags: build
     esac
     FUNCS_FLAG=""
     if [[ -n "\$FUNCS" ]]; then FUNCS_FLAG="--functions \$FUNCS"; fi
-    stdbuf -oL -eL .lake/build/bin/dispatchLoopEval "\$INPUT" \$FUNCS_FLAG "\$@" > ".lake/\${s}_analysis.log" 2>&1 \
+    stdbuf -oL -eL .lake/build/bin/dispatchLoopEval "\$INPUT" \$FUNCS_FLAG "\$@" > "\$RUNDIR/\${s}.log" 2>&1 \
         && echo "  \$s DONE" || echo "  \$s FAILED"
     EOF
     chmod +x "$HELPER"
-    echo "{{all_subjects}}" | tr ' ' '\n' | xargs -P "$JOBS" -I {} bash "$HELPER" {} {{flags}}
+    echo "{{all_subjects}}" | tr ' ' '\n' | xargs -P "$JOBS" -I {} bash "$HELPER" {} "$RUNDIR" {{flags}}
     rm -f "$HELPER"
-    echo "=== Summary ==="
+    echo "=== Summary ($RUNDIR) ==="
     for s in {{all_subjects}}; do
-        if [[ -f ".lake/${s}_analysis.log" ]]; then
-            result=$(grep -aE "Fixpoint complete|PARSE ERROR|converged|Total:|Coverage:" ".lake/${s}_analysis.log" | tail -3)
+        if [[ -f "$RUNDIR/${s}.log" ]]; then
+            result=$(grep -aE "Fixpoint complete|PARSE ERROR|converged|Total:|Coverage:" "$RUNDIR/${s}.log" | tail -3)
             echo "  $s: $result"
         else
             echo "  $s: no log"
         fi
     done
+    # Symlink latest run
+    ln -sfn "$(basename $RUNDIR)" .lake/runs/latest
 
 # ── Testing ───────────────────────────────────────────────────────
 
