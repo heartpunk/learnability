@@ -221,6 +221,19 @@ theorem foldAnd64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       · rfl
   · simp only [evalSymExpr]
 
+/-- If constant offset ranges [c1, c1+sw) and [c2, c2+lw) don't overlap
+    (with wrapping guards), then [R+c1, R+c1+sw) and [R+c2, R+c2+lw) don't
+    overlap for any R, because the relative distance is preserved. -/
+private theorem offset_nonoverlap_implies_concrete
+    (R c1 c2 : UInt64) (sw lw : Nat)
+    (h1 : c1.toNat + sw ≤ UInt64.size)
+    (h2 : c2.toNat + lw ≤ UInt64.size)
+    (h3 : c1.toNat + sw ≤ c2.toNat ∨ c2.toNat + lw ≤ c1.toNat) :
+    (R + c1).toNat + sw ≤ UInt64.size ∧
+    (R + c2).toNat + lw ≤ UInt64.size ∧
+    ((R + c1).toNat + sw ≤ (R + c2).toNat ∨ (R + c2).toNat + lw ≤ (R + c1).toNat) := by
+  sorry
+
 /-! ## resolveLoadFrom soundness
 
 `resolveLoadFrom` resolves loads through store chains. Proved using:
@@ -266,8 +279,16 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       -- catch-all (no if) is rfl
       · split
         · -- add64/add64 if-true: r1==r2 && offsets non-overlapping
-          rename_i hif
-          sorry
+          rename_i r1 c1 r2 c2 heq hif
+          have hsa := congrArg Prod.fst heq; have haddr := congrArg Prod.snd heq
+          subst hsa; subst haddr
+          simp only [Bool.and_eq_true] at hif; obtain ⟨hr, hno⟩ := hif
+          have := eq_of_beq hr; subst this
+          simp only [rawConstRangesNonOverlapping, decide_eq_true_eq] at hno
+          rw [ih]; simp only [evalSymExpr, evalSymMem]
+          have ⟨h1, h2, h3⟩ := offset_nonoverlap_implies_concrete
+            (evalSymExpr s r1) c1 c2 sw.byteCount w.byteCount hno.1 hno.2.1 hno.2.2
+          exact (ByteMem_read_write_nonoverlap w sw _ _ _ _ h1 h2 h3).symm
         · simp only [evalSymExpr, evalSymMem]
       · split
         · sorry
