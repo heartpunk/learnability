@@ -34,7 +34,7 @@ def smtImplCacheKey {Reg : Type} [Hashable Reg] (a b : SymPC Reg) : UInt64 :=
 def smtCheckImplCached {Reg : Type} [BEq Reg] [DecidableEq Reg] [Hashable Reg] [ToString Reg]
     (cache : IO.Ref (SMTCache Reg))
     (pairs : Array (SymPC Reg × SymPC Reg))
-    (tmpFile : System.FilePath := ".lake/smt_cached.smt2") :
+    (_tmpFile : System.FilePath := ".lake/smt_cached.smt2") :
     IO (Array Bool × Nat) := do
   if pairs.size == 0 then return (#[], 0)
   let t0 ← IO.monoMsNow
