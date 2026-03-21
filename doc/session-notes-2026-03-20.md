@@ -89,19 +89,57 @@
 - learnability-terminal-subjects: merged, workspace deleted
 
 ## Latest QuickJS Run (writeToSMTLib fix)
-- Simplify: 34s, Dedup: 174s, Syn matching: 10s (1112 matched, 471 need SMT)
-- Entered smtCheckImplCached with 126K pairs at 13GB RSS
-- CVC5 phase in progress — first time with writeToSMTLib (no string building)
-- Previous run OOMed at 55GB during string concat in toSMTLib
-- Check .lake/runs/quickjs-writethrough/quickjs.log for results
+
+QuickJS JS_CallInternal has 1688 body branches with 12 projected registers
+and 268 closure PCs. It has never completed K=0 — every previous attempt
+either timed out or OOMed. The latest run uses all accumulated fixes:
+
+After simplify (34s) and dedup (174s), syntactic signature matching found
+1112 of 1583 candidates matching existing reps, leaving only 471 needing
+SMT verification. This produced 126,496 SMT query pairs (472 PCs × 268
+closure). The process entered smtCheckImplCached at 13GB RSS.
+
+The previous run at this same phase OOMed at 55GB because toSMTLib was
+building query strings via O(n²) concatenation. The new writeToSMTLib
+streams directly to file handles. We don't yet know if this run will
+complete — check .lake/runs/quickjs-writethrough/quickjs.log for results.
 
 ## Performance Fix Chain (QuickJS K=0 path)
-1. Depth-limited hash: dedup 602s → 195s
-2. Closure PC caching: canonicalize 30min → 12ms (GDB found canonicalizeExpr 89% CPU)
-3. smtImplCacheKey: replaced canonicalizePC with mixHash
-4. Write-through SMT: eliminated O(n²) string concat at chunk level
-5. writeToSMTLib: eliminated O(n²) string concat at per-query level (GDB found toSMTLib 89% CPU)
-6. Parallel CVC5: 8 concurrent instances via IO.asTask
+
+Each fix was identified by GDB statistical stack sampling (script at
+/tmp/gdb_sample.sh), targeting the specific function dominating CPU.
+
+1. **Depth-limited hash** (DispatchLoopEval.lean): Hash SymExpr/SymMem trees
+   to max depth 4 instead of full traversal. Dedup dropped from 602s to 195s
+   because branch hashing no longer walks entire expression trees.
+
+2. **Closure PC caching** (DispatchLoopFunctionStab.lean): Pre-canonicalize
+   the 268 closure PCs once and pass to computePCSignature, instead of
+   re-canonicalizing them for every branch. GDB showed canonicalizeExpr at
+   89% of CPU — it was being called 1583×268=424K times redundantly. After
+   fix: 268 calls. Cache check went from 30+ minutes to 12 milliseconds.
+
+3. **smtImplCacheKey** (DispatchLoopSMT.lean): Replaced canonicalizePC (full
+   tree traversal) with mixHash of depth-limited hashes for SMT cache key
+   computation. The old approach called canonicalizePC on every (A, B) pair
+   for cache lookup — same 424K redundant traversals.
+
+4. **Write-through SMT scripts** (DispatchLoopSMT.lean): Write chunk scripts
+   directly to file handles instead of building in-memory strings via
+   repeated concatenation. The old code accumulated 127 chunk strings (each
+   ~100MB for QuickJS), causing O(n²) allocation that peaked at 55GB and
+   triggered OOM.
+
+5. **writeToSMTLib** (DispatchLoopEval.lean): SymExpr/SymMem/SymPC.writeToSMTLib
+   writes SMT-LIB directly to a Handle via putStr calls instead of building
+   a String via s!"..." interpolation. GDB sampling showed toSMTLib at 89%
+   of CPU with lean_string_append and memmove dominating — the per-query
+   string building was O(tree_depth²). Now O(tree_depth) with streaming I/O.
+
+6. **Parallel CVC5** (DispatchLoopSMT.lean): Run up to 8 CVC5 instances
+   concurrently via IO.asTask. Chunks are written to separate files and
+   CVC5 launched in parallel batches. Gave ~6x speedup on Lua (686s → 108s
+   for K=0 SMT phase).
 
 ## What's Next (from plan)
 1. Fix grammar extraction terminal resolution (currently 13/19, should be ~20/20)
