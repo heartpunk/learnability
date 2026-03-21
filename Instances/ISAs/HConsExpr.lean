@@ -609,51 +609,109 @@ def resolveHLoadFrom {Reg : Type} [BEq Reg]
 
 /-! ## Simplification on HExpr -/
 
+/-! Helper: check if two HExprs are the same (hash fast-path + structural). -/
+private def hexprUnchanged {Reg : Type} [BEq Reg] (a b : HExpr Reg) : Bool :=
+  a.cached_hash == b.cached_hash && HExpr.beq a b
+
+private def hmemUnchanged {Reg : Type} [BEq Reg] (a b : HMem Reg) : Bool :=
+  a.cached_hash == b.cached_hash && HMem.beq a b
+
 mutual
 def simplifyHExpr {Reg : Type} [BEq Reg] [Hashable Reg] : HExpr Reg → HExpr Reg
-  | .mk _ (.const v) => HExpr.const v
-  | .mk _ (.reg r) => HExpr.reg r
-  | .mk _ (.low32 x) => HExpr.low32 (simplifyHExpr x)
-  | .mk _ (.uext32 x) => HExpr.uext32 (simplifyHExpr x)
-  | .mk _ (.sext8to32 x) => HExpr.sext8to32 (simplifyHExpr x)
-  | .mk _ (.sext32to64 x) => HExpr.sext32to64 (simplifyHExpr x)
-  | .mk _ (.not64 x) => HExpr.not64 (simplifyHExpr x)
-  | .mk _ (.not32 x) => HExpr.not32 (simplifyHExpr x)
-  | .mk _ (.ite c t f) => HExpr.ite (simplifyHExpr c) (simplifyHExpr t) (simplifyHExpr f)
-  | .mk _ (.sub32 a b) => HExpr.sub32 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.shl32 a b) => HExpr.shl32 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.and32 a b) => HExpr.and32 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.or32 a b) => HExpr.or32 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.xor32 a b) => HExpr.xor32 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.add64 a b) => foldHAdd64 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.sub64 a b) => foldHSub64 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.xor64 a b) => HExpr.xor64 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.and64 a b) => foldHAnd64 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.or64 a b) => HExpr.or64 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.shl64 a b) => HExpr.shl64 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.shr64 a b) => HExpr.shr64 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.mul64 a b) => HExpr.mul64 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.mul32 a b) => HExpr.mul32 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.sar64 a b) => HExpr.sar64 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.sar32 a b) => HExpr.sar32 (simplifyHExpr a) (simplifyHExpr b)
-  | .mk _ (.load w mem addr) =>
+  | .mk h (.const v) => .mk h (.const v)  -- leaf: reconstruct (same hash, minimal alloc)
+  | .mk h (.reg r) => .mk h (.reg r)
+  | .mk h (.low32 x) =>
+    let x' := simplifyHExpr x
+    if hexprUnchanged x' x then .mk h (.low32 x) else HExpr.low32 x'
+  | .mk h (.uext32 x) =>
+    let x' := simplifyHExpr x
+    if hexprUnchanged x' x then .mk h (.uext32 x) else HExpr.uext32 x'
+  | .mk h (.sext8to32 x) =>
+    let x' := simplifyHExpr x
+    if hexprUnchanged x' x then .mk h (.sext8to32 x) else HExpr.sext8to32 x'
+  | .mk h (.sext32to64 x) =>
+    let x' := simplifyHExpr x
+    if hexprUnchanged x' x then .mk h (.sext32to64 x) else HExpr.sext32to64 x'
+  | .mk h (.not64 x) =>
+    let x' := simplifyHExpr x
+    if hexprUnchanged x' x then .mk h (.not64 x) else HExpr.not64 x'
+  | .mk h (.not32 x) =>
+    let x' := simplifyHExpr x
+    if hexprUnchanged x' x then .mk h (.not32 x) else HExpr.not32 x'
+  | .mk h (.ite c t f) =>
+    let c' := simplifyHExpr c; let t' := simplifyHExpr t; let f' := simplifyHExpr f
+    if hexprUnchanged c' c && hexprUnchanged t' t && hexprUnchanged f' f
+    then .mk h (.ite c t f) else HExpr.ite c' t' f'
+  | .mk h (.sub32 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.sub32 a b) else HExpr.sub32 a' b'
+  | .mk h (.shl32 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.shl32 a b) else HExpr.shl32 a' b'
+  | .mk h (.and32 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.and32 a b) else HExpr.and32 a' b'
+  | .mk h (.or32 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.or32 a b) else HExpr.or32 a' b'
+  | .mk h (.xor32 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.xor32 a b) else HExpr.xor32 a' b'
+  | .mk h (.add64 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.add64 a b) else foldHAdd64 a' b'
+  | .mk h (.sub64 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.sub64 a b) else foldHSub64 a' b'
+  | .mk h (.xor64 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.xor64 a b) else HExpr.xor64 a' b'
+  | .mk h (.and64 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.and64 a b) else foldHAnd64 a' b'
+  | .mk h (.or64 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.or64 a b) else HExpr.or64 a' b'
+  | .mk h (.shl64 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.shl64 a b) else HExpr.shl64 a' b'
+  | .mk h (.shr64 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.shr64 a b) else HExpr.shr64 a' b'
+  | .mk h (.mul64 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.mul64 a b) else HExpr.mul64 a' b'
+  | .mk h (.mul32 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.mul32 a b) else HExpr.mul32 a' b'
+  | .mk h (.sar64 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.sar64 a b) else HExpr.sar64 a' b'
+  | .mk h (.sar32 a b) =>
+    let a' := simplifyHExpr a; let b' := simplifyHExpr b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.sar32 a b) else HExpr.sar32 a' b'
+  | .mk h (.load w mem addr) =>
     let addr' := simplifyHExpr addr
     let mem' := simplifyHMem mem
-    resolveHLoadFrom w mem' addr'
+    if hexprUnchanged addr' addr && hmemUnchanged mem' mem
+    then .mk h (.load w mem addr) else resolveHLoadFrom w mem' addr'
 
 def simplifyHMem {Reg : Type} [BEq Reg] [Hashable Reg] : HMem Reg → HMem Reg
-  | .mk _ .base => HMem.base
-  | .mk _ (.store w mem addr val) =>
+  | .mk h .base => .mk h .base
+  | .mk h (.store w mem addr val) =>
     let mem' := simplifyHMem mem
     let addr' := simplifyHExpr addr
     let val' := simplifyHExpr val
-    match mem'.node with
-    | .store w' innerMem storeAddr' _ =>
-      if w == w' && HExpr.beq addr' storeAddr' then
-        HMem.store w innerMem addr' val'
-      else
-        HMem.store w mem' addr' val'
-    | _ => HMem.store w mem' addr' val'
+    if hmemUnchanged mem' mem && hexprUnchanged addr' addr && hexprUnchanged val' val
+    then .mk h (.store w mem addr val)
+    else
+      match mem'.node with
+      | .store w' innerMem storeAddr' _ =>
+        if w == w' && HExpr.beq addr' storeAddr' then
+          HMem.store w innerMem addr' val'
+        else
+          HMem.store w mem' addr' val'
+      | _ => HMem.store w mem' addr' val'
 end
 
 /-! ## HSub Hashable and BEq
