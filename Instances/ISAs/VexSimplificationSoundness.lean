@@ -236,9 +236,36 @@ private theorem ByteMem_read_write_nonoverlap_offset
     (h2 : c2.toNat + lw.byteCount ≤ UInt64.size)
     (h3 : c1.toNat + sw.byteCount ≤ c2.toNat ∨ c2.toNat + lw.byteCount ≤ c1.toNat) :
     ByteMem.read lw (ByteMem.write sw M (R + c1) v) (R + c2) = ByteMem.read lw M (R + c2) := by
-  -- The proof requires showing that for each byte index j < lw.byteCount,
-  -- (R + c2 + j) ≠ (R + c1 + i) for all i < sw.byteCount.
-  -- This follows from c1+i ≠ c2+j (mod 2^64) when offset ranges don't overlap.
+  sorry
+
+/-- Same as above but for R - c1 vs R - c2 (sub64 pattern). -/
+private theorem ByteMem_read_write_nonoverlap_sub_sub
+    (lw sw : Width) (M : ByteMem) (R c1 v c2 : UInt64)
+    (h1 : ((0 : UInt64) - c1).toNat + sw.byteCount ≤ UInt64.size)
+    (h2 : ((0 : UInt64) - c2).toNat + lw.byteCount ≤ UInt64.size)
+    (h3 : ((0 : UInt64) - c1).toNat + sw.byteCount ≤ ((0 : UInt64) - c2).toNat ∨
+           ((0 : UInt64) - c2).toNat + lw.byteCount ≤ ((0 : UInt64) - c1).toNat) :
+    ByteMem.read lw (ByteMem.write sw M (R - c1) v) (R - c2) = ByteMem.read lw M (R - c2) := by
+  sorry
+
+/-- R + c1 vs R - c2 (add64/sub64 mixed pattern). -/
+private theorem ByteMem_read_write_nonoverlap_add_sub
+    (lw sw : Width) (M : ByteMem) (R c1 v c2 : UInt64)
+    (h1 : c1.toNat + sw.byteCount ≤ UInt64.size)
+    (h2 : ((0 : UInt64) - c2).toNat + lw.byteCount ≤ UInt64.size)
+    (h3 : c1.toNat + sw.byteCount ≤ ((0 : UInt64) - c2).toNat ∨
+           ((0 : UInt64) - c2).toNat + lw.byteCount ≤ c1.toNat) :
+    ByteMem.read lw (ByteMem.write sw M (R + c1) v) (R - c2) = ByteMem.read lw M (R - c2) := by
+  sorry
+
+/-- R - c1 vs R + c2 (sub64/add64 mixed pattern). -/
+private theorem ByteMem_read_write_nonoverlap_sub_add
+    (lw sw : Width) (M : ByteMem) (R c1 v c2 : UInt64)
+    (h1 : ((0 : UInt64) - c1).toNat + sw.byteCount ≤ UInt64.size)
+    (h2 : c2.toNat + lw.byteCount ≤ UInt64.size)
+    (h3 : ((0 : UInt64) - c1).toNat + sw.byteCount ≤ c2.toNat ∨
+           c2.toNat + lw.byteCount ≤ ((0 : UInt64) - c1).toNat) :
+    ByteMem.read lw (ByteMem.write sw M (R - c1) v) (R + c2) = ByteMem.read lw M (R + c2) := by
   sorry
 
 /-! ## resolveLoadFrom soundness
@@ -297,13 +324,40 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
             hno.1 hno.2.1 hno.2.2).symm
         · simp only [evalSymExpr, evalSymMem]
       · split
-        · sorry
+        · -- sub64/sub64 if-true
+          rename_i r1 c1 r2 c2 heq hif
+          have hsa := congrArg Prod.fst heq; have haddr := congrArg Prod.snd heq
+          subst hsa; subst haddr
+          simp only [Bool.and_eq_true] at hif; obtain ⟨hr, hno⟩ := hif
+          have := eq_of_beq hr; subst this
+          simp only [rawConstRangesNonOverlapping, decide_eq_true_eq] at hno
+          rw [ih]; simp only [evalSymExpr, evalSymMem]
+          exact (ByteMem_read_write_nonoverlap_sub_sub w sw _ (evalSymExpr s r1) c1 _ c2
+            hno.1 hno.2.1 hno.2.2).symm
         · simp only [evalSymExpr, evalSymMem]
       · split
-        · sorry
+        · -- add64/sub64 if-true
+          rename_i r1 c1 r2 c2 heq hif
+          have hsa := congrArg Prod.fst heq; have haddr := congrArg Prod.snd heq
+          subst hsa; subst haddr
+          simp only [Bool.and_eq_true] at hif; obtain ⟨hr, hno⟩ := hif
+          have := eq_of_beq hr; subst this
+          simp only [rawConstRangesNonOverlapping, decide_eq_true_eq] at hno
+          rw [ih]; simp only [evalSymExpr, evalSymMem]
+          exact (ByteMem_read_write_nonoverlap_add_sub w sw _ (evalSymExpr s r1) c1 _ c2
+            hno.1 hno.2.1 hno.2.2).symm
         · simp only [evalSymExpr, evalSymMem]
       · split
-        · sorry
+        · -- sub64/add64 if-true
+          rename_i r1 c1 r2 c2 heq hif
+          have hsa := congrArg Prod.fst heq; have haddr := congrArg Prod.snd heq
+          subst hsa; subst haddr
+          simp only [Bool.and_eq_true] at hif; obtain ⟨hr, hno⟩ := hif
+          have := eq_of_beq hr; subst this
+          simp only [rawConstRangesNonOverlapping, decide_eq_true_eq] at hno
+          rw [ih]; simp only [evalSymExpr, evalSymMem]
+          exact (ByteMem_read_write_nonoverlap_sub_add w sw _ (evalSymExpr s r1) c1 _ c2
+            hno.1 hno.2.1 hno.2.2).symm
         · simp only [evalSymExpr, evalSymMem]
       · rfl
 
