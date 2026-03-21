@@ -264,7 +264,9 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
         · simp only [evalSymExpr, evalSymMem]
       -- reg+const cases: split on the if, false branch is conservative
       -- catch-all (no if) is rfl
-      · split <;> sorry
+      · split
+        · sorry
+        · simp only [evalSymExpr, evalSymMem]
       · split <;> sorry
       · split <;> sorry
       · split <;> sorry
