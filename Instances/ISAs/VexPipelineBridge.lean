@@ -833,8 +833,10 @@ theorem h_value_determined_of_state_agreement
         (pcSetoidWith isa basis).r s₁ s₂ →
         isa.satisfies s₁ (isa.pc_lift b.sub φ) ↔
         isa.satisfies s₂ (isa.pc_lift b.sub φ) := by
-  -- Proof: h_state_eq gives s₁ = s₂, subst gives Iff.rfl.
-  -- Blocked on ∀-∈-Finset desugaring type mismatch with intro/fun.
+  -- Proof: trivial (h_state_eq gives s₁=s₂, subst, Iff.rfl).
+  -- Blocked: `intro` fails after first binder — Lean 4.27 ∀-∈-Finset
+  -- desugaring produces a goal shape that doesn't accept further intros.
+  -- Needs investigation of `Membership.mem` elaboration for Finset.
   sorry
 
 /-! ### Lemma 3: Partition Equivalence → Expression Agreement (via basis coverage)
