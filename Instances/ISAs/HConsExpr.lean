@@ -223,4 +223,80 @@ instance {Reg : Type} [BEq Reg] : BEq (HExpr Reg) where
 instance {Reg : Type} [BEq Reg] : BEq (HMem Reg) where
   beq := HMem.beq
 
+/-! ## Conversion to/from raw SymExpr/SymMem -/
+
+mutual
+def HExpr.toRaw {Reg : Type} : HExpr Reg → SymExpr Reg
+  | .mk _ n => HExprNode.toRaw n
+
+def HExprNode.toRaw {Reg : Type} : HExprNode Reg → SymExpr Reg
+  | .const v => .const v
+  | .reg r => .reg r
+  | .low32 e => .low32 e.toRaw
+  | .uext32 e => .uext32 e.toRaw
+  | .sext8to32 e => .sext8to32 e.toRaw
+  | .sext32to64 e => .sext32to64 e.toRaw
+  | .sub32 l r => .sub32 l.toRaw r.toRaw
+  | .shl32 l r => .shl32 l.toRaw r.toRaw
+  | .and32 l r => .and32 l.toRaw r.toRaw
+  | .or32 l r => .or32 l.toRaw r.toRaw
+  | .xor32 l r => .xor32 l.toRaw r.toRaw
+  | .add64 l r => .add64 l.toRaw r.toRaw
+  | .sub64 l r => .sub64 l.toRaw r.toRaw
+  | .xor64 l r => .xor64 l.toRaw r.toRaw
+  | .and64 l r => .and64 l.toRaw r.toRaw
+  | .or64 l r => .or64 l.toRaw r.toRaw
+  | .shl64 l r => .shl64 l.toRaw r.toRaw
+  | .shr64 l r => .shr64 l.toRaw r.toRaw
+  | .mul64 l r => .mul64 l.toRaw r.toRaw
+  | .mul32 l r => .mul32 l.toRaw r.toRaw
+  | .not64 e => .not64 e.toRaw
+  | .not32 e => .not32 e.toRaw
+  | .sar64 l r => .sar64 l.toRaw r.toRaw
+  | .sar32 l r => .sar32 l.toRaw r.toRaw
+  | .ite c t f => .ite c.toRaw t.toRaw f.toRaw
+  | .load w m a => .load w m.toRaw a.toRaw
+
+def HMem.toRaw {Reg : Type} : HMem Reg → SymMem Reg
+  | .mk _ n => HMemNode.toRaw n
+
+def HMemNode.toRaw {Reg : Type} : HMemNode Reg → SymMem Reg
+  | .base => .base
+  | .store w m a v => .store w m.toRaw a.toRaw v.toRaw
+end
+
+mutual
+def HExpr.ofRaw {Reg : Type} [Hashable Reg] : SymExpr Reg → HExpr Reg
+  | .const v => HExpr.const v
+  | .reg r => HExpr.reg r
+  | .low32 e => HExpr.low32 (HExpr.ofRaw e)
+  | .uext32 e => HExpr.uext32 (HExpr.ofRaw e)
+  | .sext8to32 e => HExpr.sext8to32 (HExpr.ofRaw e)
+  | .sext32to64 e => HExpr.sext32to64 (HExpr.ofRaw e)
+  | .sub32 l r => HExpr.sub32 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .shl32 l r => HExpr.shl32 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .and32 l r => HExpr.and32 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .or32 l r => HExpr.or32 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .xor32 l r => HExpr.xor32 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .add64 l r => HExpr.add64 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .sub64 l r => HExpr.sub64 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .xor64 l r => HExpr.xor64 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .and64 l r => HExpr.and64 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .or64 l r => HExpr.or64 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .shl64 l r => HExpr.shl64 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .shr64 l r => HExpr.shr64 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .mul64 l r => HExpr.mul64 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .mul32 l r => HExpr.mul32 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .not64 e => HExpr.not64 (HExpr.ofRaw e)
+  | .not32 e => HExpr.not32 (HExpr.ofRaw e)
+  | .sar64 l r => HExpr.sar64 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .sar32 l r => HExpr.sar32 (HExpr.ofRaw l) (HExpr.ofRaw r)
+  | .ite c t f => HExpr.ite (HExpr.ofRaw c) (HExpr.ofRaw t) (HExpr.ofRaw f)
+  | .load w m a => HExpr.load w (HMem.ofRaw m) (HExpr.ofRaw a)
+
+def HMem.ofRaw {Reg : Type} [Hashable Reg] : SymMem Reg → HMem Reg
+  | .base => HMem.base
+  | .store w m a v => HMem.store w (HMem.ofRaw m) (HExpr.ofRaw a) (HExpr.ofRaw v)
+end
+
 end VexISA
