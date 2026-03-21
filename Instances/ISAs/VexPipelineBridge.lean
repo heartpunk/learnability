@@ -830,14 +830,13 @@ theorem h_value_determined_of_state_agreement
     (h_state_eq : ∀ s₁ s₂ : ConcreteState Reg,
       (pcSetoidWith isa basis).r s₁ s₂ → s₁ = s₂)
     : ∀ b ∈ model, ∀ φ ∈ basis, ∀ s₁ s₂ : ConcreteState Reg,
-        (pcSetoidWith isa basis).r s₁ s₂ →
-        isa.satisfies s₁ (isa.pc_lift b.sub φ) ↔
-        isa.satisfies s₂ (isa.pc_lift b.sub φ) := by
-  -- Proof: trivial (h_state_eq gives s₁=s₂, subst, Iff.rfl).
-  -- Blocked: `intro` fails after first binder — Lean 4.27 ∀-∈-Finset
-  -- desugaring produces a goal shape that doesn't accept further intros.
-  -- Needs investigation of `Membership.mem` elaboration for Finset.
-  sorry
+        ((pcSetoidWith isa basis).r s₁ s₂) →
+        (isa.satisfies s₁ (isa.pc_lift b.sub φ) ↔
+         isa.satisfies s₂ (isa.pc_lift b.sub φ)) := by
+  intro b _ φ _ s₁ s₂ h_equiv
+  have heq := h_state_eq s₁ s₂ h_equiv
+  subst heq
+  exact Iff.rfl
 
 /-! ### Lemma 3: Partition Equivalence → Expression Agreement (via basis coverage)
 
