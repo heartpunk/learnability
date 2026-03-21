@@ -99,6 +99,19 @@ import Instances.ISAs.VexProofCompression
 import Instances.ISAs.ElfSymbolTable
 import Instances.ISAs.DispatchLoopTestSubjects
 
+import Instances.ISAs.VexSimplificationSoundness
+import Instances.ISAs.VexDedupSoundness
+import Instances.ISAs.VexPipelineBridge
+import Instances.ISAs.AntiUnify
+import Instances.ISAs.TemplateConvergence
+import Instances.ISAs.HConsExpr
+import Instances.ISAs.DispatchLoopSMT
+import Instances.ISAs.DispatchLoopStabilization
+import Instances.ISAs.DispatchLoopFunctionStab
+import Instances.ISAs.DispatchLoopGrammar
+import Instances.ISAs.DispatchLoopPipeline
+import Instances.ISAs.DispatchLoopWTO
+
 import Instances.Examples.Phase4LoopStabilization
 
 import Instances.Examples.Phase5Capstone

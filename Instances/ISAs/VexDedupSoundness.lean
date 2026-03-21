@@ -1,5 +1,6 @@
 import Instances.ISAs.VexSimplificationSoundness
 import Instances.ISAs.VexDispatchLoop
+import Instances.ISAs.DispatchLoopStabilization
 
 /-!
 # Phase 2: Dedup Soundness
