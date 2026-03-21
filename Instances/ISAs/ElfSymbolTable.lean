@@ -54,7 +54,7 @@ private def readCString (data : ByteArray) (off : Nat) : String := Id.run do
     if b == 0 then break
     chars := chars.push (Char.ofNat b.toNat)
     i := i + 1
-  return String.mk chars.toList
+  return String.ofList chars.toList
 
 -- ELF64 constants
 private def elfMagic : ByteArray := ⟨#[0x7f, 0x45, 0x4c, 0x46]⟩  -- \x7fELF
