@@ -16,15 +16,14 @@ The cache maps: hash(canonicalizePC(assertion)) → Bool (true = UNSAT).
 Implication queries (A → B) are represented as (A ∧ ¬B): UNSAT means A implies B.
 Equivalence queries (A ↔ B) are decomposed into two implication queries. -/
 
-/-- SMT query cache: hash of canonicalized assertion formula → UNSAT result. -/
-abbrev SMTCache := Std.HashMap UInt64 Bool
+/-- SMT query cache: hash → bucket of ((a, b), result) entries.
+    Uses hash as fast-path, verifies structural equality on hit for soundness. -/
+abbrev SMTCache (Reg : Type) := Std.HashMap UInt64 (Array (SymPC Reg × SymPC Reg × Bool))
 
 /-- Cache key for an implication query "does A imply B?",
     i.e. is (A ∧ ¬B) UNSAT?  Uses depth-limited hash directly rather than
     full canonicalization (which traverses the entire expression tree —
-    89% of CPU for QuickJS per GDB sampling). More cache misses for
-    semantically equivalent but syntactically different queries, but
-    those are rare in practice and the cost is just a redundant CVC5 call. -/
+    89% of CPU for QuickJS per GDB sampling). -/
 def smtImplCacheKey {Reg : Type} [Hashable Reg] (a b : SymPC Reg) : UInt64 :=
   mixHash (hash a) (hash b)
 
@@ -33,7 +32,7 @@ def smtImplCacheKey {Reg : Type} [Hashable Reg] (a b : SymPC Reg) : UInt64 :=
     Returns: (results array aligned with input, cache hits count).
     Updates the cache ref with new results. -/
 def smtCheckImplCached {Reg : Type} [BEq Reg] [DecidableEq Reg] [Hashable Reg] [ToString Reg]
-    (cache : IO.Ref SMTCache)
+    (cache : IO.Ref (SMTCache Reg))
     (pairs : Array (SymPC Reg × SymPC Reg))
     (tmpFile : System.FilePath := ".lake/smt_cached.smt2") :
     IO (Array Bool × Nat) := do
@@ -49,9 +48,17 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [DecidableEq Reg] [Hashable Reg] [
   let mut pairIdx : Nat := 0
   for (a, b) in pairs do
     let key := smtImplCacheKey a b
+    let mut found := false
     match c.get? key with
-    | some v => results := results.set! pairIdx (some v); hits := hits + 1
-    | none =>
+    | some bucket =>
+      for hi : i in [:bucket.size] do
+        let (ca, cb, cv) := bucket[i]
+        if ca = a && cb = b then
+          results := results.set! pairIdx (some cv)
+          hits := hits + 1
+          found := true
+    | none => pure ()
+    if !found then
       missOrigIdx := missOrigIdx.push pairIdx
       missPairs := missPairs.push (a, b)
     pairIdx := pairIdx + 1
@@ -186,7 +193,9 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [DecidableEq Reg] [Hashable Reg] [
       let isUnsat := if h : missIdx < allMissResults.size then allMissResults[missIdx] else false
       if h2 : missIdx < missOrigIdx.size then
         results := results.set! missOrigIdx[missIdx] (some isUnsat)
-      c' := c'.insert (smtImplCacheKey a b) isUnsat
+      let ck := smtImplCacheKey a b
+      let bucket := c'.getD ck #[]
+      c' := c'.insert ck (bucket.push (a, b, isUnsat))
       missIdx := missIdx + 1
     cache.set c'
     let t_store_end ← IO.monoMsNow

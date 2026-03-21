@@ -33,7 +33,7 @@ def findSemClosedWitnesses {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     [Hashable Reg] [BEq Reg] [ToString Reg]
     (branches : Array (Branch (SymSub Reg) (SymPC Reg)))
     (closure : Array (SymPC Reg))
-    (smtCache : IO.Ref SMTCache)
+    (smtCache : IO.Ref (SMTCache Reg))
     (log : String → IO Unit := fun _ => pure ()) :
     IO (Array (Nat × Nat × SemClosedWitness)) := do
   let mut results : Array (Nat × Nat × SemClosedWitness) := #[]
@@ -783,7 +783,7 @@ def computeStabilizationHS {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashabl
     -- Call CVC5 with caching (Green-style)
     let mut subsumedSet : Std.HashSet Nat := {}
     if pcPairs.size > 0 then
-      let subsCache ← IO.mkRef ({} : SMTCache)
+      let subsCache ← IO.mkRef ({} : SMTCache Reg)
       let (subsResults, subsHits) ← smtCheckImplCached subsCache pcPairs ".lake/smt_subsumption.smt2"
       for i in [:subsResults.size] do
         if h : i < subsResults.size then

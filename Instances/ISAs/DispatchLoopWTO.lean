@@ -132,7 +132,7 @@ def stratifiedFixpoint
   -- Phase 1: Compute leaf function (next_sym) fixpoint — no summaries needed
   let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
   -- Green-style SMT query cache: shared across all function stabilizations
-  let smtCache ← IO.mkRef ({} : SMTCache)
+  let smtCache ← IO.mkRef ({} : SMTCache Amd64Reg)
   log s!"\n--- Phase 1: Leaf function (next_sym) ---"
   let t0 ← IO.monoMsNow
   let (nextSymName, nextSymBody) := funcBlocks[0]!
@@ -389,7 +389,7 @@ def wtoFixpoint
   for func in functions do
     summaries := summaries.insert func.entryAddr #[]
   -- Shared SMT cache
-  let smtCache ← IO.mkRef ({} : SMTCache)
+  let smtCache ← IO.mkRef ({} : SMTCache Amd64Reg)
   -- Name lookup for logging
   let nameOf (addr : UInt64) : String :=
     match functions.find? (·.entryAddr == addr) with

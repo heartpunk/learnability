@@ -14,7 +14,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
     (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
     (maxIter : Nat) (log : String → IO Unit)
-    (smtCache : IO.Ref SMTCache)
+    (smtCache : IO.Ref (SMTCache Reg))
     (initialFrontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[])
     (addrClassify : Option (AddrClassifier Reg) := none)
     (maxBranches : Nat := 10000)
