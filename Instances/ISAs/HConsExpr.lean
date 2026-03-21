@@ -656,4 +656,19 @@ def simplifyHMem {Reg : Type} [BEq Reg] [Hashable Reg] : HMem Reg → HMem Reg
     | _ => HMem.store w mem' addr' val'
 end
 
+/-! ## Bridge: SymSub composition and simplification via HExpr -/
+
+/-- Compose two raw SymSubs via hash-consed intermediary.
+    Converts to HSub, composes with structural sharing, converts back. -/
+def composeSymSubH {Reg : Type} [DecidableEq Reg] [Hashable Reg] [Fintype Reg]
+    (sub₁ sub₂ : SymSub Reg) : SymSub Reg :=
+  (composeHSub (HSub.ofRaw sub₁) (HSub.ofRaw sub₂)).toRaw
+
+/-- Simplify a raw SymSub via hash-consed intermediary. -/
+def simplifySymSubH {Reg : Type} [DecidableEq Reg] [Hashable Reg]
+    (sub : SymSub Reg) : SymSub Reg :=
+  let h := HSub.ofRaw sub
+  { regs := fun r => (simplifyHExpr (h.regs r)).toRaw
+    mem := (simplifyHMem h.mem).toRaw }
+
 end VexISA

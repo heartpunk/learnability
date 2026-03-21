@@ -1,4 +1,5 @@
 import Instances.ISAs.DispatchLoopSMT
+import Instances.ISAs.HConsExpr
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -352,7 +353,7 @@ def composeBranchArraySimplified {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     body.sub.regs rip, we skip ~94% of compositions that would be dropped.
 
     Returns (result, totalPairs, skippedByIndex, droppedBySimplify). -/
-def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg]
+def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg] [Hashable Reg]
     (ip_reg : Reg) (bodyArr frontierArr : Array (Branch (SymSub Reg) (SymPC Reg))) :
     Array (Branch (SymSub Reg) (SymPC Reg) × Nat) × Nat × Nat × Nat := Id.run do
   let isa := vexSummaryISA Reg
@@ -378,7 +379,10 @@ def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq 
       | none => frontierArr  -- can't determine target, fall back to all
     for f in compatible do
       composed_count := composed_count + 1
-      let composed := b.compose isa f
+      -- Use hash-consed composition for structural sharing
+      let composedSub := composeSymSubH b.sub f.sub
+      let composedPC := isa.pc_and b.pc (isa.pc_lift b.sub f.pc)
+      let composed : Branch (SymSub Reg) (SymPC Reg) := ⟨composedSub, composedPC⟩
       match simplifyBranch composed with
       | none => dropped := dropped + 1
       | some b' => result := result.push (b', bodyIdx)
