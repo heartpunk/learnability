@@ -270,7 +270,9 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       · split
         · sorry
         · simp only [evalSymExpr, evalSymMem]
-      · split <;> sorry
+      · split
+        · sorry
+        · simp only [evalSymExpr, evalSymMem]
       · split <;> sorry
       · rfl
 
