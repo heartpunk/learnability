@@ -231,11 +231,39 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (w : Width) (mem : SymMem Reg) (addr : SymExpr Reg) (s : ConcreteState Reg) :
     evalSymExpr s (resolveLoadFrom w mem addr) =
     ByteMem.read w (evalSymMem s mem) (evalSymExpr s addr) := by
-  -- Previously fully proved for const/const case. Needs restoration after:
-  -- 1. rawConstRangesNonOverlapping refactor (Bool vs Prop ∧ destructuring)
-  -- 2. reg+const cases need modular arithmetic bridge lemma
-  -- Both issues need interactive Lean investigation of proof state.
-  sorry
+  cases mem with
+  | base => rfl
+  | store sw innerMem sa sv =>
+    have ih := resolveLoadFrom_sound w innerMem addr s
+    simp only [resolveLoadFrom]
+    split
+    · -- Matching case
+      rename_i hmatch
+      have hw := (Bool.and_eq_true _ _).mp hmatch
+      have hwEq : w = sw := eq_of_beq hw.1
+      have haEq : addr = sa := eq_of_beq hw.2
+      subst hwEq; subst haEq
+      simp only [evalSymExpr, evalSymMem]
+      rw [ByteMem_read_write_same]; simp only [truncate]
+    · -- Non-matching: split on address patterns
+      split
+      · -- const/const
+        rename_i a b heq
+        have hsa : sa = SymExpr.const a := congrArg Prod.fst heq
+        have haddr : addr = SymExpr.const b := congrArg Prod.snd heq
+        subst hsa; subst haddr
+        split
+        · -- non-overlapping
+          rename_i hnoverlap
+          -- hnoverlap : rawConstRangesNonOverlapping ... = true
+          -- Let's see what simp_all can do
+          rw [ih]; simp only [evalSymExpr, evalSymMem]
+          simp only [rawConstRangesNonOverlapping, Bool.and_eq_true, decide_eq_true_eq,
+                      Bool.or_eq_true] at hnoverlap
+          exact (ByteMem_read_write_nonoverlap w sw _ _ _ _ hnoverlap.1 hnoverlap.2.1 hnoverlap.2.2).symm
+        · simp only [evalSymExpr, evalSymMem]
+      -- remaining cases: sorry for now, check one at a time
+      all_goals sorry
 
 /-! ## Proved: simplifyLoadStoreExpr / simplifyLoadStoreMem soundness
 
@@ -247,15 +275,78 @@ mutual
 theorem simplifyLoadStoreExpr_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (e : SymExpr Reg) (s : ConcreteState Reg) :
     evalSymExpr s (simplifyLoadStoreExpr e) = evalSymExpr s e := by
-  -- TODO: restore — broken by foldAnd64 addition + resolveLoadFrom reg+const cases.
-  -- Previously fully proved; needs foldAnd64_sound + updated resolveLoadFrom_sound.
-  sorry
+  match e with
+  | .const _ | .reg _ => rfl
+  | .low32 x => simp only [simplifyLoadStoreExpr, evalSymExpr]; rw [simplifyLoadStoreExpr_sound x s]
+  | .uext32 x => simp only [simplifyLoadStoreExpr, evalSymExpr]; rw [simplifyLoadStoreExpr_sound x s]
+  | .sext8to32 x => simp only [simplifyLoadStoreExpr, evalSymExpr]; rw [simplifyLoadStoreExpr_sound x s]
+  | .sext32to64 x => simp only [simplifyLoadStoreExpr, evalSymExpr]; rw [simplifyLoadStoreExpr_sound x s]
+  | .not64 x => simp only [simplifyLoadStoreExpr, evalSymExpr]; rw [simplifyLoadStoreExpr_sound x s]
+  | .not32 x => simp only [simplifyLoadStoreExpr, evalSymExpr]; rw [simplifyLoadStoreExpr_sound x s]
+  | .ite c t f =>
+    simp only [simplifyLoadStoreExpr, evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound c s, simplifyLoadStoreExpr_sound t s, simplifyLoadStoreExpr_sound f s]
+  | .sub32 a b | .and32 a b | .shl32 a b | .or32 a b | .xor32 a b =>
+    simp only [simplifyLoadStoreExpr, evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .add64 a b =>
+    simp only [simplifyLoadStoreExpr]; rw [foldAdd64_sound]; simp only [evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .sub64 a b =>
+    simp only [simplifyLoadStoreExpr]; rw [foldSub64_sound]; simp only [evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .and64 a b =>
+    simp only [simplifyLoadStoreExpr]; rw [foldAnd64_sound]; simp only [evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .xor64 a b | .or64 a b | .shl64 a b =>
+    simp only [simplifyLoadStoreExpr, evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .shr64 a b =>
+    simp only [simplifyLoadStoreExpr, evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .mul64 a b =>
+    simp only [simplifyLoadStoreExpr, evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .mul32 a b =>
+    simp only [simplifyLoadStoreExpr, evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .sar64 a b =>
+    simp only [simplifyLoadStoreExpr, evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .sar32 a b =>
+    simp only [simplifyLoadStoreExpr, evalSymExpr]
+    rw [simplifyLoadStoreExpr_sound a s, simplifyLoadStoreExpr_sound b s]
+  | .load w mem addr =>
+    simp only [simplifyLoadStoreExpr]
+    rw [resolveLoadFrom_sound]; simp only [evalSymExpr]
+    rw [simplifyLoadStoreMem_sound mem s, simplifyLoadStoreExpr_sound addr s]
 
 /-- `simplifyLoadStoreMem` preserves memory evaluation. -/
 theorem simplifyLoadStoreMem_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (m : SymMem Reg) (s : ConcreteState Reg) :
     evalSymMem s (simplifyLoadStoreMem m) = evalSymMem s m := by
-  sorry
+  match m with
+  | .base => rfl
+  | .store w mem addr val =>
+    simp only [simplifyLoadStoreMem]
+    split
+    · -- inner mem simplified to .store: dead store elimination check
+      rename_i w' innerMem storeAddr' _
+      split
+      · -- dead store eliminated
+        simp only [evalSymMem]
+        rw [simplifyLoadStoreExpr_sound addr s, simplifyLoadStoreExpr_sound val s]
+        sorry -- need: write at same addr overwrites previous write
+      · -- no dead store
+        simp only [evalSymMem]
+        rw [simplifyLoadStoreMem_sound mem s,
+            simplifyLoadStoreExpr_sound addr s,
+            simplifyLoadStoreExpr_sound val s]
+    · -- inner mem simplified to .base or other
+      simp only [evalSymMem]
+      rw [simplifyLoadStoreMem_sound mem s,
+          simplifyLoadStoreExpr_sound addr s,
+          simplifyLoadStoreExpr_sound val s]
 end
 
 /-- `simplifyLoadStorePC` preserves PC evaluation: load-after-store

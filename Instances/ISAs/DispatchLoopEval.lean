@@ -382,7 +382,11 @@ def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymEx
   | .and64 a b => foldAnd64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .or64 a b => .or64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .shl64 a b => .shl64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
-  | .shr64 a b | .mul64 a b | .mul32 a b | .sar64 a b | .sar32 a b => .shr64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .shr64 a b => .shr64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .mul64 a b => .mul64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .mul32 a b => .mul32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .sar64 a b => .sar64 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
+  | .sar32 a b => .sar32 (simplifyLoadStoreExpr a) (simplifyLoadStoreExpr b)
   | .load w mem addr =>
     let addr' := simplifyLoadStoreExpr addr
     let mem' := simplifyLoadStoreMem mem
