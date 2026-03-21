@@ -65,54 +65,48 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
     if pairs.size > 10000 then
       IO.eprintln s!"      [smt-trace] starting script gen: {missPairs.size} misses in {totalChunks} chunks"
       (← IO.getStderr).flush
-    -- Step 2a: generate all chunk scripts
+    -- Step 2a+2b: write scripts directly to files and run CVC5 in parallel batches.
+    -- No in-memory script accumulation — avoids O(n²) string concat blowup.
     let t_gen_start ← IO.monoMsNow
-    let mut chunkScripts : Array (Nat × String) := #[]  -- (chunkIdx, script)
-    let mut chunkStart := 0
-    let mut chunkIdx := 0
-    while chunkStart < missPairs.size do
-      let chunkEnd := min (chunkStart + chunkSize) missPairs.size
-      let chunk := missPairs.extract chunkStart chunkEnd
-      let mut regNames : Std.HashSet String := {}
-      let mut needsMem := false
-      for (a, b) in chunk do
-        regNames := SymPC.collectRegNames a regNames
-        regNames := SymPC.collectRegNames b regNames
-        if SymPC.hasLoad a || SymPC.hasLoad b then needsMem := true
-      let mut script := smtPreamble regNames needsMem
-      for (a, b) in chunk do
-        script := script ++ "(push)\n"
-        script := script ++ s!"(assert (and {SymPC.toSMTLib a} (not {SymPC.toSMTLib b})))\n"
-        script := script ++ "(check-sat)\n"
-        script := script ++ "(pop)\n"
-      script := script ++ "(exit)\n"
-      chunkScripts := chunkScripts.push (chunkIdx, script)
-      if pairs.size > 10000 && (chunkIdx % 50 == 0 || chunkIdx == totalChunks - 1) then
-        let t_now ← IO.monoMsNow
-        IO.eprintln s!"      [smt-trace] script gen {chunkIdx+1}/{totalChunks}: {t_now - t_gen_start}ms elapsed, {script.length} bytes"
-        (← IO.getStderr).flush
-      chunkStart := chunkEnd
-      chunkIdx := chunkIdx + 1
-    let t_gen_end ← IO.monoMsNow
-    if pairs.size > 10000 then
-      IO.eprintln s!"      [smt-trace] generated {totalChunks} scripts in {t_gen_end - t_gen_start}ms"
-    -- Step 2b: run CVC5 in parallel batches of maxParallel
     let maxParallel := min 8 totalChunks
     let mut allChunkResults : Array (Nat × Array Bool) := #[]
-    let mut batchStart := 0
-    let mut batchNum := 0
-    while batchStart < chunkScripts.size do
-      let batchEnd := min (batchStart + maxParallel) chunkScripts.size
-      let batch := chunkScripts.extract batchStart batchEnd
+    let mut chunkStart := 0
+    let mut chunkIdx := 0
+    -- Process in parallel batches
+    while chunkStart < missPairs.size do
+      let batchEnd := min (chunkIdx + maxParallel) totalChunks
       let t_batch_start ← IO.monoMsNow
-      -- Write all scripts and launch all CVC5 processes
-      let tasks ← batch.mapM fun (ci, script) => do
-        let chunkFile := s!".lake/smt_chunk_{ci}.smt2"
-        IO.FS.writeFile chunkFile script
+      -- Write chunk files and launch CVC5 for this batch
+      let mut tasks : Array (Task (Except IO.Error (Nat × Array Bool))) := #[]
+      while chunkIdx < batchEnd && chunkStart < missPairs.size do
+        let chunkEnd := min (chunkStart + chunkSize) missPairs.size
+        let chunk := missPairs.extract chunkStart chunkEnd
+        let chunkFile := s!".lake/smt_chunk_{chunkIdx}.smt2"
+        let ci := chunkIdx
+        -- Collect register names for preamble
+        let mut regNames : Std.HashSet String := {}
+        let mut needsMem := false
+        for (a, b) in chunk do
+          regNames := SymPC.collectRegNames a regNames
+          regNames := SymPC.collectRegNames b regNames
+          if SymPC.hasLoad a || SymPC.hasLoad b then needsMem := true
+        -- Write directly to file — no string accumulation
+        let h ← IO.FS.Handle.mk chunkFile .write
+        h.putStr (smtPreamble regNames needsMem)
+        for (a, b) in chunk do
+          h.putStr "(push)\n"
+          h.putStr s!"(assert (and {SymPC.toSMTLib a} (not {SymPC.toSMTLib b})))\n"
+          h.putStr "(check-sat)\n"
+          h.putStr "(pop)\n"
+        h.putStr "(exit)\n"
+        h.flush
+        -- Launch CVC5 asynchronously
         let task ← IO.asTask (prio := .default) do
           let out ← IO.Process.output { cmd := "cvc5", args := #["--incremental", chunkFile] }
           return (ci, parseSMTResults out.stdout)
-        return task
+        tasks := tasks.push task
+        chunkStart := chunkEnd
+        chunkIdx := chunkIdx + 1
       -- Wait for all tasks in this batch
       for task in tasks do
         match task.get with
@@ -121,10 +115,11 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
         | .error e => throw e
       let t_batch_end ← IO.monoMsNow
       if pairs.size > 10000 then
-        IO.eprintln s!"      [smt-trace] batch {batchNum+1}: chunks {batchStart+1}-{batchEnd}/{totalChunks}, {t_batch_end - t_batch_start}ms ({maxParallel} parallel)"
-      batchStart := batchEnd
-      batchNum := batchNum + 1
-    -- Step 2c: merge results in chunk order
+        IO.eprintln s!"      [smt-trace] batch: chunks up to {chunkIdx}/{totalChunks}, {t_batch_end - t_batch_start}ms ({maxParallel} parallel)"
+    let t_gen_end ← IO.monoMsNow
+    if pairs.size > 10000 then
+      IO.eprintln s!"      [smt-trace] all chunks done in {t_gen_end - t_gen_start}ms"
+    -- Merge results in chunk order
     let sortedResults := allChunkResults.qsort (fun a b => a.1 < b.1)
     let mut allMissResults : Array Bool := #[]
     for (_, chunkRes) in sortedResults do
