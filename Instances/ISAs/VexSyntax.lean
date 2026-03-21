@@ -528,6 +528,15 @@ theorem ByteMem_read_write_same (w : Width) (M : ByteMem) (a v : UInt64) :
   · exact read_write_same_w32 M a v
   · exact read_write_same_w64 M a v
 
+/-! ## Write-write same address -/
+
+theorem writeByte_writeByte_same (mem : ByteMem) (a : UInt64) (v1 v2 : UInt8) :
+    ByteMem.writeByte (ByteMem.writeByte mem a v1) a v2 = ByteMem.writeByte mem a v2 := by
+  simp only [ByteMem.writeByte, ByteMem.eraseAddr]
+  congr 1
+  simp only [List.filter_cons, decide_not]
+  simp [List.filter_filter]
+
 /-! ## Width-level non-overlap: read after write at non-overlapping byte ranges
 
 The non-wrapping guards `h_a` and `h_b` ensure that the store and load byte ranges
