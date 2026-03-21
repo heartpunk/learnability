@@ -414,7 +414,7 @@ def parseExpr (s : String) (st : ParseState) (fuel : Nat := s.length + 1)
           let code ← match parseNumLit codeStr with
             | some n => .ok (UInt64.ofNat n)
             | none   => .error s!"bad CCall code: {codeStr}"
-          let ccOp   ← parseExpr opStr   st fuel
+          let _ccOp  ← parseExpr opStr   st fuel
           let ccDep1 ← parseExpr dep1Str st fuel
           let ccDep2 ← parseExpr dep2Str st fuel
           -- Code 0x4 = zero flag: result is 1 if dep1 - dep2 == 0
