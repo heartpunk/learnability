@@ -449,7 +449,11 @@ def simplifyLoadStoreExprR {Reg : Type} [DecidableEq Reg]
   | .and64 a b => foldAnd64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .or64 a b => .or64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .shl64 a b => .shl64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
-  | .shr64 a b | .mul64 a b | .mul32 a b | .sar64 a b | .sar32 a b => .shr64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .shr64 a b => .shr64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .mul64 a b => .mul64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .mul32 a b => .mul32 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .sar64 a b => .sar64 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
+  | .sar32 a b => .sar32 (simplifyLoadStoreExprR classify a) (simplifyLoadStoreExprR classify b)
   | .load w mem addr =>
     let addr' := simplifyLoadStoreExprR classify addr
     let mem' := simplifyLoadStoreMemR classify mem
