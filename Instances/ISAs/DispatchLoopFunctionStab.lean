@@ -12,7 +12,7 @@ open VexISA VexIRParser
     putting them in the body (which would cause expression nesting). -/
 def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [Hashable Reg] [EnumReg Reg] [BEq Reg] [ToString Reg]
     (ip_reg : Reg) (bodyArr : Array (Branch (SymSub Reg) (SymPC Reg)))
-    (summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
+    (_summaries : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))))
     (maxIter : Nat) (log : String → IO Unit)
     (smtCache : IO.Ref (SMTCache Reg))
     (initialFrontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[])
