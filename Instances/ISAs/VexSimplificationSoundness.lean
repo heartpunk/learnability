@@ -242,7 +242,40 @@ private theorem ByteMem_read_write_nonoverlap_offset
     (h2 : c2.toNat + lw.byteCount ≤ UInt64.size)
     (h3 : c1.toNat + sw.byteCount ≤ c2.toNat ∨ c2.toNat + lw.byteCount ≤ c1.toNat) :
     ByteMem.read lw (ByteMem.write sw M (R + c1) v) (R + c2) = ByteMem.read lw M (R + c2) := by
-  sorry
+  have hp : ∀ i j, i < sw.byteCount → j < lw.byteCount →
+      (R + c1) + UInt64.ofNat i ≠ (R + c2) + UInt64.ofNat j := by
+    intro i j hi hj hcontra
+    -- (R + c1) + i = (R + c2) + j
+    -- By UInt64 associativity: R + (c1 + i) = R + (c2 + j)
+    have hassoc1 : (R + c1) + UInt64.ofNat i = R + (c1 + UInt64.ofNat i) := UInt64.add_assoc ..
+    have hassoc2 : (R + c2) + UInt64.ofNat j = R + (c2 + UInt64.ofNat j) := UInt64.add_assoc ..
+    rw [hassoc1, hassoc2] at hcontra
+    have hcancel := uint64_add_left_cancel R _ _ hcontra
+    have h_ne : c1.toNat + i ≠ c2.toNat + j := by omega
+    apply h_ne
+    have h_i_small : i < UInt64.size := by omega
+    have h_j_small : j < UInt64.size := by omega
+    have h_ofNat_i : (UInt64.ofNat i).toNat = i := Nat.mod_eq_of_lt h_i_small
+    have h_ofNat_j : (UInt64.ofNat j).toNat = j := Nat.mod_eq_of_lt h_j_small
+    have h_ci_lt : c1.toNat + i < UInt64.size := by omega
+    have h_cj_lt : c2.toNat + j < UInt64.size := by omega
+    have := congrArg UInt64.toNat hcancel
+    simp only [UInt64.toNat_add, h_ofNat_i, h_ofNat_j,
+               Nat.mod_eq_of_lt h_ci_lt, Nat.mod_eq_of_lt h_cj_lt] at this
+    omega
+  cases lw <;> cases sw <;>
+    simp only [ByteMem.read, ByteMem.write, Width.byteCount,
+               ByteMem.read8, ByteMem.read16le, ByteMem.read32le, ByteMem.read64le,
+               ByteMem.write8, ByteMem.write16le, ByteMem.write32le, ByteMem.write64le] at *
+  all_goals first
+    | exact readLEAux_writeLEAux_nonoverlap M _ v _ _ _ hp
+    | (congr 1; congr 1
+       exact readByte_writeLEAux_nonoverlap M _ v _ _
+        (fun i hi => by simpa using hp i 0 hi (by omega)))
+    | exact readLEAux_writeByte_nonoverlap M _ _ _ _
+        (fun j hj => by simpa using hp 0 j (by omega) hj)
+    | (congr 1; congr 1
+       exact readByte_writeByte_ne M _ _ _ (by simpa using hp 0 0 (by omega) (by omega)))
 
 /-- Same as above but for R - c1 vs R - c2 (sub64 pattern). -/
 private theorem ByteMem_read_write_nonoverlap_sub_sub
