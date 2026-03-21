@@ -833,7 +833,9 @@ theorem h_value_determined_of_state_agreement
         (pcSetoidWith isa basis).r s₁ s₂ →
         isa.satisfies s₁ (isa.pc_lift b.sub φ) ↔
         isa.satisfies s₂ (isa.pc_lift b.sub φ) := by
-  sorry -- introN mismatch after type change
+  -- Proof: h_state_eq gives s₁ = s₂, subst gives Iff.rfl.
+  -- Blocked on ∀-∈-Finset desugaring type mismatch with intro/fun.
+  sorry
 
 /-! ### Lemma 3: Partition Equivalence → Expression Agreement (via basis coverage)
 
