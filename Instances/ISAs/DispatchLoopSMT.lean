@@ -94,10 +94,11 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
         let h ← IO.FS.Handle.mk chunkFile .write
         h.putStr (smtPreamble regNames needsMem)
         for (a, b) in chunk do
-          h.putStr "(push)\n"
-          h.putStr s!"(assert (and {SymPC.toSMTLib a} (not {SymPC.toSMTLib b})))\n"
-          h.putStr "(check-sat)\n"
-          h.putStr "(pop)\n"
+          h.putStr "(push)\n(assert (and "
+          SymPC.writeToSMTLib h a
+          h.putStr " (not "
+          SymPC.writeToSMTLib h b
+          h.putStr ")))\n(check-sat)\n(pop)\n"
         h.putStr "(exit)\n"
         h.flush
         -- Launch CVC5 asynchronously

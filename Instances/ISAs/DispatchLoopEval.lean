@@ -679,6 +679,51 @@ def SymPC.toSMTLib {Reg : Type} [ToString Reg] : SymPC Reg → String
   | .and φ ψ => s!"(and {SymPC.toSMTLib φ} {SymPC.toSMTLib ψ})"
   | .not φ => s!"(not {SymPC.toSMTLib φ})"
 
+mutual
+/-- Write SymExpr to a Handle as SMT-LIB2 — avoids O(n²) string building. -/
+def SymExpr.writeToSMTLib {Reg : Type} [ToString Reg] (h : IO.FS.Handle) : SymExpr Reg → IO Unit
+  | .const v => h.putStr s!"(_ bv{v.toNat} 64)"
+  | .reg r => h.putStr s!"reg_{toString r}"
+  | .low32 e => do h.putStr "((_ zero_extend 32) ((_ extract 31 0) "; SymExpr.writeToSMTLib h e; h.putStr "))"
+  | .uext32 e => do h.putStr "((_ zero_extend 32) ((_ extract 31 0) "; SymExpr.writeToSMTLib h e; h.putStr "))"
+  | .sext8to32 e => do h.putStr "((_ zero_extend 32) ((_ sign_extend 24) ((_ extract 7 0) "; SymExpr.writeToSMTLib h e; h.putStr ")))";
+  | .sext32to64 e => do h.putStr "((_ sign_extend 32) ((_ extract 31 0) "; SymExpr.writeToSMTLib h e; h.putStr "))"
+  | .sub32 l r => do h.putStr "((_ zero_extend 32) (bvsub ((_ extract 31 0) "; SymExpr.writeToSMTLib h l; h.putStr ") ((_ extract 31 0) "; SymExpr.writeToSMTLib h r; h.putStr ")))"
+  | .shl32 l r => do h.putStr "((_ zero_extend 32) (bvshl ((_ extract 31 0) "; SymExpr.writeToSMTLib h l; h.putStr ") ((_ extract 31 0) "; SymExpr.writeToSMTLib h r; h.putStr ")))"
+  | .and32 l r => do h.putStr "((_ zero_extend 32) (bvand ((_ extract 31 0) "; SymExpr.writeToSMTLib h l; h.putStr ") ((_ extract 31 0) "; SymExpr.writeToSMTLib h r; h.putStr ")))"
+  | .or32 l r => do h.putStr "((_ zero_extend 32) (bvor ((_ extract 31 0) "; SymExpr.writeToSMTLib h l; h.putStr ") ((_ extract 31 0) "; SymExpr.writeToSMTLib h r; h.putStr ")))"
+  | .xor32 l r => do h.putStr "((_ zero_extend 32) (bvxor ((_ extract 31 0) "; SymExpr.writeToSMTLib h l; h.putStr ") ((_ extract 31 0) "; SymExpr.writeToSMTLib h r; h.putStr ")))"
+  | .add64 l r => do h.putStr "(bvadd "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .sub64 l r => do h.putStr "(bvsub "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .xor64 l r => do h.putStr "(bvxor "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .and64 l r => do h.putStr "(bvand "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .or64 l r => do h.putStr "(bvor "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .shl64 l r => do h.putStr "(bvshl "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .shr64 l r => do h.putStr "(bvlshr "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .mul64 l r => do h.putStr "(bvmul "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .not64 e => do h.putStr "(bvnot "; SymExpr.writeToSMTLib h e; h.putStr ")"
+  | .sar64 l r => do h.putStr "(bvashr "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .sar32 l r => do h.putStr "((_ zero_extend 32) (bvashr ((_ extract 31 0) "; SymExpr.writeToSMTLib h l; h.putStr ") ((_ extract 31 0) "; SymExpr.writeToSMTLib h r; h.putStr ")))"
+  | .ite c t f => do h.putStr "(ite (not (= "; SymExpr.writeToSMTLib h c; h.putStr " (_ bv0 64))) "; SymExpr.writeToSMTLib h t; h.putStr " "; SymExpr.writeToSMTLib h f; h.putStr ")"
+  | .not32 e => do h.putStr "((_ zero_extend 32) (bvnot ((_ extract 31 0) "; SymExpr.writeToSMTLib h e; h.putStr ")))"
+  | .mul32 l r => do h.putStr "((_ zero_extend 32) (bvmul ((_ extract 31 0) "; SymExpr.writeToSMTLib h l; h.putStr ") ((_ extract 31 0) "; SymExpr.writeToSMTLib h r; h.putStr ")))"
+  | .load w m addr => do h.putStr s!"(load_{Width.toSMTWidth w} "; SymMem.writeToSMTLib h m; h.putStr " "; SymExpr.writeToSMTLib h addr; h.putStr ")"
+
+def SymMem.writeToSMTLib {Reg : Type} [ToString Reg] (h : IO.FS.Handle) : SymMem Reg → IO Unit
+  | .base => h.putStr "base_mem"
+  | .store w m addr val => do
+    h.putStr s!"(store_{Width.toSMTWidth w} "; SymMem.writeToSMTLib h m; h.putStr " "; SymExpr.writeToSMTLib h addr; h.putStr " "; SymExpr.writeToSMTLib h val; h.putStr ")"
+end
+
+/-- Write SymPC to a Handle as SMT-LIB2 — avoids O(n²) string building. -/
+def SymPC.writeToSMTLib {Reg : Type} [ToString Reg] (h : IO.FS.Handle) : SymPC Reg → IO Unit
+  | .true => h.putStr "true"
+  | .eq l r => do h.putStr "(= "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .lt l r => do h.putStr "(bvult "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .le l r => do h.putStr "(bvule "; SymExpr.writeToSMTLib h l; h.putStr " "; SymExpr.writeToSMTLib h r; h.putStr ")"
+  | .and φ ψ => do h.putStr "(and "; SymPC.writeToSMTLib h φ; h.putStr " "; SymPC.writeToSMTLib h ψ; h.putStr ")"
+  | .not φ => do h.putStr "(not "; SymPC.writeToSMTLib h φ; h.putStr ")"
+
 /-- Collect all register names appearing in a SymPC (for variable declarations). -/
 def SymExpr.collectRegNames {Reg : Type} [ToString Reg] [BEq Reg] [Hashable Reg]
     : SymExpr Reg → Std.HashSet String → Std.HashSet String
