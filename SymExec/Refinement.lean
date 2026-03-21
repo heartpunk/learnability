@@ -29,7 +29,7 @@ branch `b` and every base PC `φ ∈ closure`, the predicate
 `pc_lift b.sub φ` is determined by the quotient induced by `closure`. -/
 def SemClosed (model : Finset (Branch Sub PC)) (closure : Finset PC) : Prop :=
   ∀ b ∈ model, ∀ φ ∈ closure, ∀ s₁ s₂ : State,
-    (pcSetoidWith isa closure).r s₁ s₂ →
+    ((pcSetoidWith isa closure).r s₁ s₂) →
       (isa.satisfies s₁ (isa.pc_lift b.sub φ) ↔
        isa.satisfies s₂ (isa.pc_lift b.sub φ))
 

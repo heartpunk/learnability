@@ -182,11 +182,14 @@ theorem semClosed_of_valueDetermined {Reg : Type} [DecidableEq Reg] [Fintype Reg
     (h_value_determined : ∀ b ∈ model, ∀ T ∈ Ψ, ∀ v : HoleVal Reg,
       instantiatePC v T ∈ basis →
       ∀ s₁ s₂ : State,
-        (pcSetoidWith isa basis).r s₁ s₂ →
-        isa.satisfies s₁ (substSymPC b.sub (instantiatePC v T)) ↔
-        isa.satisfies s₂ (substSymPC b.sub (instantiatePC v T)))
+        ((pcSetoidWith isa basis).r s₁ s₂) →
+        (isa.satisfies s₁ (substSymPC b.sub (instantiatePC v T)) ↔
+         isa.satisfies s₂ (substSymPC b.sub (instantiatePC v T))))
     : SemClosed isa model basis := by
-  -- TODO: fix — type mismatch in h_equiv after Setoid field projection change
-  sorry
+  intro b hb φ hφ s₁ s₂ h_equiv
+  obtain ⟨T, hT, v, hφ_eq⟩ := h_basis_inst φ hφ
+  subst hφ_eq
+  rw [h_lift_eq]
+  exact h_value_determined b hb T hT v hφ s₁ s₂ h_equiv
 
 end VexISA
