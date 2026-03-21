@@ -6,6 +6,198 @@ set_option relaxedAutoImplicit false
 
 open VexISA VexIRParser
 
+/-! ## Region-Aware HExpr Simplification
+
+Mirrors `simplifyLoadStoreExprR`/`simplifyLoadStoreMemR` but works on HExpr
+with structural sharing (unchanged subtrees are reused, zero allocation). -/
+
+namespace VexISA
+
+/-- Classify an HExpr address by region, mirroring `classifyAddr` on SymExpr. -/
+def classifyHAddr {Reg : Type} [BEq Reg]
+    (regions : Array MemRegion) (stackRegs : List Reg)
+    (addr : HExpr Reg) : Option RegionTag :=
+  match addr.node with
+  | .const c => lookupRegion regions c
+  | .reg r =>
+    if stackRegs.any (· == r) then some .stack else none
+  | .add64 rExpr (.mk _ (.const _)) =>
+    match rExpr.node with
+    | .reg r => if stackRegs.any (· == r) then some .stack else none
+    | _ => none
+  | .sub64 rExpr (.mk _ (.const _)) =>
+    match rExpr.node with
+    | .reg r => if stackRegs.any (· == r) then some .stack else none
+    | _ => none
+  | .load _ _mem (.mk _ (.const c)) =>
+    lookupRegion regions c
+  | _ => none
+
+/-- HExpr address classifier type: HExpr Reg → Option RegionTag. -/
+abbrev HAddrClassifier (Reg : Type) := HExpr Reg → Option RegionTag
+
+/-- Build an HAddrClassifier from regions and stack registers. -/
+def mkHAddrClassifier {Reg : Type} [BEq Reg]
+    (regions : Array MemRegion) (stackRegs : List Reg) : HAddrClassifier Reg :=
+  classifyHAddr regions stackRegs
+
+/-- Region-aware load-after-store resolution on HExpr.
+    Mirrors `resolveLoadFrom` with region classification. -/
+def resolveHLoadFromR {Reg : Type} [BEq Reg]
+    (clf : HAddrClassifier Reg)
+    (loadWidth : Width) (mem : HMem Reg) (loadAddr : HExpr Reg) : HExpr Reg :=
+  match mem with
+  | .mk _ .base => HExpr.load loadWidth HMem.base loadAddr
+  | .mk _ (.store storeWidth innerMem storeAddr storeVal) =>
+    if loadWidth == storeWidth && HExpr.beq loadAddr storeAddr then
+      foldHAnd64 storeVal (HExpr.const loadWidth.mask)
+    else
+      match storeAddr.node, loadAddr.node with
+      | .const a, .const b =>
+        if a.toNat + storeWidth.byteCount ≤ UInt64.size ∧
+           b.toNat + loadWidth.byteCount ≤ UInt64.size ∧
+           (a.toNat + storeWidth.byteCount ≤ b.toNat ∨
+            b.toNat + loadWidth.byteCount ≤ a.toNat) then
+          resolveHLoadFromR clf loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      | _, _ =>
+        -- Region-based non-aliasing
+        let constStackSkip :=
+          match loadAddr.node with
+          | .const _ =>
+            match clf storeAddr with
+            | some .stack => true
+            | _ => false
+          | _ => false
+        let stackConstSkip :=
+          match storeAddr.node with
+          | .const _ =>
+            match clf loadAddr with
+            | some .stack => true
+            | _ => false
+          | _ => false
+        if constStackSkip || stackConstSkip then
+          resolveHLoadFromR clf loadWidth innerMem loadAddr
+        else
+          match (clf storeAddr, clf loadAddr) with
+          | (some sr, some lr) =>
+            if sr != lr then
+              resolveHLoadFromR clf loadWidth innerMem loadAddr
+            else
+              HExpr.load loadWidth mem loadAddr
+          | _ => HExpr.load loadWidth mem loadAddr
+
+mutual
+/-- Region-aware HExpr simplification with structural sharing. -/
+def simplifyHExprR {Reg : Type} [BEq Reg] [Hashable Reg]
+    (clf : HAddrClassifier Reg) : HExpr Reg → HExpr Reg
+  | .mk h (.const v) => .mk h (.const v)
+  | .mk h (.reg r) => .mk h (.reg r)
+  | .mk h (.low32 x) =>
+    let x' := simplifyHExprR clf x
+    if hexprUnchanged x' x then .mk h (.low32 x) else HExpr.low32 x'
+  | .mk h (.uext32 x) =>
+    let x' := simplifyHExprR clf x
+    if hexprUnchanged x' x then .mk h (.uext32 x) else HExpr.uext32 x'
+  | .mk h (.sext8to32 x) =>
+    let x' := simplifyHExprR clf x
+    if hexprUnchanged x' x then .mk h (.sext8to32 x) else HExpr.sext8to32 x'
+  | .mk h (.sext32to64 x) =>
+    let x' := simplifyHExprR clf x
+    if hexprUnchanged x' x then .mk h (.sext32to64 x) else HExpr.sext32to64 x'
+  | .mk h (.not64 x) =>
+    let x' := simplifyHExprR clf x
+    if hexprUnchanged x' x then .mk h (.not64 x) else HExpr.not64 x'
+  | .mk h (.not32 x) =>
+    let x' := simplifyHExprR clf x
+    if hexprUnchanged x' x then .mk h (.not32 x) else HExpr.not32 x'
+  | .mk h (.ite c t f) =>
+    let c' := simplifyHExprR clf c; let t' := simplifyHExprR clf t; let f' := simplifyHExprR clf f
+    if hexprUnchanged c' c && hexprUnchanged t' t && hexprUnchanged f' f
+    then .mk h (.ite c t f) else HExpr.ite c' t' f'
+  | .mk h (.sub32 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.sub32 a b) else HExpr.sub32 a' b'
+  | .mk h (.shl32 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.shl32 a b) else HExpr.shl32 a' b'
+  | .mk h (.and32 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.and32 a b) else HExpr.and32 a' b'
+  | .mk h (.or32 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.or32 a b) else HExpr.or32 a' b'
+  | .mk h (.xor32 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.xor32 a b) else HExpr.xor32 a' b'
+  | .mk h (.add64 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.add64 a b) else foldHAdd64 a' b'
+  | .mk h (.sub64 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.sub64 a b) else foldHSub64 a' b'
+  | .mk h (.xor64 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.xor64 a b) else HExpr.xor64 a' b'
+  | .mk h (.and64 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.and64 a b) else foldHAnd64 a' b'
+  | .mk h (.or64 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.or64 a b) else HExpr.or64 a' b'
+  | .mk h (.shl64 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.shl64 a b) else HExpr.shl64 a' b'
+  | .mk h (.shr64 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.shr64 a b) else HExpr.shr64 a' b'
+  | .mk h (.mul64 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.mul64 a b) else HExpr.mul64 a' b'
+  | .mk h (.mul32 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.mul32 a b) else HExpr.mul32 a' b'
+  | .mk h (.sar64 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.sar64 a b) else HExpr.sar64 a' b'
+  | .mk h (.sar32 a b) =>
+    let a' := simplifyHExprR clf a; let b' := simplifyHExprR clf b
+    if hexprUnchanged a' a && hexprUnchanged b' b then .mk h (.sar32 a b) else HExpr.sar32 a' b'
+  | .mk h (.load w mem addr) =>
+    let addr' := simplifyHExprR clf addr
+    let mem' := simplifyHMemR clf mem
+    if hexprUnchanged addr' addr && hmemUnchanged mem' mem
+    then .mk h (.load w mem addr) else resolveHLoadFromR clf w mem' addr'
+
+/-- Region-aware HMem simplification with structural sharing. -/
+def simplifyHMemR {Reg : Type} [BEq Reg] [Hashable Reg]
+    (clf : HAddrClassifier Reg) : HMem Reg → HMem Reg
+  | .mk h .base => .mk h .base
+  | .mk h (.store w mem addr val) =>
+    let mem' := simplifyHMemR clf mem
+    let addr' := simplifyHExprR clf addr
+    let val' := simplifyHExprR clf val
+    if hmemUnchanged mem' mem && hexprUnchanged addr' addr && hexprUnchanged val' val
+    then .mk h (.store w mem addr val)
+    else
+      match mem'.node with
+      | .store w' innerMem storeAddr' _ =>
+        if w == w' && HExpr.beq addr' storeAddr' then
+          HMem.store w innerMem addr' val'
+        else
+          HMem.store w mem' addr' val'
+      | _ => HMem.store w mem' addr' val'
+end
+
+/-- Region-aware HSub simplification. -/
+def simplifyHSubR {Reg : Type} [BEq Reg] [Hashable Reg]
+    (clf : HAddrClassifier Reg) (sub : HSub Reg) : HSub Reg where
+  regs r := simplifyHExprR clf (sub.regs r)
+  mem := simplifyHMemR clf sub.mem
+
+end VexISA
+
 /-! ## Semantic Closedness Witness Finding
 
 Given a set of branches and a closure, find for each (branch, guard) pair

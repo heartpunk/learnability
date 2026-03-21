@@ -610,10 +610,10 @@ def resolveHLoadFrom {Reg : Type} [BEq Reg]
 /-! ## Simplification on HExpr -/
 
 /-! Helper: check if two HExprs are the same (hash fast-path + structural). -/
-private def hexprUnchanged {Reg : Type} [BEq Reg] (a b : HExpr Reg) : Bool :=
+def hexprUnchanged {Reg : Type} [BEq Reg] (a b : HExpr Reg) : Bool :=
   a.cached_hash == b.cached_hash && HExpr.beq a b
 
-private def hmemUnchanged {Reg : Type} [BEq Reg] (a b : HMem Reg) : Bool :=
+def hmemUnchanged {Reg : Type} [BEq Reg] (a b : HMem Reg) : Bool :=
   a.cached_hash == b.cached_hash && HMem.beq a b
 
 mutual

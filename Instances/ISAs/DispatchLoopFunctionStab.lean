@@ -32,6 +32,9 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   let hBodyArr : Array (Branch (VexISA.HSub Reg) (SymPC Reg)) :=
     bodyArr.map fun b => ⟨VexISA.HSub.ofRaw b.sub, b.pc⟩
   let bodyRawSubs := bodyArr.map (·.sub)
+  -- Build HAddrClassifier from raw AddrClassifier (converts tiny address HExpr → raw for classification)
+  let hAddrClassify : Option (VexISA.HAddrClassifier Reg) :=
+    addrClassify.map fun clf => fun (addr : VexISA.HExpr Reg) => clf addr.toRaw
   -- Internal state uses HSub branches; currentByHash replaces HashSet (no DecidableEq needed)
   let initHBranch : Branch (VexISA.HSub Reg) (SymPC Reg) := ⟨VexISA.HSub.ofRaw initBranch.sub, initBranch.pc⟩
   let mut currentByHash : Std.HashMap UInt64 (Array (Branch (VexISA.HSub Reg) (SymPC Reg))) := {}
@@ -131,8 +134,10 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     let mut simplified : Array (Branch (VexISA.HSub Reg) (SymPC Reg)) := #[]
     let mut droppedSimplify : Nat := 0
     for b in composed do
-      -- Simplify sub in HExpr land (constant folding + LAS)
-      let simplifiedHSub := VexISA.simplifyHSub b.sub
+      -- Simplify sub in HExpr land (constant folding + LAS, region-aware when available)
+      let simplifiedHSub := match hAddrClassify with
+        | some clf => VexISA.simplifyHSubR clf b.sub
+        | none => VexISA.simplifyHSub b.sub
       -- Simplify PC in raw land (with optional region awareness)
       let simplifiedPC := simplifyLoadStorePCOpt addrClassify b.pc
       match SymPC.simplifyConst simplifiedPC with
