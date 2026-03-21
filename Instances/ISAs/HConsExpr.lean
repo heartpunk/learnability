@@ -428,4 +428,112 @@ def composeHSub {Reg : Type} [BEq Reg] (sub₁ sub₂ : HSub Reg) : HSub Reg whe
   regs r := substHExpr sub₁ (sub₂.regs r)
   mem := substHMem sub₁ sub₂.mem
 
+/-! ## Bridge Theorems: toRaw ∘ ofRaw = id -/
+
+mutual
+theorem HExpr.toRaw_ofRaw {Reg : Type} [Hashable Reg] :
+    (e : SymExpr Reg) → (HExpr.ofRaw e).toRaw = e
+  | .const _ => rfl
+  | .reg _ => rfl
+  | .low32 e => congrArg SymExpr.low32 (HExpr.toRaw_ofRaw e)
+  | .uext32 e => congrArg SymExpr.uext32 (HExpr.toRaw_ofRaw e)
+  | .sext8to32 e => congrArg SymExpr.sext8to32 (HExpr.toRaw_ofRaw e)
+  | .sext32to64 e => congrArg SymExpr.sext32to64 (HExpr.toRaw_ofRaw e)
+  | .not64 e => congrArg SymExpr.not64 (HExpr.toRaw_ofRaw e)
+  | .not32 e => congrArg SymExpr.not32 (HExpr.toRaw_ofRaw e)
+  | .sub32 l r => congrArg₂ SymExpr.sub32 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .shl32 l r => congrArg₂ SymExpr.shl32 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .and32 l r => congrArg₂ SymExpr.and32 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .or32 l r => congrArg₂ SymExpr.or32 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .xor32 l r => congrArg₂ SymExpr.xor32 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .add64 l r => congrArg₂ SymExpr.add64 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .sub64 l r => congrArg₂ SymExpr.sub64 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .xor64 l r => congrArg₂ SymExpr.xor64 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .and64 l r => congrArg₂ SymExpr.and64 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .or64 l r => congrArg₂ SymExpr.or64 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .shl64 l r => congrArg₂ SymExpr.shl64 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .shr64 l r => congrArg₂ SymExpr.shr64 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .mul64 l r => congrArg₂ SymExpr.mul64 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .mul32 l r => congrArg₂ SymExpr.mul32 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .sar64 l r => congrArg₂ SymExpr.sar64 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .sar32 l r => congrArg₂ SymExpr.sar32 (HExpr.toRaw_ofRaw l) (HExpr.toRaw_ofRaw r)
+  | .ite c t f => by
+      show SymExpr.ite (HExpr.ofRaw c).toRaw (HExpr.ofRaw t).toRaw (HExpr.ofRaw f).toRaw = _
+      rw [HExpr.toRaw_ofRaw c, HExpr.toRaw_ofRaw t, HExpr.toRaw_ofRaw f]
+  | .load w m a => by
+      show SymExpr.load w (HMem.ofRaw m).toRaw (HExpr.ofRaw a).toRaw = _
+      rw [HMem.toRaw_ofRaw m, HExpr.toRaw_ofRaw a]
+
+theorem HMem.toRaw_ofRaw {Reg : Type} [Hashable Reg] :
+    (m : SymMem Reg) → (HMem.ofRaw m).toRaw = m
+  | .base => rfl
+  | .store w m a v => by
+      show SymMem.store w (HMem.ofRaw m).toRaw (HExpr.ofRaw a).toRaw (HExpr.ofRaw v).toRaw = _
+      rw [HMem.toRaw_ofRaw m, HExpr.toRaw_ofRaw a, HExpr.toRaw_ofRaw v]
+end
+
+/-! ## beq soundness: beq = true → toRaw equal
+
+Requires DecidableEq Reg (not just BEq) so that reg equality is lawful. -/
+
+set_option maxHeartbeats 800000 in
+mutual
+theorem HExprNode.beq_true_toRaw {Reg : Type} [DecidableEq Reg]
+    (n1 n2 : HExprNode Reg) (h : HExprNode.beq n1 n2 = true) :
+    HExprNode.toRaw n1 = HExprNode.toRaw n2 := by
+  cases n1 <;> cases n2
+  -- Pass 1: close cross-constructor cases via kernel reduction (beq = false)
+  all_goals (first | contradiction | skip)
+  -- Pass 2: simplify hypothesis and goal for same-constructor cases
+  all_goals (simp [HExprNode.beq, Bool.and_eq_true] at h)
+  all_goals (simp only [HExprNode.toRaw])
+  -- Pass 3: close leaf cases (const, reg) where simp substituted equality
+  all_goals (first | (simp [h]) | skip)
+  -- Pass 4: apply IH to close remaining same-constructor recursive goals.
+  -- Each branch destructures h in the shape needed and applies IH.
+  all_goals first
+    -- unary: h is a single HExpr.beq = true
+    | exact HExpr.beq_true_toRaw _ _ h
+    -- binary: h is (beq₁ ∧ beq₂)
+    | (obtain ⟨h1, h2⟩ := h
+       exact ⟨HExpr.beq_true_toRaw _ _ h1, HExpr.beq_true_toRaw _ _ h2⟩)
+    -- ternary (ite): h is ((beq₁ ∧ beq₂) ∧ beq₃)
+    | (obtain ⟨⟨h1, h2⟩, h3⟩ := h
+       exact ⟨HExpr.beq_true_toRaw _ _ h1, HExpr.beq_true_toRaw _ _ h2, HExpr.beq_true_toRaw _ _ h3⟩)
+    -- load: h is ((w_eq ∧ mem_beq) ∧ expr_beq), Width already subst'd
+    | (obtain ⟨⟨_, hm⟩, ha⟩ := h
+       exact ⟨HMem.beq_true_toRaw _ _ hm, HExpr.beq_true_toRaw _ _ ha⟩)
+
+theorem HExpr.beq_true_toRaw {Reg : Type} [DecidableEq Reg]
+    (e1 e2 : HExpr Reg) (h : HExpr.beq e1 e2 = true) :
+    e1.toRaw = e2.toRaw := by
+  match e1, e2 with
+  | .mk _ n1, .mk _ n2 =>
+    simp [HExpr.beq, Bool.and_eq_true] at h
+    simp [HExpr.toRaw]
+    exact HExprNode.beq_true_toRaw n1 n2 h.2
+
+theorem HMem.beq_true_toRaw {Reg : Type} [DecidableEq Reg]
+    (m1 m2 : HMem Reg) (h : HMem.beq m1 m2 = true) :
+    m1.toRaw = m2.toRaw := by
+  match m1, m2 with
+  | .mk _ n1, .mk _ n2 =>
+    simp [HMem.beq, Bool.and_eq_true] at h
+    simp [HMem.toRaw]
+    exact HMemNode.beq_true_toRaw n1 n2 h.2
+
+theorem HMemNode.beq_true_toRaw {Reg : Type} [DecidableEq Reg]
+    (n1 n2 : HMemNode Reg) (h : HMemNode.beq n1 n2 = true) :
+    HMemNode.toRaw n1 = HMemNode.toRaw n2 := by
+  match n1, n2 with
+  | .base, .base => rfl
+  | .store w1 m1 a1 v1, .store w2 m2 a2 v2 =>
+    simp [HMemNode.beq, Bool.and_eq_true] at h
+    obtain ⟨⟨⟨hw, hm⟩, ha⟩, hv⟩ := h
+    simp [HMemNode.toRaw, hw]
+    exact ⟨HMem.beq_true_toRaw _ _ hm, HExpr.beq_true_toRaw _ _ ha, HExpr.beq_true_toRaw _ _ hv⟩
+  | .base, .store _ _ _ _ => simp [HMemNode.beq] at h
+  | .store _ _ _ _, .base => simp [HMemNode.beq] at h
+end
+
 end VexISA
