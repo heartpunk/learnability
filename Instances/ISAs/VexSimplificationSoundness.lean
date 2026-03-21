@@ -265,7 +265,9 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       -- reg+const cases: split on the if, false branch is conservative
       -- catch-all (no if) is rfl
       · split
-        · sorry
+        · -- add64/add64 if-true: r1==r2 && offsets non-overlapping
+          rename_i hif
+          sorry
         · simp only [evalSymExpr, evalSymMem]
       · split
         · sorry
