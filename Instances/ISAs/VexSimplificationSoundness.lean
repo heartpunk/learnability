@@ -285,7 +285,11 @@ private theorem ByteMem_read_write_nonoverlap_sub_sub
     (h3 : ((0 : UInt64) - c1).toNat + sw.byteCount ≤ ((0 : UInt64) - c2).toNat ∨
            ((0 : UInt64) - c2).toNat + lw.byteCount ≤ ((0 : UInt64) - c1).toNat) :
     ByteMem.read lw (ByteMem.write sw M (R - c1) v) (R - c2) = ByteMem.read lw M (R - c2) := by
-  sorry
+  have hsub : ∀ (a b : UInt64), a - b = a + (0 - b) := by
+    intro a b; show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
+    simp [BitVec.sub_eq_add_neg]
+  rw [hsub R c1, hsub R c2]
+  exact ByteMem_read_write_nonoverlap_offset lw sw M R (0 - c1) v (0 - c2) h1 h2 h3
 
 /-- R + c1 vs R - c2 (add64/sub64 mixed pattern). -/
 private theorem ByteMem_read_write_nonoverlap_add_sub
