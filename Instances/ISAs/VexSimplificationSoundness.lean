@@ -483,7 +483,18 @@ theorem simplifyLoadStoreMem_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       · -- dead store eliminated
         simp only [evalSymMem]
         rw [simplifyLoadStoreExpr_sound addr s, simplifyLoadStoreExpr_sound val s]
-        sorry -- need: write at same addr overwrites previous write
+        rename_i heq hif
+        have ih := simplifyLoadStoreMem_sound mem s
+        rw [heq] at ih; simp only [evalSymMem] at ih
+        simp only [Bool.and_eq_true] at hif
+        have hw := eq_of_beq hif.1; have ha := eq_of_beq hif.2
+        subst hw; rw [← ha, simplifyLoadStoreExpr_sound addr s] at ih
+        rw [← ih]
+        -- Goal per width: writeX M' a v2 = writeX (writeX M' a v1) a v2
+        cases w <;> simp only [ByteMem.write, ByteMem.write8, ByteMem.write16le,
+          ByteMem.write32le, ByteMem.write64le]
+        · exact (writeByte_writeByte_same _ _ _ _).symm
+        all_goals sorry -- need writeLEAux_writeLEAux_same
       · -- no dead store
         simp only [evalSymMem]
         rw [simplifyLoadStoreMem_sound mem s,
