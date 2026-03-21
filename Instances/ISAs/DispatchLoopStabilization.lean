@@ -390,6 +390,50 @@ def composeBranchArrayIndexed {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq 
   let skipped := totalPairs - composed_count
   return (result, composed_count, skipped, dropped)
 
+/-- Rip-indexed composition for HSub branches.
+    Body and frontier are `Branch (HSub Reg) (SymPC Reg)`.
+    Uses cached body raw subs for PC lifting (body subs are fixed across iterations).
+    Sub composition stays in HExpr land via `composeHSub`. -/
+def composeBranchArrayIndexedH {Reg : Type} [DecidableEq Reg] [Fintype Reg] [BEq Reg] [Hashable Reg]
+    (ip_reg : Reg)
+    (bodyArr : Array (Branch (VexISA.HSub Reg) (SymPC Reg)))
+    (bodyRawSubs : Array (SymSub Reg))
+    (frontierArr : Array (Branch (VexISA.HSub Reg) (SymPC Reg))) :
+    Array (Branch (VexISA.HSub Reg) (SymPC Reg) × Nat) × Nat × Nat × Nat := Id.run do
+  -- Build frontier index: rip-guard addr → array of frontier branches
+  let mut frontierByRip : Std.HashMap UInt64 (Array (Branch (VexISA.HSub Reg) (SymPC Reg))) := {}
+  let mut frontierNoRip : Array (Branch (VexISA.HSub Reg) (SymPC Reg)) := #[]
+  for f in frontierArr do
+    match extractRipGuard ip_reg f.pc with
+    | some addr =>
+      let arr := frontierByRip.getD addr #[]
+      frontierByRip := frontierByRip.insert addr (arr.push f)
+    | none => frontierNoRip := frontierNoRip.push f
+  -- Compose using index, tracking which body branch produced each result
+  let mut result : Array (Branch (VexISA.HSub Reg) (SymPC Reg) × Nat) := #[]
+  let mut dropped : Nat := 0
+  let mut composed_count : Nat := 0
+  let totalPairs := bodyArr.size * frontierArr.size
+  let bodyPairs := bodyArr.zip bodyRawSubs
+  let mut bodyIdx : Nat := 0
+  for (b, bodyRawSub) in bodyPairs do
+    let compatible := match VexISA.extractRipTargetH ip_reg b.sub with
+      | some target => (frontierByRip.getD target #[]) ++ frontierNoRip
+      | none => frontierArr
+    for f in compatible do
+      composed_count := composed_count + 1
+      -- Sub composition in HExpr land (no conversion)
+      let composedSub := VexISA.composeHSub b.sub f.sub
+      -- PC lifting uses cached raw body sub (body is fixed across iterations)
+      let composedPC : SymPC Reg := .and b.pc (substSymPC bodyRawSub f.pc)
+      let composed : Branch (VexISA.HSub Reg) (SymPC Reg) := ⟨composedSub, composedPC⟩
+      match simplifyBranch composed with
+      | none => dropped := dropped + 1
+      | some b' => result := result.push (b', bodyIdx)
+    bodyIdx := bodyIdx + 1
+  let skipped := totalPairs - composed_count
+  return (result, composed_count, skipped, dropped)
+
 /-- Per-chunk composition result for parallel merge. -/
 structure ChunkResult (Sub PC : Type*) where
   branches : Array (Branch Sub PC)
