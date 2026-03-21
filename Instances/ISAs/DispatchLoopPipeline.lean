@@ -569,7 +569,7 @@ def runPipelineWTOJSON (functions : Array FunctionSpec) (regions : Array MemRegi
     | none => autoDetectRoot functions callGraph log
   let nodes := functions.map (·.entryAddr)
   let wto := computeWTO nodes callGraph root
-  let summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
+  let _summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
   let json := pipelineToJson functions none
   IO.println json.pretty
 
