@@ -588,6 +588,13 @@ def foldHAnd64 {Reg : Type} [BEq Reg] (a b : HExpr Reg) : HExpr Reg :=
 
 /-! ## Load-After-Store Resolution on HExpr -/
 
+/-- Check if two constant byte ranges [a, a+aw) and [b, b+bw) are provably non-overlapping,
+    with guards against UInt64 wrapping. -/
+def constRangesNonOverlapping (a : UInt64) (aw : Nat) (b : UInt64) (bw : Nat) : Bool :=
+  a.toNat + aw ≤ UInt64.size ∧
+  b.toNat + bw ≤ UInt64.size ∧
+  (a.toNat + aw ≤ b.toNat ∨ b.toNat + bw ≤ a.toNat)
+
 def resolveHLoadFrom {Reg : Type} [BEq Reg]
     (loadWidth : Width) (mem : HMem Reg) (loadAddr : HExpr Reg) : HExpr Reg :=
   match mem with
@@ -598,13 +605,46 @@ def resolveHLoadFrom {Reg : Type} [BEq Reg]
     else
       match storeAddr.node, loadAddr.node with
       | .const a, .const b =>
-        if a.toNat + storeWidth.byteCount ≤ UInt64.size ∧
-           b.toNat + loadWidth.byteCount ≤ UInt64.size ∧
-           (a.toNat + storeWidth.byteCount ≤ b.toNat ∨
-            b.toNat + loadWidth.byteCount ≤ a.toNat) then
+        if constRangesNonOverlapping a storeWidth.byteCount b loadWidth.byteCount then
           resolveHLoadFrom loadWidth innerMem loadAddr
         else
           HExpr.load loadWidth mem loadAddr
+      -- reg+const vs reg+const: same base register, different constant offsets.
+      -- The offset difference is independent of the register's runtime value,
+      -- so non-overlapping byte ranges [C1, C1+sw) and [C2, C2+lw) suffice.
+      | .add64 r1 (.mk _ (.const c1)), .add64 r2 (.mk _ (.const c2)) =>
+        if HExpr.beq r1 r2 &&
+           constRangesNonOverlapping c1 storeWidth.byteCount c2 loadWidth.byteCount then
+          resolveHLoadFrom loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      | .sub64 r1 (.mk _ (.const c1)), .sub64 r2 (.mk _ (.const c2)) =>
+        -- sub64(R, C) = R - C. Ranges [R-C1, R-C1+sw) and [R-C2, R-C2+lw).
+        -- Offset difference is C2-C1 (note: reversed because subtraction).
+        -- Use wrapping: R-C = R + (2^64 - C), so treat as add64(R, -C).
+        let a := (0 : UInt64) - c1  -- wrapping negation
+        let b := (0 : UInt64) - c2
+        if HExpr.beq r1 r2 &&
+           constRangesNonOverlapping a storeWidth.byteCount b loadWidth.byteCount then
+          resolveHLoadFrom loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      -- Mixed: add64(R, C1) vs sub64(R, C2) or vice versa
+      | .add64 r1 (.mk _ (.const c1)), .sub64 r2 (.mk _ (.const c2)) =>
+        let b := (0 : UInt64) - c2
+        if HExpr.beq r1 r2 &&
+           constRangesNonOverlapping c1 storeWidth.byteCount b loadWidth.byteCount then
+          resolveHLoadFrom loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      | .sub64 r1 (.mk _ (.const c1)), .add64 r2 (.mk _ (.const c2)) =>
+        let a := (0 : UInt64) - c1
+        if HExpr.beq r1 r2 &&
+           constRangesNonOverlapping a storeWidth.byteCount c2 loadWidth.byteCount then
+          resolveHLoadFrom loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      -- const vs reg+const or reg+const vs const: can't determine, conservative
       | _, _ => HExpr.load loadWidth mem loadAddr
 
 /-! ## Simplification on HExpr -/

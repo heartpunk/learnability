@@ -269,10 +269,34 @@ def foldAnd64 {Reg : Type} [DecidableEq Reg]
     else .and64 (.const m) x
   | _, _ => .and64 a b
 
-/-- Resolve a load from a (simplified) memory term.
-    Walks the store chain looking for a matching address.
-    When an `AddrClassifier` is provided, uses region-based non-aliasing to
-    skip stores whose address is in a different region from the load address. -/
+/-- Check if two addresses are in different regions (non-aliasing). -/
+private def regionNonAliasing {Reg : Type} [DecidableEq Reg]
+    (clf : AddrClassifier Reg) (storeAddr loadAddr : SymExpr Reg) : Bool :=
+  let constStackSkip :=
+    match loadAddr with
+    | .const _ =>
+      match clf storeAddr with
+      | some .stack => true
+      | _ => false
+    | _ => false
+  let stackConstSkip :=
+    match storeAddr with
+    | .const _ =>
+      match clf loadAddr with
+      | some .stack => true
+      | _ => false
+    | _ => false
+  if constStackSkip || stackConstSkip then true
+  else
+    match (clf storeAddr, clf loadAddr) with
+    | (some sr, some lr) => sr != lr
+    | _ => false
+
+private def rawConstRangesNonOverlapping (a : UInt64) (aw : Nat) (b : UInt64) (bw : Nat) : Bool :=
+  a.toNat + aw ≤ UInt64.size ∧
+  b.toNat + bw ≤ UInt64.size ∧
+  (a.toNat + aw ≤ b.toNat ∨ b.toNat + bw ≤ a.toNat)
+
 def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
     (loadWidth : Width) (mem : SymMem Reg) (loadAddr : SymExpr Reg)
     (classify : Option (AddrClassifier Reg) := none) : SymExpr Reg :=
@@ -284,51 +308,57 @@ def resolveLoadFrom {Reg : Type} [DecidableEq Reg]
     else
       match (storeAddr, loadAddr) with
       | (.const a, .const b) =>
-        -- Skip store only when byte ranges are provably non-overlapping.
-        -- Range [a, a+sw) and [b, b+lw) don't overlap iff a+sw ≤ b ∨ b+lw ≤ a.
-        -- Uses Nat arithmetic with non-wrapping guards to avoid UInt64 wrapping
-        -- unsoundness (UInt64 addition wraps mod 2^64, so a + sw ≤ b can hold
-        -- vacuously when a is near UInt64.max).
-        if a.toNat + storeWidth.byteCount ≤ UInt64.size ∧
-           b.toNat + loadWidth.byteCount ≤ UInt64.size ∧
-           (a.toNat + storeWidth.byteCount ≤ b.toNat ∨
-            b.toNat + loadWidth.byteCount ≤ a.toNat) then
+        if rawConstRangesNonOverlapping a storeWidth.byteCount b loadWidth.byteCount then
           resolveLoadFrom loadWidth innerMem loadAddr classify  -- non-overlapping, skip store
         else
           .load loadWidth mem loadAddr  -- overlapping or wrapping, keep as-is
+      -- reg+const vs reg+const: same base register, different constant offsets.
+      | (.add64 r1 (.const c1), .add64 r2 (.const c2)) =>
+        if r1 == r2 && rawConstRangesNonOverlapping c1 storeWidth.byteCount c2 loadWidth.byteCount then
+          resolveLoadFrom loadWidth innerMem loadAddr classify
+        else
+          match classify with
+          | some clf => if regionNonAliasing clf storeAddr loadAddr then
+              resolveLoadFrom loadWidth innerMem loadAddr (some clf)
+            else .load loadWidth mem loadAddr
+          | none => .load loadWidth mem loadAddr
+      | (.sub64 r1 (.const c1), .sub64 r2 (.const c2)) =>
+        let a := (0 : UInt64) - c1; let b := (0 : UInt64) - c2
+        if r1 == r2 && rawConstRangesNonOverlapping a storeWidth.byteCount b loadWidth.byteCount then
+          resolveLoadFrom loadWidth innerMem loadAddr classify
+        else
+          match classify with
+          | some clf => if regionNonAliasing clf storeAddr loadAddr then
+              resolveLoadFrom loadWidth innerMem loadAddr (some clf)
+            else .load loadWidth mem loadAddr
+          | none => .load loadWidth mem loadAddr
+      | (.add64 r1 (.const c1), .sub64 r2 (.const c2)) =>
+        let b := (0 : UInt64) - c2
+        if r1 == r2 && rawConstRangesNonOverlapping c1 storeWidth.byteCount b loadWidth.byteCount then
+          resolveLoadFrom loadWidth innerMem loadAddr classify
+        else
+          match classify with
+          | some clf => if regionNonAliasing clf storeAddr loadAddr then
+              resolveLoadFrom loadWidth innerMem loadAddr (some clf)
+            else .load loadWidth mem loadAddr
+          | none => .load loadWidth mem loadAddr
+      | (.sub64 r1 (.const c1), .add64 r2 (.const c2)) =>
+        let a := (0 : UInt64) - c1
+        if r1 == r2 && rawConstRangesNonOverlapping a storeWidth.byteCount c2 loadWidth.byteCount then
+          resolveLoadFrom loadWidth innerMem loadAddr classify
+        else
+          match classify with
+          | some clf => if regionNonAliasing clf storeAddr loadAddr then
+              resolveLoadFrom loadWidth innerMem loadAddr (some clf)
+            else .load loadWidth mem loadAddr
+          | none => .load loadWidth mem loadAddr
       | _ =>
-        -- Non-constant addresses that don't match syntactically.
-        -- Try region-based non-aliasing: if store and load addresses are in
-        -- different regions, they can't alias — skip the store.
+        -- Non-constant, non-reg+const addresses: fall back to region-based non-aliasing
         match classify with
-        | some clf =>
-          -- Constant-vs-stack non-aliasing: a constant (link-time) address
-          -- can never alias a stack (runtime rsp/rbp-relative) address.
-          let constStackSkip :=
-            match loadAddr with
-            | .const _ =>
-              match clf storeAddr with
-              | some .stack => true
-              | _ => false
-            | _ => false
-          let stackConstSkip :=
-            match storeAddr with
-            | .const _ =>
-              match clf loadAddr with
-              | some .stack => true
-              | _ => false
-            | _ => false
-          if constStackSkip || stackConstSkip then
-            resolveLoadFrom loadWidth innerMem loadAddr classify  -- const/stack non-aliasing
-          else
-            match (clf storeAddr, clf loadAddr) with
-            | (some sr, some lr) =>
-              if sr != lr then
-                resolveLoadFrom loadWidth innerMem loadAddr classify  -- different regions, skip
-              else
-                .load loadWidth mem loadAddr  -- same region, can't determine
-            | _ => .load loadWidth mem loadAddr  -- unclassifiable, conservative
-        | none => .load loadWidth mem loadAddr  -- no classifier, conservative
+        | some clf => if regionNonAliasing clf storeAddr loadAddr then
+              resolveLoadFrom loadWidth innerMem loadAddr (some clf)
+            else .load loadWidth mem loadAddr
+        | none => .load loadWidth mem loadAddr
 
 mutual
 /-- Simplify: load-after-store resolution + arithmetic constant folding. -/

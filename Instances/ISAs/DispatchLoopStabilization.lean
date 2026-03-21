@@ -54,10 +54,36 @@ def resolveHLoadFromR {Reg : Type} [BEq Reg]
     else
       match storeAddr.node, loadAddr.node with
       | .const a, .const b =>
-        if a.toNat + storeWidth.byteCount ≤ UInt64.size ∧
-           b.toNat + loadWidth.byteCount ≤ UInt64.size ∧
-           (a.toNat + storeWidth.byteCount ≤ b.toNat ∨
-            b.toNat + loadWidth.byteCount ≤ a.toNat) then
+        if constRangesNonOverlapping a storeWidth.byteCount b loadWidth.byteCount then
+          resolveHLoadFromR clf loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      -- reg+const vs reg+const: same base register, different constant offsets
+      | .add64 r1 (.mk _ (.const c1)), .add64 r2 (.mk _ (.const c2)) =>
+        if HExpr.beq r1 r2 &&
+           constRangesNonOverlapping c1 storeWidth.byteCount c2 loadWidth.byteCount then
+          resolveHLoadFromR clf loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      | .sub64 r1 (.mk _ (.const c1)), .sub64 r2 (.mk _ (.const c2)) =>
+        let a := (0 : UInt64) - c1
+        let b := (0 : UInt64) - c2
+        if HExpr.beq r1 r2 &&
+           constRangesNonOverlapping a storeWidth.byteCount b loadWidth.byteCount then
+          resolveHLoadFromR clf loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      | .add64 r1 (.mk _ (.const c1)), .sub64 r2 (.mk _ (.const c2)) =>
+        let b := (0 : UInt64) - c2
+        if HExpr.beq r1 r2 &&
+           constRangesNonOverlapping c1 storeWidth.byteCount b loadWidth.byteCount then
+          resolveHLoadFromR clf loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      | .sub64 r1 (.mk _ (.const c1)), .add64 r2 (.mk _ (.const c2)) =>
+        let a := (0 : UInt64) - c1
+        if HExpr.beq r1 r2 &&
+           constRangesNonOverlapping a storeWidth.byteCount c2 loadWidth.byteCount then
           resolveHLoadFromR clf loadWidth innerMem loadAddr
         else
           HExpr.load loadWidth mem loadAddr
