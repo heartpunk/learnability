@@ -200,10 +200,24 @@ private theorem uint64_zero_and (x : UInt64) : 0 &&& x = 0 := by
 theorem foldAnd64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (a b : SymExpr Reg) (s : ConcreteState Reg) :
     evalSymExpr s (foldAnd64 a b) = evalSymExpr s a &&& evalSymExpr s b := by
-  -- Helper lemmas proved above (uint64_and_max, etc.)
-  -- Proof structure: unfold foldAnd64, split on cases, use identity/zero lemmas.
-  -- Blocked on eq_of_beq for UInt64 BEq — needs LawfulBEq instance or manual case analysis.
-  sorry
+  simp only [foldAnd64]
+  split
+  · simp only [evalSymExpr]                    -- const &&& const
+  · rename_i x m                               -- x &&& const m
+    simp only [evalSymExpr]
+    split
+    · next h => simp_all [uint64_and_max]
+    · split
+      · next h _ => simp_all [uint64_and_zero]
+      · rfl
+  · rename_i m x                               -- const m &&& x
+    simp only [evalSymExpr]
+    split
+    · next h => simp_all [uint64_max_and]
+    · split
+      · next h _ => simp_all [uint64_zero_and]
+      · rfl
+  · simp only [evalSymExpr]                    -- default
 
 /-! ## resolveLoadFrom soundness
 
