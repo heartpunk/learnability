@@ -88,7 +88,7 @@ private theorem uint64_add_assoc (a b c : UInt64) : a + b + c = a + (b + c) := b
   simp only [UInt64.toBitVec_add]; bv_omega
 
 private theorem uint64_add_comm (a b : UInt64) : a + b = b + a := by
-  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1; bv_omega
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1; bv_decide
 
 private theorem uint64_add_left_comm (a b c : UInt64) : a + (b + c) = b + (a + c) := by
   show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1
@@ -184,6 +184,26 @@ theorem foldSub64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
              simp only [evalSymExpr]
              rw [uint64_sub_sub, uint64_sub_add, uint64_add_sub])
   )
+
+private theorem uint64_and_max (x : UInt64) : x &&& 0xFFFF_FFFF_FFFF_FFFF = x := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1; bv_decide
+
+private theorem uint64_max_and (x : UInt64) : 0xFFFF_FFFF_FFFF_FFFF &&& x = x := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1; bv_decide
+
+private theorem uint64_and_zero (x : UInt64) : x &&& 0 = 0 := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1; bv_decide
+
+private theorem uint64_zero_and (x : UInt64) : 0 &&& x = 0 := by
+  show UInt64.ofBitVec _ = UInt64.ofBitVec _; congr 1; bv_decide
+
+theorem foldAnd64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (a b : SymExpr Reg) (s : ConcreteState Reg) :
+    evalSymExpr s (foldAnd64 a b) = evalSymExpr s a &&& evalSymExpr s b := by
+  -- Helper lemmas proved above (uint64_and_max, etc.)
+  -- Proof structure: unfold foldAnd64, split on cases, use identity/zero lemmas.
+  -- Blocked on eq_of_beq for UInt64 BEq — needs LawfulBEq instance or manual case analysis.
+  sorry
 
 /-! ## resolveLoadFrom soundness
 
