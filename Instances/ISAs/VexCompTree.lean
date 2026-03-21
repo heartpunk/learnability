@@ -74,7 +74,7 @@ private theorem treeBehavior_blockToCompTree_from {Reg : Type} [DecidableEq Reg]
     by_cases hNext : next = (0 : UInt64)
     · -- next=0: blockToCompTree_from = .assign ps.sub; execStmtsSuccs = { state }
       subst hNext
-      simp only [blockToCompTree_from, if_pos rfl, CompTree.treeBehavior, assignBehavior,
+      simp only [blockToCompTree_from, CompTree.treeBehavior, assignBehavior,
         execStmtsSuccs, vexSummaryISA, show ((0 : UInt64) == 0) = true from rfl, if_true,
         Finset.mem_singleton]
       -- LHS: s' = applySymSub ps.sub input = state (by hState)
