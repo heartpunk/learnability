@@ -221,6 +221,12 @@ theorem foldAnd64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       · rfl
   · simp only [evalSymExpr]
 
+private theorem uint64_add_left_cancel (R a b : UInt64) (h : R + a = R + b) : a = b := by
+  have hbv : R.toBitVec + a.toBitVec = R.toBitVec + b.toBitVec :=
+    congrArg UInt64.toBitVec h
+  have hab : a.toBitVec = b.toBitVec := by bv_omega
+  exact congrArg UInt64.ofBitVec hab
+
 /-- Offset-based byte-range non-overlap for R+c1 vs R+c2.
     ByteMem operations are defined byte-by-byte via individual address lookups,
     not via contiguous range checks. Two byte sets {R+c1+i | i<sw} and
