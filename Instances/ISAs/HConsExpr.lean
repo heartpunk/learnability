@@ -299,4 +299,133 @@ def HMem.ofRaw {Reg : Type} [Hashable Reg] : SymMem Reg → HMem Reg
   | .store w m a v => HMem.store w (HMem.ofRaw m) (HExpr.ofRaw a) (HExpr.ofRaw v)
 end
 
+/-! ## Hash-Consed Substitution -/
+
+structure HSub (Reg : Type) where
+  regs : Reg → HExpr Reg
+  mem : HMem Reg
+
+def HSub.toRaw {Reg : Type} (s : HSub Reg) : SymSub Reg where
+  regs r := (s.regs r).toRaw
+  mem := s.mem.toRaw
+
+def HSub.ofRaw {Reg : Type} [Hashable Reg] (s : SymSub Reg) : HSub Reg where
+  regs r := HExpr.ofRaw (s.regs r)
+  mem := HMem.ofRaw s.mem
+
+/-! ## Hash-Consed Substitution with Structural Sharing
+
+`substHExpr` substitutes through an HExpr. When children are unchanged
+(detected by hash comparison + structural equality), the original node
+is reused — avoiding allocation of duplicate subtrees. -/
+
+mutual
+def substHExpr {Reg : Type} [BEq Reg] (sub : HSub Reg) : HExpr Reg → HExpr Reg
+  | .mk _ (.const v) => HExpr.const v
+  | .mk _ (.reg r) => sub.regs r
+  | .mk h (.low32 e) =>
+    let e' := substHExpr sub e
+    if e'.cached_hash == e.cached_hash && HExpr.beq e' e then .mk h (.low32 e) else HExpr.low32 e'
+  | .mk h (.uext32 e) =>
+    let e' := substHExpr sub e
+    if e'.cached_hash == e.cached_hash && HExpr.beq e' e then .mk h (.uext32 e) else HExpr.uext32 e'
+  | .mk h (.sext8to32 e) =>
+    let e' := substHExpr sub e
+    if e'.cached_hash == e.cached_hash && HExpr.beq e' e then .mk h (.sext8to32 e) else HExpr.sext8to32 e'
+  | .mk h (.sext32to64 e) =>
+    let e' := substHExpr sub e
+    if e'.cached_hash == e.cached_hash && HExpr.beq e' e then .mk h (.sext32to64 e) else HExpr.sext32to64 e'
+  | .mk h (.not64 e) =>
+    let e' := substHExpr sub e
+    if e'.cached_hash == e.cached_hash && HExpr.beq e' e then .mk h (.not64 e) else HExpr.not64 e'
+  | .mk h (.not32 e) =>
+    let e' := substHExpr sub e
+    if e'.cached_hash == e.cached_hash && HExpr.beq e' e then .mk h (.not32 e) else HExpr.not32 e'
+  | .mk h (.sub32 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.sub32 l r) else HExpr.sub32 l' r'
+  | .mk h (.shl32 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.shl32 l r) else HExpr.shl32 l' r'
+  | .mk h (.and32 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.and32 l r) else HExpr.and32 l' r'
+  | .mk h (.or32 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.or32 l r) else HExpr.or32 l' r'
+  | .mk h (.xor32 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.xor32 l r) else HExpr.xor32 l' r'
+  | .mk h (.add64 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.add64 l r) else HExpr.add64 l' r'
+  | .mk h (.sub64 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.sub64 l r) else HExpr.sub64 l' r'
+  | .mk h (.xor64 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.xor64 l r) else HExpr.xor64 l' r'
+  | .mk h (.and64 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.and64 l r) else HExpr.and64 l' r'
+  | .mk h (.or64 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.or64 l r) else HExpr.or64 l' r'
+  | .mk h (.shl64 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.shl64 l r) else HExpr.shl64 l' r'
+  | .mk h (.shr64 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.shr64 l r) else HExpr.shr64 l' r'
+  | .mk h (.mul64 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.mul64 l r) else HExpr.mul64 l' r'
+  | .mk h (.mul32 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.mul32 l r) else HExpr.mul32 l' r'
+  | .mk h (.sar64 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.sar64 l r) else HExpr.sar64 l' r'
+  | .mk h (.sar32 l r) =>
+    let l' := substHExpr sub l; let r' := substHExpr sub r
+    if l'.cached_hash == l.cached_hash && r'.cached_hash == r.cached_hash && HExpr.beq l' l && HExpr.beq r' r
+    then .mk h (.sar32 l r) else HExpr.sar32 l' r'
+  | .mk h (.ite c t f) =>
+    let c' := substHExpr sub c; let t' := substHExpr sub t; let f' := substHExpr sub f
+    if c'.cached_hash == c.cached_hash && t'.cached_hash == t.cached_hash && f'.cached_hash == f.cached_hash
+       && HExpr.beq c' c && HExpr.beq t' t && HExpr.beq f' f
+    then .mk h (.ite c t f) else HExpr.ite c' t' f'
+  | .mk h (.load w m a) =>
+    let m' := substHMem sub m; let a' := substHExpr sub a
+    if m'.cached_hash == m.cached_hash && a'.cached_hash == a.cached_hash && HMem.beq m' m && HExpr.beq a' a
+    then .mk h (.load w m a) else HExpr.load w m' a'
+
+def substHMem {Reg : Type} [BEq Reg] (sub : HSub Reg) : HMem Reg → HMem Reg
+  | .mk _ .base => sub.mem
+  | .mk h (.store w m a v) =>
+    let m' := substHMem sub m; let a' := substHExpr sub a; let v' := substHExpr sub v
+    if m'.cached_hash == m.cached_hash && a'.cached_hash == a.cached_hash && v'.cached_hash == v.cached_hash
+       && HMem.beq m' m && HExpr.beq a' a && HExpr.beq v' v
+    then .mk h (.store w m a v) else HMem.store w m' a' v'
+end
+
+def composeHSub {Reg : Type} [BEq Reg] (sub₁ sub₂ : HSub Reg) : HSub Reg where
+  regs r := substHExpr sub₁ (sub₂.regs r)
+  mem := substHMem sub₁ sub₂.mem
+
 end VexISA
