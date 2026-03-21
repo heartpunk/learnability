@@ -335,8 +335,20 @@ mutual
 def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymExpr Reg
   | .const v => .const v
   | .reg r => .reg r
-  | .low32 x => .low32 (simplifyLoadStoreExpr x)
-  | .uext32 x => .uext32 (simplifyLoadStoreExpr x)
+  | .low32 x =>
+    let x' := simplifyLoadStoreExpr x
+    -- low32/uext32 are idempotent (mask32 ∘ mask32 = mask32)
+    -- 32-bit ops already produce masked results, so low32 is redundant on them
+    match x' with
+    | .low32 _ | .uext32 _ | .sub32 _ _ | .and32 _ _ | .or32 _ _ | .xor32 _ _
+    | .shl32 _ _ | .mul32 _ _ | .not32 _ | .sar32 _ _ | .sext8to32 _ => x'
+    | _ => .low32 x'
+  | .uext32 x =>
+    let x' := simplifyLoadStoreExpr x
+    match x' with
+    | .low32 _ | .uext32 _ | .sub32 _ _ | .and32 _ _ | .or32 _ _ | .xor32 _ _
+    | .shl32 _ _ | .mul32 _ _ | .not32 _ | .sar32 _ _ | .sext8to32 _ => x'
+    | _ => .low32 x'
   | .sext8to32 x => .sext8to32 (simplifyLoadStoreExpr x)
   | .sext32to64 x => .sext32to64 (simplifyLoadStoreExpr x)
   | .not64 x => .not64 (simplifyLoadStoreExpr x)
@@ -398,8 +410,18 @@ def simplifyLoadStoreExprR {Reg : Type} [DecidableEq Reg]
     (classify : AddrClassifier Reg) : SymExpr Reg → SymExpr Reg
   | .const v => .const v
   | .reg r => .reg r
-  | .low32 x => .low32 (simplifyLoadStoreExprR classify x)
-  | .uext32 x => .uext32 (simplifyLoadStoreExprR classify x)
+  | .low32 x =>
+    let x' := simplifyLoadStoreExprR classify x
+    match x' with
+    | .low32 _ | .uext32 _ | .sub32 _ _ | .and32 _ _ | .or32 _ _ | .xor32 _ _
+    | .shl32 _ _ | .mul32 _ _ | .not32 _ | .sar32 _ _ | .sext8to32 _ => x'
+    | _ => .low32 x'
+  | .uext32 x =>
+    let x' := simplifyLoadStoreExprR classify x
+    match x' with
+    | .low32 _ | .uext32 _ | .sub32 _ _ | .and32 _ _ | .or32 _ _ | .xor32 _ _
+    | .shl32 _ _ | .mul32 _ _ | .not32 _ | .sar32 _ _ | .sext8to32 _ => x'
+    | _ => .low32 x'
   | .sext8to32 x => .sext8to32 (simplifyLoadStoreExprR classify x)
   | .sext32to64 x => .sext32to64 (simplifyLoadStoreExprR classify x)
   | .not64 x => .not64 (simplifyLoadStoreExprR classify x)
