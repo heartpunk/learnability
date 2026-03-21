@@ -221,17 +221,24 @@ theorem foldAnd64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       · rfl
   · simp only [evalSymExpr]
 
-/-- If constant offset ranges [c1, c1+sw) and [c2, c2+lw) don't overlap
-    (with wrapping guards), then [R+c1, R+c1+sw) and [R+c2, R+c2+lw) don't
-    overlap for any R, because the relative distance is preserved. -/
-private theorem offset_nonoverlap_implies_concrete
-    (R c1 c2 : UInt64) (sw lw : Nat)
-    (h1 : c1.toNat + sw ≤ UInt64.size)
-    (h2 : c2.toNat + lw ≤ UInt64.size)
-    (h3 : c1.toNat + sw ≤ c2.toNat ∨ c2.toNat + lw ≤ c1.toNat) :
-    (R + c1).toNat + sw ≤ UInt64.size ∧
-    (R + c2).toNat + lw ≤ UInt64.size ∧
-    ((R + c1).toNat + sw ≤ (R + c2).toNat ∨ (R + c2).toNat + lw ≤ (R + c1).toNat) := by
+/-- Offset-based byte-range non-overlap for R+c1 vs R+c2.
+    ByteMem operations are defined byte-by-byte via individual address lookups,
+    not via contiguous range checks. Two byte sets {R+c1+i | i<sw} and
+    {R+c2+j | j<lw} are disjoint when the offset ranges [c1,c1+sw) and
+    [c2,c2+lw) don't overlap (mod 2^64 arithmetic preserves distances).
+
+    This is stated directly as a ByteMem read/write property rather than
+    going through ByteMem_read_write_nonoverlap (which requires absolute
+    non-wrapping guards that don't hold after adding R). -/
+private theorem ByteMem_read_write_nonoverlap_offset
+    (lw sw : Width) (M : ByteMem) (R c1 v c2 : UInt64)
+    (h1 : c1.toNat + sw.byteCount ≤ UInt64.size)
+    (h2 : c2.toNat + lw.byteCount ≤ UInt64.size)
+    (h3 : c1.toNat + sw.byteCount ≤ c2.toNat ∨ c2.toNat + lw.byteCount ≤ c1.toNat) :
+    ByteMem.read lw (ByteMem.write sw M (R + c1) v) (R + c2) = ByteMem.read lw M (R + c2) := by
+  -- The proof requires showing that for each byte index j < lw.byteCount,
+  -- (R + c2 + j) ≠ (R + c1 + i) for all i < sw.byteCount.
+  -- This follows from c1+i ≠ c2+j (mod 2^64) when offset ranges don't overlap.
   sorry
 
 /-! ## resolveLoadFrom soundness
@@ -286,9 +293,8 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
           have := eq_of_beq hr; subst this
           simp only [rawConstRangesNonOverlapping, decide_eq_true_eq] at hno
           rw [ih]; simp only [evalSymExpr, evalSymMem]
-          have ⟨h1, h2, h3⟩ := offset_nonoverlap_implies_concrete
-            (evalSymExpr s r1) c1 c2 sw.byteCount w.byteCount hno.1 hno.2.1 hno.2.2
-          exact (ByteMem_read_write_nonoverlap w sw _ _ _ _ h1 h2 h3).symm
+          exact (ByteMem_read_write_nonoverlap_offset w sw _ (evalSymExpr s r1) c1 _ c2
+            hno.1 hno.2.1 hno.2.2).symm
         · simp only [evalSymExpr, evalSymMem]
       · split
         · sorry
