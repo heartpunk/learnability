@@ -88,6 +88,21 @@
 - learnability-golden-comparison: merged, workspace deleted
 - learnability-terminal-subjects: merged, workspace deleted
 
+## Latest QuickJS Run (writeToSMTLib fix)
+- Simplify: 34s, Dedup: 174s, Syn matching: 10s (1112 matched, 471 need SMT)
+- Entered smtCheckImplCached with 126K pairs at 13GB RSS
+- CVC5 phase in progress — first time with writeToSMTLib (no string building)
+- Previous run OOMed at 55GB during string concat in toSMTLib
+- Check .lake/runs/quickjs-writethrough/quickjs.log for results
+
+## Performance Fix Chain (QuickJS K=0 path)
+1. Depth-limited hash: dedup 602s → 195s
+2. Closure PC caching: canonicalize 30min → 12ms (GDB found canonicalizeExpr 89% CPU)
+3. smtImplCacheKey: replaced canonicalizePC with mixHash
+4. Write-through SMT: eliminated O(n²) string concat at chunk level
+5. writeToSMTLib: eliminated O(n²) string concat at per-query level (GDB found toSMTLib 89% CPU)
+6. Parallel CVC5: 8 concurrent instances via IO.asTask
+
 ## What's Next (from plan)
 1. Fix grammar extraction terminal resolution (currently 13/19, should be ~20/20)
 2. Implement state machine interpretation layer (libtsm, st)
