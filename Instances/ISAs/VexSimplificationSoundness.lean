@@ -208,7 +208,9 @@ theorem foldAnd64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     split
     · next h => simp_all [uint64_and_max]
     · split
-      · next h _ => simp_all [uint64_and_zero]
+      · next h _ =>
+        -- h should tell us m == 0; let's see the full error
+        simp_all [uint64_and_zero]
       · rfl
   · rename_i m x                               -- const m &&& x
     simp only [evalSymExpr]
@@ -217,7 +219,7 @@ theorem foldAnd64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     · split
       · next h _ => simp_all [uint64_zero_and]
       · rfl
-  · simp only [evalSymExpr]                    -- default
+  · simp only [evalSymExpr]
 
 /-! ## resolveLoadFrom soundness
 
