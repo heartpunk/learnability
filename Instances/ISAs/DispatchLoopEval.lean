@@ -335,20 +335,8 @@ mutual
 def simplifyLoadStoreExpr {Reg : Type} [DecidableEq Reg] : SymExpr Reg → SymExpr Reg
   | .const v => .const v
   | .reg r => .reg r
-  | .low32 x =>
-    let x' := simplifyLoadStoreExpr x
-    -- low32/uext32 are idempotent (mask32 ∘ mask32 = mask32)
-    -- 32-bit ops already produce masked results, so low32 is redundant on them
-    match x' with
-    | .low32 _ | .uext32 _ | .sub32 _ _ | .and32 _ _ | .or32 _ _ | .xor32 _ _
-    | .shl32 _ _ | .mul32 _ _ | .not32 _ | .sar32 _ _ | .sext8to32 _ => x'
-    | _ => .low32 x'
-  | .uext32 x =>
-    let x' := simplifyLoadStoreExpr x
-    match x' with
-    | .low32 _ | .uext32 _ | .sub32 _ _ | .and32 _ _ | .or32 _ _ | .xor32 _ _
-    | .shl32 _ _ | .mul32 _ _ | .not32 _ | .sar32 _ _ | .sext8to32 _ => x'
-    | _ => .low32 x'
+  | .low32 x => .low32 (simplifyLoadStoreExpr x)
+  | .uext32 x => .uext32 (simplifyLoadStoreExpr x)
   | .sext8to32 x => .sext8to32 (simplifyLoadStoreExpr x)
   | .sext32to64 x => .sext32to64 (simplifyLoadStoreExpr x)
   | .not64 x => .not64 (simplifyLoadStoreExpr x)
@@ -410,18 +398,8 @@ def simplifyLoadStoreExprR {Reg : Type} [DecidableEq Reg]
     (classify : AddrClassifier Reg) : SymExpr Reg → SymExpr Reg
   | .const v => .const v
   | .reg r => .reg r
-  | .low32 x =>
-    let x' := simplifyLoadStoreExprR classify x
-    match x' with
-    | .low32 _ | .uext32 _ | .sub32 _ _ | .and32 _ _ | .or32 _ _ | .xor32 _ _
-    | .shl32 _ _ | .mul32 _ _ | .not32 _ | .sar32 _ _ | .sext8to32 _ => x'
-    | _ => .low32 x'
-  | .uext32 x =>
-    let x' := simplifyLoadStoreExprR classify x
-    match x' with
-    | .low32 _ | .uext32 _ | .sub32 _ _ | .and32 _ _ | .or32 _ _ | .xor32 _ _
-    | .shl32 _ _ | .mul32 _ _ | .not32 _ | .sar32 _ _ | .sext8to32 _ => x'
-    | _ => .low32 x'
+  | .low32 x => .low32 (simplifyLoadStoreExprR classify x)
+  | .uext32 x => .uext32 (simplifyLoadStoreExprR classify x)
   | .sext8to32 x => .sext8to32 (simplifyLoadStoreExprR classify x)
   | .sext32to64 x => .sext32to64 (simplifyLoadStoreExprR classify x)
   | .not64 x => .not64 (simplifyLoadStoreExprR classify x)
@@ -701,13 +679,26 @@ def SymPC.toSMTLib {Reg : Type} [ToString Reg] : SymPC Reg → String
   | .and φ ψ => s!"(and {SymPC.toSMTLib φ} {SymPC.toSMTLib ψ})"
   | .not φ => s!"(not {SymPC.toSMTLib φ})"
 
+/-- Does this expression already produce a 32-bit-masked (zero-extended) result in SMT?
+    If so, wrapping it in another (zero_extend 32)(extract 31 0) is redundant. -/
+def SymExpr.is32Masked {Reg : Type} : SymExpr Reg → Bool
+  | .low32 _ | .uext32 _ | .sext8to32 _
+  | .sub32 _ _ | .and32 _ _ | .or32 _ _ | .xor32 _ _
+  | .shl32 _ _ | .mul32 _ _ | .not32 _ | .sar32 _ _ => true
+  | _ => false
+
 mutual
 /-- Write SymExpr to a Handle as SMT-LIB2 — avoids O(n²) string building. -/
 def SymExpr.writeToSMTLib {Reg : Type} [ToString Reg] (h : IO.FS.Handle) : SymExpr Reg → IO Unit
   | .const v => h.putStr s!"(_ bv{v.toNat} 64)"
   | .reg r => h.putStr s!"reg_{toString r}"
-  | .low32 e => do h.putStr "((_ zero_extend 32) ((_ extract 31 0) "; SymExpr.writeToSMTLib h e; h.putStr "))"
-  | .uext32 e => do h.putStr "((_ zero_extend 32) ((_ extract 31 0) "; SymExpr.writeToSMTLib h e; h.putStr "))"
+  | .low32 e =>
+    -- If e already produces a 32-bit-masked result, skip the redundant wrapper
+    if SymExpr.is32Masked e then SymExpr.writeToSMTLib h e
+    else do h.putStr "((_ zero_extend 32) ((_ extract 31 0) "; SymExpr.writeToSMTLib h e; h.putStr "))"
+  | .uext32 e =>
+    if SymExpr.is32Masked e then SymExpr.writeToSMTLib h e
+    else do h.putStr "((_ zero_extend 32) ((_ extract 31 0) "; SymExpr.writeToSMTLib h e; h.putStr "))"
   | .sext8to32 e => do h.putStr "((_ zero_extend 32) ((_ sign_extend 24) ((_ extract 7 0) "; SymExpr.writeToSMTLib h e; h.putStr ")))";
   | .sext32to64 e => do h.putStr "((_ sign_extend 32) ((_ extract 31 0) "; SymExpr.writeToSMTLib h e; h.putStr "))"
   | .sub32 l r => do h.putStr "((_ zero_extend 32) (bvsub ((_ extract 31 0) "; SymExpr.writeToSMTLib h l; h.putStr ") ((_ extract 31 0) "; SymExpr.writeToSMTLib h r; h.putStr ")))"
