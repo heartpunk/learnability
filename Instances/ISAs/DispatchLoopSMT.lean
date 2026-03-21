@@ -32,7 +32,7 @@ def smtImplCacheKey {Reg : Type} [Hashable Reg] (a b : SymPC Reg) : UInt64 :=
     Each query (A, B) checks: is (A ∧ ¬B) UNSAT? (i.e. does A → B?)
     Returns: (results array aligned with input, cache hits count).
     Updates the cache ref with new results. -/
-def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
+def smtCheckImplCached {Reg : Type} [BEq Reg] [DecidableEq Reg] [Hashable Reg] [ToString Reg]
     (cache : IO.Ref SMTCache)
     (pairs : Array (SymPC Reg × SymPC Reg))
     (tmpFile : System.FilePath := ".lake/smt_cached.smt2") :
@@ -93,12 +93,34 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [Hashable Reg] [ToString Reg]
         -- Write directly to file — no string accumulation
         let h ← IO.FS.Handle.mk chunkFile .write
         h.putStr (smtPreamble regNames needsMem)
+        -- Collect unique PCs and build query plan to avoid writing the same
+        -- PC hundreds of times.  In a 472×268 grid, each chunk has ~4 unique
+        -- "a" PCs and ~268 unique "b" PCs — define-fun once, reference by name.
+        let mut uniqueAs : Array (SymPC Reg) := #[]
+        let mut uniqueBs : Array (SymPC Reg) := #[]
+        let mut queryPlan : Array (Nat × Nat) := #[]
         for (a, b) in chunk do
-          h.putStr "(push)\n(assert (and "
-          SymPC.writeToSMTLib h a
-          h.putStr " (not "
-          SymPC.writeToSMTLib h b
-          h.putStr ")))\n(check-sat)\n(pop)\n"
+          let mut ai := uniqueAs.size
+          for hj : j in [:uniqueAs.size] do
+            if uniqueAs[j] = a then ai := j
+          if ai == uniqueAs.size then uniqueAs := uniqueAs.push a
+          let mut bi := uniqueBs.size
+          for hj : j in [:uniqueBs.size] do
+            if uniqueBs[j] = b then bi := j
+          if bi == uniqueBs.size then uniqueBs := uniqueBs.push b
+          queryPlan := queryPlan.push (ai, bi)
+        -- Emit define-funs for unique PCs
+        for ha : i in [:uniqueAs.size] do
+          h.putStr s!"(define-fun _a{i} () Bool "
+          SymPC.writeToSMTLib h uniqueAs[i]
+          h.putStr ")\n"
+        for hb : i in [:uniqueBs.size] do
+          h.putStr s!"(define-fun _b{i} () Bool "
+          SymPC.writeToSMTLib h uniqueBs[i]
+          h.putStr ")\n"
+        -- Emit queries referencing define-fun names
+        for (ai, bi) in queryPlan do
+          h.putStr s!"(push)\n(assert (and _a{ai} (not _b{bi})))\n(check-sat)\n(pop)\n"
         h.putStr "(exit)\n"
         h.flush
         -- Launch CVC5 asynchronously
