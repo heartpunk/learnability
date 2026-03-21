@@ -292,7 +292,7 @@ private def regionNonAliasing {Reg : Type} [DecidableEq Reg]
     | (some sr, some lr) => sr != lr
     | _ => false
 
-private def rawConstRangesNonOverlapping (a : UInt64) (aw : Nat) (b : UInt64) (bw : Nat) : Bool :=
+def rawConstRangesNonOverlapping (a : UInt64) (aw : Nat) (b : UInt64) (bw : Nat) : Bool :=
   a.toNat + aw ≤ UInt64.size ∧
   b.toNat + bw ≤ UInt64.size ∧
   (a.toNat + aw ≤ b.toNat ∨ b.toNat + bw ≤ a.toNat)

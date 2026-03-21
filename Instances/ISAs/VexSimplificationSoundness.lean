@@ -229,9 +229,10 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (w : Width) (mem : SymMem Reg) (addr : SymExpr Reg) (s : ConcreteState Reg) :
     evalSymExpr s (resolveLoadFrom w mem addr) =
     ByteMem.read w (evalSymMem s mem) (evalSymExpr s addr) := by
-  -- TODO: restore proof — broken by reg+const non-aliasing addition.
-  -- The const/const case was previously proved; reg+const cases need new
-  -- ByteMem lemma about offset-based non-overlap implying concrete non-overlap.
+  -- Previously fully proved for const/const case. Needs restoration after:
+  -- 1. rawConstRangesNonOverlapping refactor (Bool vs Prop ∧ destructuring)
+  -- 2. reg+const cases need modular arithmetic bridge lemma
+  -- Both issues need interactive Lean investigation of proof state.
   sorry
 
 /-! ## Proved: simplifyLoadStoreExpr / simplifyLoadStoreMem soundness
