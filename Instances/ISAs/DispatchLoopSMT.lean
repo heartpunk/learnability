@@ -96,18 +96,49 @@ def smtCheckImplCached {Reg : Type} [BEq Reg] [DecidableEq Reg] [Hashable Reg] [
         -- Collect unique PCs and build query plan to avoid writing the same
         -- PC hundreds of times.  In a 472×268 grid, each chunk has ~4 unique
         -- "a" PCs and ~268 unique "b" PCs — define-fun once, reference by name.
+        -- Use hash-based lookup to avoid O(n²) DecidableEq on huge trees.
         let mut uniqueAs : Array (SymPC Reg) := #[]
         let mut uniqueBs : Array (SymPC Reg) := #[]
+        -- Hash → array of indices into uniqueAs/uniqueBs that share that hash.
+        -- On lookup: check hash first (O(1)), then equality only within bucket.
+        let mut hashToA : Std.HashMap UInt64 (Array Nat) := {}
+        let mut hashToB : Std.HashMap UInt64 (Array Nat) := {}
         let mut queryPlan : Array (Nat × Nat) := #[]
         for (a, b) in chunk do
+          let ha := hash a
           let mut ai := uniqueAs.size
-          for hj : j in [:uniqueAs.size] do
-            if uniqueAs[j] = a then ai := j
-          if ai == uniqueAs.size then uniqueAs := uniqueAs.push a
+          match hashToA.get? ha with
+            | some bucket =>
+              let mut found := false
+              for hk : k in [:bucket.size] do
+                let idx := bucket[k]
+                if h : idx < uniqueAs.size then
+                  if uniqueAs[idx] = a then
+                    ai := idx
+                    found := true
+              if !found then
+                hashToA := hashToA.insert ha (bucket.push ai)
+                uniqueAs := uniqueAs.push a
+            | none =>
+              hashToA := hashToA.insert ha #[ai]
+              uniqueAs := uniqueAs.push a
+          let hb := hash b
           let mut bi := uniqueBs.size
-          for hj : j in [:uniqueBs.size] do
-            if uniqueBs[j] = b then bi := j
-          if bi == uniqueBs.size then uniqueBs := uniqueBs.push b
+          match hashToB.get? hb with
+            | some bucket =>
+              let mut found := false
+              for hk : k in [:bucket.size] do
+                let idx := bucket[k]
+                if h : idx < uniqueBs.size then
+                  if uniqueBs[idx] = b then
+                    bi := idx
+                    found := true
+              if !found then
+                hashToB := hashToB.insert hb (bucket.push bi)
+                uniqueBs := uniqueBs.push b
+            | none =>
+              hashToB := hashToB.insert hb #[bi]
+              uniqueBs := uniqueBs.push b
           queryPlan := queryPlan.push (ai, bi)
         -- Emit define-funs for unique PCs
         for ha : i in [:uniqueAs.size] do
