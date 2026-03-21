@@ -78,8 +78,11 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   -- SynSig = which closure PCs the branch syntactically implies (List Bool).
   -- SemSig = which closure PCs the branch semantically implies (Array Bool);
   --          computed lazily via CVC5 the first time a syntactic mismatch occurs.
+  -- Pre-canonicalize closure PCs once — avoids re-canonicalizing 268 PCs
+  -- per branch (was 89% of CPU for QuickJS with 1583 branches × 268 closure).
+  let closureCanon := closure.map canonicalizePC
   let mut convRepPCs     : Array (SymPC Reg)          := #[initBranch.pc]
-  let mut convRepSynSigs : Array (List Bool)           := #[computePCSignature closure initBranch.pc]
+  let mut convRepSynSigs : Array (List Bool)           := #[computePCSignature closure initBranch.pc closureCanon]
   let mut convRepSemSigs : Array (Option (Array Bool)) := #[none]
   -- Build initial frontier: skip + structurally-unique simplified seeds.
   let mut subPool : SubPool Reg := {}
@@ -96,7 +99,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       unless frontierSet.contains zb' do
         frontierSet := frontierSet.insert zb'
         convRepPCs     := convRepPCs.push zb'.pc
-        convRepSynSigs := convRepSynSigs.push (computePCSignature closure zb'.pc)
+        convRepSynSigs := convRepSynSigs.push (computePCSignature closure zb'.pc closureCanon)
         convRepSemSigs := convRepSemSigs.push none
         frontier := frontier.push zb'
   -- Seed initial frontier into current set
@@ -161,7 +164,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     if semCands.size > 0 then
       -- Compute syntactic sigs for all candidates
       let t_synsig ← IO.monoMsNow
-      let candSynSigs := semCands.map (fun c => computePCSignature closure c.pc)
+      let candSynSigs := semCands.map (fun c => computePCSignature closure c.pc closureCanon)
       let t_synsig_done ← IO.monoMsNow
       log s!"      [trace] syntactic sigs: {t_synsig_done - t_synsig}ms for {semCands.size} candidates × {closure.size} closure"
       -- Fast path: which candidates have a syntactic sig matching an existing rep?

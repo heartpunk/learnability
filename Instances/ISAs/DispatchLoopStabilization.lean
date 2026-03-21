@@ -244,17 +244,21 @@ def checkHContains {Reg : Type} [DecidableEq Reg] [BEq Reg] [Hashable (SymPC Reg
     the branch's PC syntactically implies it (all conjuncts of the guard appear
     in the branch's conjuncts). -/
 def computePCSignature {Reg : Type} [DecidableEq Reg] [Hashable Reg] [Hashable (SymPC Reg)]
-    (closure : Array (SymPC Reg)) (pc : SymPC Reg) : List Bool :=
+    (closure : Array (SymPC Reg)) (pc : SymPC Reg)
+    (closureCanon : Option (Array (SymPC Reg)) := none) : List Bool :=
   -- Canonicalize then extract conjuncts for O(1) membership checks.
   -- Canonicalization ensures that e.g. eq(a,b) and eq(b,a) hash identically,
   -- catching more syntactic matches before falling through to the SMT solver.
   let pcConjList := SymPC.conjuncts (canonicalizePC pc)
   let pcConjSet : Std.HashSet (SymPC Reg) :=
     pcConjList.foldl (fun s c => s.insert c) {}
-  closure.toList.map fun guardPC =>
-    match guardPC with
-    | .true => true  -- everything implies .true
-    | _ => pcConjSet.contains (canonicalizePC guardPC)
+  -- Use pre-canonicalized closure if provided (avoids re-canonicalizing
+  -- the same closure PCs for every branch).
+  let canon := closureCanon.getD (closure.map canonicalizePC)
+  canon.toList.map fun cpc =>
+    match cpc with
+    | .true => true
+    | _ => pcConjSet.contains cpc
 
 /-- Hash a PC signature (list of bools) for use as a HashMap key. -/
 def hashPCSignature (sig : List Bool) : UInt64 :=
