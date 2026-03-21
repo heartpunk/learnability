@@ -28,10 +28,17 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   let closure := match addrClassify with
     | some clf => rawClosure.map (simplifyLoadStorePCR clf)
     | none => rawClosure
-  let mut current : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {}
-  let mut currentByHash : Std.HashMap UInt64 (Array (Branch (SymSub Reg) (SymPC Reg))) := {}
-  current := current.insert initBranch
-  currentByHash := currentByHash.insert (hash initBranch) #[initBranch]
+  -- Phase 2: Convert body to HSub once at entry
+  let hBodyArr : Array (Branch (VexISA.HSub Reg) (SymPC Reg)) :=
+    bodyArr.map fun b => ⟨VexISA.HSub.ofRaw b.sub, b.pc⟩
+  let bodyRawSubs := bodyArr.map (·.sub)
+  -- Internal state uses HSub branches; currentByHash replaces HashSet (no DecidableEq needed)
+  let initHBranch : Branch (VexISA.HSub Reg) (SymPC Reg) := ⟨VexISA.HSub.ofRaw initBranch.sub, initBranch.pc⟩
+  let mut currentByHash : Std.HashMap UInt64 (Array (Branch (VexISA.HSub Reg) (SymPC Reg))) := {}
+  let mut currentSize : Nat := 0
+  let initH := hash initHBranch
+  currentByHash := currentByHash.insert initH #[initHBranch]
+  currentSize := currentSize + 1
   -- initialFrontier seeded into current AFTER closedness check (needs projection)
   -- Compute closed projection (same as computeStabilizationHS)
   let mut dataPCRegs : Std.HashSet Reg := {}
@@ -85,74 +92,82 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
   let mut convRepSynSigs : Array (List Bool)           := #[computePCSignature closure initBranch.pc closureCanon]
   let mut convRepSemSigs : Array (Option (Array Bool)) := #[none]
   -- Build initial frontier: skip + structurally-unique simplified seeds.
-  let mut subPool : SubPool Reg := {}
-  let mut frontierSet : Std.HashSet (Branch (SymSub Reg) (SymPC Reg)) := {initBranch}
-  let mut frontier : Array (Branch (SymSub Reg) (SymPC Reg)) := #[initBranch]
+  let mut hSubPool : VexISA.HSubPool Reg := {}
+  let mut frontier : Array (Branch (VexISA.HSub Reg) (SymPC Reg)) := #[initHBranch]
   for b in initialFrontier do
     match simplifyBranchFull b addrClassify with
     | none => pure ()
     | some sb =>
-      let zb := zeroNonProjected closedRegs ip_reg sb
-      let (internedSub, subPool') := subPool.intern zb.sub
-      subPool := subPool'
-      let zb' : Branch (SymSub Reg) (SymPC Reg) := ⟨internedSub, zb.pc⟩
-      unless frontierSet.contains zb' do
-        frontierSet := frontierSet.insert zb'
-        convRepPCs     := convRepPCs.push zb'.pc
-        convRepSynSigs := convRepSynSigs.push (computePCSignature closure zb'.pc closureCanon)
+      -- Convert simplified raw branch to HSub, then zero + intern
+      let hSub := VexISA.HSub.ofRaw sb.sub
+      let zHSub := VexISA.zeroNonProjectedH closedRegs ip_reg hSub
+      let (internedSub, hSubPool') := hSubPool.intern zHSub
+      hSubPool := hSubPool'
+      let zb : Branch (VexISA.HSub Reg) (SymPC Reg) := ⟨internedSub, sb.pc⟩
+      -- Dedup via hash bucket check
+      let h := hash zb
+      let bucket := currentByHash.getD h #[]
+      let isDupe := bucket.any (fun x => x.sub == zb.sub && x.pc == zb.pc)
+      unless isDupe do
+        currentByHash := currentByHash.insert h (bucket.push zb)
+        currentSize := currentSize + 1
+        convRepPCs     := convRepPCs.push zb.pc
+        convRepSynSigs := convRepSynSigs.push (computePCSignature closure zb.pc closureCanon)
         convRepSemSigs := convRepSemSigs.push none
-        frontier := frontier.push zb'
-  -- Seed initial frontier into current set
-  for b in frontier do
-    current := current.insert b
-    let h := hash b
-    currentByHash := currentByHash.insert h ((currentByHash.getD h #[]).push b)
+        frontier := frontier.push zb
   log s!"    initial frontier: {frontier.size} branches (skip + {initialFrontier.size} call-expanded)"
   for k in List.range maxIter do
     let t_start ← IO.monoMsNow
-    -- Pure composition: no summary interception, body has no call branches
+    -- Pure composition: HSub → HSub (no conversion overhead)
     let t_compose ← IO.monoMsNow
     let (composedTagged, pairsComposed, skipped, dropped) :=
-      composeBranchArrayIndexed ip_reg bodyArr frontier
+      composeBranchArrayIndexedH ip_reg hBodyArr bodyRawSubs frontier
     let t_composed ← IO.monoMsNow
     -- Strip body indices (not used in this function)
     let composed := composedTagged.map (·.1)
     log s!"      [trace] compose: {t_composed - t_compose}ms, {composed.size} raw branches"
-    -- Simplify: load-after-store + constant folding + zero non-projected
+    -- Simplify: HExpr simplification on sub + raw PC simplification
     let t_simplify ← IO.monoMsNow
-    let mut simplified : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    let mut simplified : Array (Branch (VexISA.HSub Reg) (SymPC Reg)) := #[]
     let mut droppedSimplify : Nat := 0
     for b in composed do
-      match simplifyBranchFull b addrClassify with
+      -- Simplify sub in HExpr land (constant folding + LAS)
+      let simplifiedHSub := VexISA.simplifyHSub b.sub
+      -- Simplify PC in raw land (with optional region awareness)
+      let simplifiedPC := simplifyLoadStorePCOpt addrClassify b.pc
+      match SymPC.simplifyConst simplifiedPC with
       | none => droppedSimplify := droppedSimplify + 1
-      | some sb =>
-        let zb := zeroNonProjected closedRegs ip_reg sb
-        let (internedSub, subPool') := subPool.intern zb.sub
-        subPool := subPool'
-        simplified := simplified.push ⟨internedSub, zb.pc⟩
+      | some pc' =>
+        let zHSub := VexISA.zeroNonProjectedH closedRegs ip_reg simplifiedHSub
+        let (internedSub, hSubPool') := hSubPool.intern zHSub
+        hSubPool := hSubPool'
+        simplified := simplified.push ⟨internedSub, pc'⟩
     let t_simplified ← IO.monoMsNow
     log s!"      [trace] simplify: {t_simplified - t_simplify}ms, {simplified.size} survived, {droppedSimplify} dropped"
-    let mut newBranches : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    let mut newBranches : Array (Branch (VexISA.HSub Reg) (SymPC Reg)) := #[]
     let mut dupes : Nat := 0
-    -- Phase 1: structural dedup — collect all branches not already in current
-    -- Hash each branch ONCE upfront, then use cached hash for set operations
+    -- Phase 1: structural dedup — O(1) hash from cached HExpr hashes
     let t_dedup ← IO.monoMsNow
-    let mut semCands : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+    let mut semCands : Array (Branch (VexISA.HSub Reg) (SymPC Reg)) := #[]
     for b in simplified do
       let h := hash b
       let bucket := currentByHash.getD h #[]
-      if bucket.any (· == b) then
+      if bucket.any (fun x => x.sub == b.sub && x.pc == b.pc) then
         dupes := dupes + 1
       else
         currentByHash := currentByHash.insert h (bucket.push b)
-        current := current.insert b
+        currentSize := currentSize + 1
         semCands := semCands.push b
     let t_deduped ← IO.monoMsNow
     log s!"      [trace] dedup: {t_deduped - t_dedup}ms, {dupes} dupes, {semCands.size} new candidates"
     -- Branch cap: OOM safety valve
-    if current.size > maxBranches then
-      log s!"    BRANCH CAP: {current.size} > {maxBranches}, stopping early at K={k}"
-      return some (k, current.toArray)
+    if currentSize > maxBranches then
+      log s!"    BRANCH CAP: {currentSize} > {maxBranches}, stopping early at K={k}"
+      let mut capResult : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+      for (_, bucket) in currentByHash.toArray do
+        for b in bucket do
+          capResult := capResult.push ⟨b.sub.toRaw, b.pc⟩
+      return some (k, capResult)
     -- Phase 2: PC-signature convergence (syntactic fast-path + SMT semantic).
     -- For each candidate, compute its signature: which closure PCs does it imply?
     -- Fast path: syntactic sig matches an existing rep sig → collapse.
@@ -268,21 +283,22 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
             convRepSemSigs := convRepSemSigs.push candSemSigsArr[ci]!
             newBranches    := newBranches.push b
     let t_end ← IO.monoMsNow
-    log s!"    K={k}: |S|={current.size} |new|={newBranches.size} |conv_reps|={convRepSynSigs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} sem_collapsed={semCollapsed} {t_end - t_start}ms"
-    -- Diagnostic: dump expression details for first few iterations
+    log s!"    K={k}: |S|={currentSize} |new|={newBranches.size} |conv_reps|={convRepSynSigs.size} pairs={pairsComposed} skipped={skipped} dropped={dropped}+{droppedSimplify} dupes={dupes} sem_collapsed={semCollapsed} {t_end - t_start}ms"
+    -- Diagnostic: dump expression details for first few iterations (convert HSub → raw on demand)
     if k ≤ 4 && newBranches.size > 0 then
       -- Aggregate stats across all new branches
       let mut totalNodes : Nat := 0
       let mut totalUnresolved : Nat := 0
       let mut maxNodes : Nat := 0
       for b in newBranches do
+        let rawSub := b.sub.toRaw
         let mut bNodes : Nat := 0
         let mut bUnresolved : Nat := 0
         for r in closedRegsArr do
-          let e := b.sub.regs r
+          let e := rawSub.regs r
           bNodes := bNodes + exprNodeCount e
           bUnresolved := bUnresolved + exprUnresolvedLoads e
-        bNodes := bNodes + memNodeCount b.sub.mem
+        bNodes := bNodes + memNodeCount rawSub.mem
         totalNodes := totalNodes + bNodes
         totalUnresolved := totalUnresolved + bUnresolved
         if bNodes > maxNodes then maxNodes := bNodes
@@ -291,16 +307,20 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       let mut dumpIdx : Nat := 0
       for b in newBranches do
         if dumpIdx < 2 then
+          let rawSub := b.sub.toRaw
           let mut regSummaries : List String := []
           for r in closedRegsArr do
-            let e := b.sub.regs r
+            let e := rawSub.regs r
             regSummaries := regSummaries ++ [s!"{r}={exprSummary e 3}[{exprNodeCount e}n,{exprUnresolvedLoads e}ul]"]
-          log s!"      branch[{dumpIdx}]: {", ".intercalate regSummaries} mem[{memNodeCount b.sub.mem}n]"
+          log s!"      branch[{dumpIdx}]: {", ".intercalate regSummaries} mem[{memNodeCount rawSub.mem}n]"
           dumpIdx := dumpIdx + 1
     if newBranches.size == 0 then
-      -- Collect all branches as array for the summary
-      let summaryArr := current.toArray
-      log s!"    sub-pool: {subPool.pool.size} unique subs, {subPool.hits} hits, {subPool.misses} misses"
+      -- Convert HSub branches back to raw for return
+      let mut summaryArr : Array (Branch (SymSub Reg) (SymPC Reg)) := #[]
+      for (_, bucket) in currentByHash.toArray do
+        for b in bucket do
+          summaryArr := summaryArr.push ⟨b.sub.toRaw, b.pc⟩
+      log s!"    sub-pool: {hSubPool.pool.size} unique subs, {hSubPool.hits} hits, {hSubPool.misses} misses"
       unless diagnostics do return some (k, summaryArr)
       -- h_contains check: every body branch PC's conjuncts are in the closure.
       -- Note: h_contains is about branchingLoopModel (= original body block
