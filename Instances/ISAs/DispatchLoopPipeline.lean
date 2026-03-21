@@ -55,6 +55,7 @@ structure GenericLTSTransition where
   label : DispatchKey
   tgt : UInt64
   effects : Option (SymSub Amd64Reg)  -- what this transition does to state
+  guardPC : Option (SymPC Amd64Reg)   -- full simplified guard (includes rip guards, lt/le/not)
 
 /-- A generic extracted LTS: states are addresses, labels are dispatch keys. -/
 structure GenericExtractedLTS where
@@ -120,7 +121,7 @@ def constructLTS (funcAddr : UInt64)
     let key : DispatchKey := ⟨dataComps⟩
     states := states.insert src
     if tgt != 0 then states := states.insert tgt
-    transitions := transitions.push ⟨src, key, tgt, some b.sub⟩
+    transitions := transitions.push ⟨src, key, tgt, some b.sub, some b.pc⟩
   return ⟨transitions, states, funcAddr⟩
 
 /-! ## LTS Serialization -/
@@ -176,12 +177,17 @@ def GenericExtractedLTS.toJson (lts : GenericExtractedLTS)
     let labelJson := Lean.Json.arr (t.label.comparisons.map fun (e, v) =>
       Lean.Json.mkObj [
         ("expr", .str (renderExpr e)),
+        ("exprSMT", .str (SymExpr.toSMTLib e)),
         ("value", .num ⟨v.toNat, 0⟩),
         ("valueHex", .str (hexAddr v))
       ])
     let srcName := funcEntries.getD t.src (hexAddr t.src)
     let tgtName := funcEntries.getD t.tgt (hexAddr t.tgt)
-    -- Render effects: just the register map (skip mem for size)
+    -- Full guard PC as SMT-LIB
+    let guardSMT := match t.guardPC with
+      | some pc => Lean.Json.str (SymPC.toSMTLib pc)
+      | none => .null
+    -- Render effects: register map as both s-expr and SMT-LIB (skip mem for size)
     let effectsJson := match t.effects with
       | some sub =>
         let regEffects := VexISA.EnumReg.allRegs.filterMap fun (r : Amd64Reg) =>
@@ -192,13 +198,24 @@ def GenericExtractedLTS.toJson (lts : GenericExtractedLTS)
           | _ => some (s!"{r}", Lean.Json.str (renderExpr e))
         Lean.Json.mkObj regEffects
       | none => .null
+    let effectsSMT := match t.effects with
+      | some sub =>
+        let regEffects := VexISA.EnumReg.allRegs.filterMap fun (r : Amd64Reg) =>
+          let e := sub.regs r
+          match e with
+          | .reg r' => if r == r' then none else some (s!"{r}", Lean.Json.str (SymExpr.toSMTLib e))
+          | _ => some (s!"{r}", Lean.Json.str (SymExpr.toSMTLib e))
+        Lean.Json.mkObj regEffects
+      | none => .null
     Lean.Json.mkObj [
       ("src", .str (hexAddr t.src)),
       ("srcName", .str srcName),
       ("label", labelJson),
+      ("guardSMT", guardSMT),
       ("tgt", .str (hexAddr t.tgt)),
       ("tgtName", .str tgtName),
-      ("effects", effectsJson)
+      ("effects", effectsJson),
+      ("effectsSMT", effectsSMT)
     ]
   let statesJson := Lean.Json.arr (lts.states.toArray.map fun s =>
     Lean.Json.mkObj [
