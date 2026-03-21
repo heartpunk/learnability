@@ -36,34 +36,34 @@ def ppExpr : SymExpr Amd64Reg → String
   | _ => "..."
 
 /-- Pretty-print a SymPC atom as a character condition on rax. -/
-def ppCharCond (rax : Amd64Reg) : SymPC Amd64Reg → String
+def ppCharCond (raxReg : Amd64Reg) : SymPC Amd64Reg → String
   | .eq (.reg r) (.const c) =>
-    if r == rax then
+    if r == raxReg then
       let n := c.toNat
       if n ≥ 32 && n ≤ 126 then s!"rax=='{Char.ofNat n}'"
       else s!"rax=={n}"
     else s!"{r}=={ppExpr (.const c)}"
   | .eq l r => s!"{ppExpr l}=={ppExpr r}"
   | .le (.const lo) (.reg r) =>
-    if r == rax then s!"rax>={lo.toNat}" else s!"{lo.toNat}<={r}"
+    if r == raxReg then s!"rax>={lo.toNat}" else s!"{lo.toNat}<={r}"
   | .le (.reg r) (.const hi) =>
-    if r == rax then s!"rax<={hi.toNat}" else s!"{r}<={hi.toNat}"
+    if r == raxReg then s!"rax<={hi.toNat}" else s!"{r}<={hi.toNat}"
   | .le l r => s!"{ppExpr l}<={ppExpr r}"
   | .lt (.const lo) (.reg r) =>
-    if r == rax then s!"rax>{lo.toNat}" else s!"{lo.toNat}<{r}"
+    if r == raxReg then s!"rax>{lo.toNat}" else s!"{lo.toNat}<{r}"
   | .lt (.reg r) (.const hi) =>
-    if r == rax then s!"rax<{hi.toNat}" else s!"{r}<{hi.toNat}"
+    if r == raxReg then s!"rax<{hi.toNat}" else s!"{r}<{hi.toNat}"
   | .lt l r => s!"{ppExpr l}<{ppExpr r}"
-  | .not inner => "NOT(" ++ ppCharCond rax inner ++ ")"
+  | .not inner => "NOT(" ++ ppCharCond raxReg inner ++ ")"
   | .true => "true"
   | _ => "<cond>"
 
 /-- Format a data guard PC (non-rip conjuncts) as a human-readable string. -/
-def describeDataGuard (rax : Amd64Reg) (pc : SymPC Amd64Reg) : String :=
+def describeDataGuard (raxReg : Amd64Reg) (pc : SymPC Amd64Reg) : String :=
   let cs := SymPC.conjuncts pc
   match cs with
   | [.true] => "*"
-  | _ => " & ".intercalate (cs.map (ppCharCond rax))
+  | _ => " & ".intercalate (cs.map (ppCharCond raxReg))
 
 /-- Format a UInt64 as a hex address. -/
 def hexAddr (a : UInt64) : String :=
