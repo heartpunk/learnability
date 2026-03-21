@@ -515,6 +515,52 @@ theorem writeByte_writeByte_comm (mem : ByteMem) (a b : UInt64) (va vb : UInt8) 
     ByteMem.writeByte (ByteMem.writeByte mem b vb) a va := by
   simp [ByteMem.writeByte, Finmap.insert_insert_of_ne _ h]
 
+private theorem uint64_ofNat_injective {i k : Nat} (hi : i < UInt64.size) (hk : k < UInt64.size)
+    (h : UInt64.ofNat i = UInt64.ofNat k) : i = k := by
+  have h1 : (UInt64.ofNat i).toNat = i := Nat.mod_eq_of_lt hi
+  have h2 : (UInt64.ofNat k).toNat = k := Nat.mod_eq_of_lt hk
+  have := congrArg UInt64.toNat h
+  omega
+
+private theorem uint64_add_left_cancel' (R a b : UInt64) (h : R + a = R + b) : a = b := by
+  have hbv : R.toBitVec + a.toBitVec = R.toBitVec + b.toBitVec := congrArg UInt64.toBitVec h
+  have hab : a.toBitVec = b.toBitVec := by bv_omega
+  exact congrArg UInt64.ofBitVec hab
+
+private theorem writeByte_writeLEAux_comm (mem : ByteMem) (addr v : UInt64) (n : Nat)
+    (a : UInt64) (va : UInt8) (ha : ∀ i, i < n → addr + UInt64.ofNat i ≠ a) :
+    ByteMem.writeLEAux (ByteMem.writeByte mem a va) addr v n =
+    ByteMem.writeByte (ByteMem.writeLEAux mem addr v n) a va := by
+  induction n generalizing mem with
+  | zero => rfl
+  | succ k ih =>
+    simp only [ByteMem.writeLEAux]
+    rw [writeByte_writeByte_comm _ a _ va _ (Ne.symm (ha k (Nat.lt_succ_of_le (Nat.le_refl k))))]
+    exact ih _ (fun i hi => ha i (Nat.lt_succ_of_lt hi))
+
+theorem writeLEAux_writeLEAux_same (mem : ByteMem) (addr v1 v2 : UInt64) (n : Nat) (hn : n ≤ UInt64.size) :
+    ByteMem.writeLEAux (ByteMem.writeLEAux mem addr v1 n) addr v2 n =
+    ByteMem.writeLEAux mem addr v2 n := by
+  induction n generalizing mem with
+  | zero => rfl
+  | succ k ih =>
+    simp only [ByteMem.writeLEAux]
+    -- Commute writeByte(a+k, b2) past writeLEAux(a, v1, k):
+    have hk_lt : k < UInt64.size := by omega
+    have hne : ∀ i, i < k → addr + UInt64.ofNat i ≠ addr + UInt64.ofNat k := fun i hi heq => by
+      have := uint64_add_left_cancel' addr _ _ heq
+      have := uint64_ofNat_injective (by omega) hk_lt this
+      omega
+    rw [← writeByte_writeLEAux_comm _ addr v1 k _ _ hne, writeByte_writeByte_same]
+    exact ih _ (by omega)
+
+theorem ByteMem_write_write_same (w : Width) (M : ByteMem) (a v1 v2 : UInt64) :
+    ByteMem.write w (ByteMem.write w M a v1) a v2 = ByteMem.write w M a v2 := by
+  cases w <;> simp only [ByteMem.write, ByteMem.write8, ByteMem.write16le,
+    ByteMem.write32le, ByteMem.write64le]
+  · exact writeByte_writeByte_same M a _ _
+  all_goals exact writeLEAux_writeLEAux_same M a v1 v2 _ (by simp [UInt64.size])
+
 /-! ## Width-level non-overlap: read after write at non-overlapping byte ranges
 
 The non-wrapping guards `h_a` and `h_b` ensure that the store and load byte ranges

@@ -494,7 +494,7 @@ theorem simplifyLoadStoreMem_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
         cases w <;> simp only [ByteMem.write, ByteMem.write8, ByteMem.write16le,
           ByteMem.write32le, ByteMem.write64le]
         · exact (writeByte_writeByte_same _ _ _ _).symm
-        all_goals sorry -- need writeLEAux_writeLEAux_same
+        all_goals exact (writeLEAux_writeLEAux_same _ _ _ _ _ (by simp [UInt64.size])).symm
       · -- no dead store
         simp only [evalSymMem]
         rw [simplifyLoadStoreMem_sound mem s,
