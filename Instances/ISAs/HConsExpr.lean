@@ -656,6 +656,61 @@ def simplifyHMem {Reg : Type} [BEq Reg] [Hashable Reg] : HMem Reg → HMem Reg
     | _ => HMem.store w mem' addr' val'
 end
 
+/-! ## HSub Hashable and BEq
+
+Hashable uses O(1) cached hashes from registers (matching SymSub's register-only hash).
+BEq uses hash fast-path then structural fallback. -/
+
+instance {Reg : Type} [Hashable Reg] [EnumReg Reg] : Hashable (HSub Reg) where
+  hash sub :=
+    EnumReg.allRegs.foldl (fun acc r => mixHash acc (sub.regs r).cached_hash) 0
+
+instance {Reg : Type} [BEq Reg] [Hashable Reg] [EnumReg Reg] : BEq (HSub Reg) where
+  beq a b :=
+    if hash a != hash b then false
+    else EnumReg.allRegs.all (fun r => HExpr.beq (a.regs r) (b.regs r)) && HMem.beq a.mem b.mem
+
+/-! ## HSub Utilities -/
+
+/-- Extract the rip target from an HSub's IP register (O(1) pattern match). -/
+def extractRipTargetH {Reg : Type} (ip_reg : Reg) (sub : HSub Reg) : Option UInt64 :=
+  match (sub.regs ip_reg).node with
+  | .const addr => some addr
+  | _ => none
+
+/-- Zero out non-projected registers in an HSub. -/
+def zeroNonProjectedH {Reg : Type} [BEq Reg] [Hashable Reg]
+    (projectedRegs : Std.HashSet Reg) (ip_reg : Reg) (sub : HSub Reg) : HSub Reg where
+  regs r :=
+    if r == ip_reg then sub.regs r
+    else if projectedRegs.contains r then sub.regs r
+    else HExpr.const 0
+  mem := sub.mem
+
+/-- Simplify all registers and memory in an HSub via HExpr simplification. -/
+def simplifyHSub {Reg : Type} [BEq Reg] [Hashable Reg] (sub : HSub Reg) : HSub Reg where
+  regs r := simplifyHExpr (sub.regs r)
+  mem := simplifyHMem sub.mem
+
+/-! ## HSubPool: Interning for HSub with O(1) hash lookup -/
+
+structure HSubPool (Reg : Type) [Hashable Reg] [EnumReg Reg] where
+  pool : Std.HashMap UInt64 (HSub Reg) := {}
+  hits : Nat := 0
+  misses : Nat := 0
+
+/-- Intern an HSub: return pooled copy if equal one exists, else insert.
+    Hash lookup is O(1) thanks to cached hashes. -/
+def HSubPool.intern {Reg : Type} [BEq Reg] [Hashable Reg] [EnumReg Reg]
+    (sp : HSubPool Reg) (sub : HSub Reg) : HSub Reg × HSubPool Reg :=
+  let h := hash sub
+  match sp.pool.get? h with
+  | some existing =>
+    if existing == sub
+    then (existing, { sp with hits := sp.hits + 1 })
+    else (sub, { sp with pool := sp.pool.insert h sub, misses := sp.misses + 1 })
+  | none => (sub, { sp with pool := sp.pool.insert h sub, misses := sp.misses + 1 })
+
 /-! ## Bridge: SymSub composition and simplification via HExpr -/
 
 /-- Compose two raw SymSubs via hash-consed intermediary.
