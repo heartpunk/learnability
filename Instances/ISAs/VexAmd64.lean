@@ -109,7 +109,6 @@ instance : Repr Amd64ConcreteState where
       , state.read .r12
       , state.read .fs_base
       , state.read .xmm0
-      , state.mem
       )
 
 end VexISA

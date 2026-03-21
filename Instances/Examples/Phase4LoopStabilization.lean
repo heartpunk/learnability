@@ -136,7 +136,7 @@ private theorem bodyEffect_executes_and_changes :
           | .r0 => 5
           | .r1 => 0
           | .r2 => 99
-        mem := [] }
+        mem := ∅ }
     loop.bodyEffect s ≠ s := by
   dsimp [loop, resetState]
   intro h
@@ -314,7 +314,7 @@ example :
           | .r0 => 5
           | .r1 => 0
           | .r2 => 99
-        mem := [] }
+        mem := ∅ }
     loop.bodyEffect s ≠ s :=
   bodyEffect_executes_and_changes
 

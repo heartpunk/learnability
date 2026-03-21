@@ -1,5 +1,6 @@
 import Mathlib.Data.Fintype.Basic
 import Mathlib.Data.Finset.Basic
+import Mathlib.Data.Finmap
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -103,20 +104,18 @@ to the full 64-bit `UInt64` result.
     UInt64.ofNat shifted
 
 abbrev ByteCell := UInt64 × UInt8
-abbrev ByteMem := List ByteCell
+abbrev ByteMem := Finmap (fun _ : UInt64 => UInt8)
 
-def ByteMem.empty : ByteMem := []
+def ByteMem.empty : ByteMem := ∅
 
-def ByteMem.eraseAddr (mem : ByteMem) (addr : UInt64) : ByteMem :=
-  mem.filter (fun cell => cell.1 ≠ addr)
+-- Finmap's Multiset internals make Repr noncomputable.
+-- ConcreteState repr omits memory (register values suffice for debugging).
 
-@[simp] def ByteMem.readByte : ByteMem → UInt64 → UInt8
-  | [], _ => 0
-  | (cellAddr, value) :: rest, addr =>
-      if cellAddr = addr then value else ByteMem.readByte rest addr
+@[simp] def ByteMem.readByte (mem : ByteMem) (addr : UInt64) : UInt8 :=
+  (mem.lookup addr).getD 0
 
 def ByteMem.writeByte (mem : ByteMem) (addr : UInt64) (value : UInt8) : ByteMem :=
-  (addr, value) :: ByteMem.eraseAddr mem addr
+  mem.insert addr value
 
 def ByteMem.readLEAux (mem : ByteMem) (addr : UInt64) : Nat → UInt64
   | 0 => 0
@@ -382,37 +381,14 @@ class EnumReg (Reg : Type) where
 
 /-! ## ByteMem read-after-write lemmas -/
 
-/-- Erasing address `a` doesn't affect readByte at `b ≠ a`. -/
-theorem readByte_eraseAddr_ne (mem : ByteMem) (a b : UInt64) (h : a ≠ b) :
-    ByteMem.readByte (ByteMem.eraseAddr mem a) b =
-    ByteMem.readByte mem b := by
-  induction mem with
-  | nil => rfl
-  | cons cell rest ih =>
-    simp only [ByteMem.eraseAddr, List.filter]
-    by_cases hca : cell.1 = a
-    · have : (cell.1 ≠ a) = False := by simp [hca]
-      simp only [this, decide_false]
-      simp only [ByteMem.readByte]
-      have hcb : ¬(cell.1 = b) := fun hcb => h (hca ▸ hcb)
-      simp only [hcb, ite_false]
-      exact ih
-    · have : (cell.1 ≠ a) = True := by simp [hca]
-      simp only [this, decide_true]
-      simp only [ByteMem.readByte]
-      split
-      · rfl
-      · exact ih
-
 theorem readByte_writeByte_same (mem : ByteMem) (addr : UInt64) (val : UInt8) :
     ByteMem.readByte (ByteMem.writeByte mem addr val) addr = val := by
-  unfold ByteMem.writeByte; simp [ByteMem.readByte]
+  simp [ByteMem.writeByte, ByteMem.readByte, Finmap.lookup_insert]
 
 theorem readByte_writeByte_ne (mem : ByteMem) (a b : UInt64) (val : UInt8) (h : a ≠ b) :
     ByteMem.readByte (ByteMem.writeByte mem a val) b = ByteMem.readByte mem b := by
-  unfold ByteMem.writeByte
-  simp only [ByteMem.readByte, if_neg h]
-  exact readByte_eraseAddr_ne mem a b h
+  have : b ≠ a := Ne.symm h
+  simp [ByteMem.writeByte, ByteMem.readByte, Finmap.lookup_insert_of_ne mem this]
 
 theorem readByte_writeLEAux_nonoverlap
     (mem : ByteMem) (addr value : UInt64) (n : Nat) (b : UInt64)
@@ -532,10 +508,12 @@ theorem ByteMem_read_write_same (w : Width) (M : ByteMem) (a v : UInt64) :
 
 theorem writeByte_writeByte_same (mem : ByteMem) (a : UInt64) (v1 v2 : UInt8) :
     ByteMem.writeByte (ByteMem.writeByte mem a v1) a v2 = ByteMem.writeByte mem a v2 := by
-  simp only [ByteMem.writeByte, ByteMem.eraseAddr]
-  congr 1
-  simp only [List.filter_cons, decide_not]
-  simp [List.filter_filter]
+  simp [ByteMem.writeByte, Finmap.insert_insert]
+
+theorem writeByte_writeByte_comm (mem : ByteMem) (a b : UInt64) (va vb : UInt8) (h : a ≠ b) :
+    ByteMem.writeByte (ByteMem.writeByte mem a va) b vb =
+    ByteMem.writeByte (ByteMem.writeByte mem b vb) a va := by
+  simp [ByteMem.writeByte, Finmap.insert_insert_of_ne _ h]
 
 /-! ## Width-level non-overlap: read after write at non-overlapping byte ranges
 

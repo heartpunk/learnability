@@ -104,7 +104,7 @@ private theorem sZero_left :
           | .r0 => 0
           | .r1 => 0
           | .r2 => 99
-        mem := [] }
+        mem := ∅ }
     ∃ cls : LiveBranchClass Reg, cls.path = pathLeft ∧ cls.Realizes bodyPaths closure s := by
   dsimp
   let s : ConcreteState Reg :=
@@ -112,7 +112,7 @@ private theorem sZero_left :
           | .r0 => 0
           | .r1 => 0
           | .r2 => 99
-        mem := [] }
+        mem := ∅ }
   let cls : LiveBranchClass Reg :=
     { path := pathLeft
       summary := expectedLeft
@@ -140,7 +140,7 @@ private theorem sOne_right :
           | .r0 => 1
           | .r1 => 0
           | .r2 => 99
-        mem := [] }
+        mem := ∅ }
     ∃ cls : LiveBranchClass Reg, cls.path = pathRight ∧ cls.Realizes bodyPaths closure s := by
   dsimp
   let s : ConcreteState Reg :=
@@ -148,7 +148,7 @@ private theorem sOne_right :
           | .r0 => 1
           | .r1 => 0
           | .r2 => 99
-        mem := [] }
+        mem := ∅ }
   let cls : LiveBranchClass Reg :=
     { path := pathRight
       summary := expectedRight
@@ -176,7 +176,7 @@ example :
           | .r0 => 0
           | .r1 => 0
           | .r2 => 99
-        mem := [] }
+        mem := ∅ }
     ∃ cls : LiveBranchClass Reg, cls.path = pathLeft ∧ cls.Realizes bodyPaths closure s :=
   sZero_left
 
@@ -186,7 +186,7 @@ example :
           | .r0 => 1
           | .r1 => 0
           | .r2 => 99
-        mem := [] }
+        mem := ∅ }
     ∃ cls : LiveBranchClass Reg, cls.path = pathRight ∧ cls.Realizes bodyPaths closure s :=
   sOne_right
 
