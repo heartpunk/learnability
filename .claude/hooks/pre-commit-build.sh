@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Pre-commit hook: runs full `lake build` before any `jj commit`.
 # If the build fails, the commit is blocked.
 
