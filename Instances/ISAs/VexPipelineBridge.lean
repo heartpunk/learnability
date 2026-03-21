@@ -740,7 +740,7 @@ private theorem eq_guard_pins_reg
     (h_sat : evalSymPC s (.eq (.reg r) (.const c)) = true) :
     s.regs r = c := by
   simp [evalSymPC, evalSymExpr] at h_sat
-  sorry -- eq_of_beq type mismatch after BEq/DecidableEq change
+  exact h_sat
 
 /-- Guard pinning: if `eq(.reg r, .const c)` is in the basis and s₁, s₂
     are partition-equivalent, they have the same value for register r.
