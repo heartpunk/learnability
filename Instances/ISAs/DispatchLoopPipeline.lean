@@ -123,6 +123,104 @@ def constructLTS (funcAddr : UInt64)
     transitions := transitions.push ⟨src, key, tgt, some b.sub⟩
   return ⟨transitions, states, funcAddr⟩
 
+/-! ## LTS Serialization -/
+
+mutual
+/-- Render a SymExpr as a compact s-expression string (human-readable, not SMT-LIB). -/
+private def renderExpr : SymExpr Amd64Reg → String
+  | .const v => hexAddr v
+  | .reg r => s!"{r}"
+  | .add64 a b => s!"(+ {renderExpr a} {renderExpr b})"
+  | .sub64 a b => s!"(- {renderExpr a} {renderExpr b})"
+  | .and64 a b => s!"(& {renderExpr a} {renderExpr b})"
+  | .or64 a b => s!"(| {renderExpr a} {renderExpr b})"
+  | .xor64 a b => s!"(^ {renderExpr a} {renderExpr b})"
+  | .shl64 a b => s!"(<< {renderExpr a} {renderExpr b})"
+  | .shr64 a b => s!"(>> {renderExpr a} {renderExpr b})"
+  | .mul64 a b => s!"(* {renderExpr a} {renderExpr b})"
+  | .low32 e => s!"(low32 {renderExpr e})"
+  | .uext32 e => s!"(uext32 {renderExpr e})"
+  | .sext8to32 e => s!"(sext8to32 {renderExpr e})"
+  | .sext32to64 e => s!"(sext32to64 {renderExpr e})"
+  | .not64 e => s!"(~ {renderExpr e})"
+  | .load w m a => s!"(load{w.byteCount * 8} {renderMem m} {renderExpr a})"
+  | .sub32 a b => s!"(sub32 {renderExpr a} {renderExpr b})"
+  | .shl32 a b => s!"(shl32 {renderExpr a} {renderExpr b})"
+  | .and32 a b => s!"(and32 {renderExpr a} {renderExpr b})"
+  | .or32 a b => s!"(or32 {renderExpr a} {renderExpr b})"
+  | .xor32 a b => s!"(xor32 {renderExpr a} {renderExpr b})"
+  | .mul32 a b => s!"(mul32 {renderExpr a} {renderExpr b})"
+  | .not32 e => s!"(not32 {renderExpr e})"
+  | .sar64 a b => s!"(sar64 {renderExpr a} {renderExpr b})"
+  | .sar32 a b => s!"(sar32 {renderExpr a} {renderExpr b})"
+  | .ite c t f => s!"(ite {renderExpr c} {renderExpr t} {renderExpr f})"
+
+private def renderMem : SymMem Amd64Reg → String
+  | .base => "mem"
+  | .store w m a v => s!"(store{w.byteCount * 8} {renderMem m} {renderExpr a} {renderExpr v})"
+end
+
+/-- Render a SymPC as a compact string. -/
+private def renderPC : SymPC Amd64Reg → String
+  | .true => "true"
+  | .eq a b => s!"(= {renderExpr a} {renderExpr b})"
+  | .lt a b => s!"(< {renderExpr a} {renderExpr b})"
+  | .le a b => s!"(<= {renderExpr a} {renderExpr b})"
+  | .and φ ψ => s!"(∧ {renderPC φ} {renderPC ψ})"
+  | .not φ => s!"(¬ {renderPC φ})"
+
+/-- Serialize a GenericExtractedLTS to JSON. -/
+def GenericExtractedLTS.toJson (lts : GenericExtractedLTS)
+    (funcName : String) (funcEntries : Std.HashMap UInt64 String) : Lean.Json :=
+  let transJson := lts.transitions.map fun t =>
+    let labelJson := Lean.Json.arr (t.label.comparisons.map fun (e, v) =>
+      Lean.Json.mkObj [
+        ("expr", .str (renderExpr e)),
+        ("value", .num ⟨v.toNat, 0⟩),
+        ("valueHex", .str (hexAddr v))
+      ])
+    let srcName := funcEntries.getD t.src (hexAddr t.src)
+    let tgtName := funcEntries.getD t.tgt (hexAddr t.tgt)
+    -- Render effects: just the register map (skip mem for size)
+    let effectsJson := match t.effects with
+      | some sub =>
+        let regEffects := VexISA.EnumReg.allRegs.filterMap fun (r : Amd64Reg) =>
+          let e := sub.regs r
+          -- Skip identity mappings (reg r → reg r)
+          match e with
+          | .reg r' => if r == r' then none else some (s!"{r}", Lean.Json.str (renderExpr e))
+          | _ => some (s!"{r}", Lean.Json.str (renderExpr e))
+        Lean.Json.mkObj regEffects
+      | none => .null
+    Lean.Json.mkObj [
+      ("src", .str (hexAddr t.src)),
+      ("srcName", .str srcName),
+      ("label", labelJson),
+      ("tgt", .str (hexAddr t.tgt)),
+      ("tgtName", .str tgtName),
+      ("effects", effectsJson)
+    ]
+  let statesJson := Lean.Json.arr (lts.states.toArray.map fun s =>
+    Lean.Json.mkObj [
+      ("addr", .str (hexAddr s)),
+      ("name", .str (funcEntries.getD s (hexAddr s)))
+    ])
+  Lean.Json.mkObj [
+    ("function", .str funcName),
+    ("init", .str (hexAddr lts.init)),
+    ("stateCount", .num ⟨lts.states.size, 0⟩),
+    ("transitionCount", .num ⟨lts.transitions.size, 0⟩),
+    ("states", statesJson),
+    ("transitions", Lean.Json.arr transJson)
+  ]
+
+/-- Write a GenericExtractedLTS to a JSON file. -/
+def writeLTS (lts : GenericExtractedLTS) (funcName : String)
+    (funcEntries : Std.HashMap UInt64 String) (dir : System.FilePath) : IO Unit := do
+  let json := lts.toJson funcName funcEntries
+  let path := dir / s!"{funcName}.lts.json"
+  IO.FS.writeFile path json.pretty
+
 /-! ## Run stabilization -/
 
 /-- Build funcEntries map from function specs. -/
@@ -374,6 +472,14 @@ def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion :
       dispatchTables := dispatchTables.push dt
       ltsMap := ltsMap.insert func.entryAddr lts
       log s!"  {func.name}: {dt.groups.size} dispatch groups, {dt.dimensions.size} dimensions, {lts.transitions.size} LTS transitions, {lts.states.size} states"
+  -- Persist LTS to disk
+  let ltsDir : System.FilePath := ".lake/lts"
+  IO.FS.createDirAll ltsDir
+  for func in functions do
+    match ltsMap.get? func.entryAddr with
+    | some lts => writeLTS lts func.name funcEntries ltsDir
+    | none => pure ()
+  log s!"  LTS written to {ltsDir}/"
   -- Grammar interpretation layer: identify lexer, classify functions, extract terminals
   log s!"\n=== Grammar Interpretation ==="
   let producers ← findProducers functions summaries log
