@@ -262,8 +262,13 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
                       Bool.or_eq_true] at hnoverlap
           exact (ByteMem_read_write_nonoverlap w sw _ _ _ _ hnoverlap.1 hnoverlap.2.1 hnoverlap.2.2).symm
         · simp only [evalSymExpr, evalSymMem]
-      -- remaining cases: sorry for now, check one at a time
-      all_goals sorry
+      -- reg+const cases: split on the if, false branch is conservative
+      -- catch-all (no if) is rfl
+      · split <;> sorry
+      · split <;> sorry
+      · split <;> sorry
+      · split <;> sorry
+      · rfl
 
 /-! ## Proved: simplifyLoadStoreExpr / simplifyLoadStoreMem soundness
 
