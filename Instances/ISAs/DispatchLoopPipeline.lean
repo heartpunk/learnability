@@ -460,12 +460,32 @@ def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion :
   -- Run WTO fixpoint
   let summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
   let funcEntries := buildFuncEntries functions
+  -- Build address classifier for label simplification (same as wtoFixpoint uses)
+  let addrClassify : Option (AddrClassifier Amd64Reg) :=
+    if regions.size > 0 then
+      some (classifyAddr regions [Amd64Reg.rsp, Amd64Reg.rbp])
+    else none
+  -- Simplify all branch guard PCs for clean LTS labels.
+  -- Subs are already simplified during stabilization; this pass resolves
+  -- nested load-through-store chains in guard PCs (e.g.,
+  -- load8(store64(store64(mem, rbp-X, ..), rbp-Y, ..), ptr+8) → load8(mem, ptr+8)).
+  log s!"\n=== Label Simplification ==="
+  let mut simplifiedSummaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  let mut totalSimplified : Nat := 0
+  let mut totalDropped : Nat := 0
+  for func in functions do
+    let branches := summaries.getD func.entryAddr #[]
+    let simplified := branches.filterMap fun b => simplifyBranchFull b addrClassify
+    simplifiedSummaries := simplifiedSummaries.insert func.entryAddr simplified
+    totalSimplified := totalSimplified + simplified.size
+    totalDropped := totalDropped + (branches.size - simplified.size)
+  log s!"  {totalSimplified} branches simplified, {totalDropped} dropped (unsatisfiable after simplification)"
   -- Extract generic dispatch tables + LTS for each function
   log s!"\n=== Dispatch Table Extraction ==="
   let mut dispatchTables : Array FunctionDispatchTable := #[]
   let mut ltsMap : Std.HashMap UInt64 GenericExtractedLTS := {}
   for func in functions do
-    let branches := summaries.getD func.entryAddr #[]
+    let branches := simplifiedSummaries.getD func.entryAddr #[]
     if branches.size > 0 then
       let dt := extractDispatchTable func.entryAddr func.name branches
       let lts := constructLTS func.entryAddr branches
