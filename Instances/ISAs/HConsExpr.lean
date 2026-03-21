@@ -536,4 +536,124 @@ theorem HMemNode.beq_true_toRaw {Reg : Type} [DecidableEq Reg]
   | .store _ _ _ _, .base => simp [HMemNode.beq] at h
 end
 
+/-! ## Constant Folding on HExpr -/
+
+def foldHAdd64 {Reg : Type} [BEq Reg] (a b : HExpr Reg) : HExpr Reg :=
+  match a.node, b.node with
+  | .const x, .const y => HExpr.const (x + y)
+  | .add64 x (.mk _ (.const c1)), .const c2 =>
+    let c := c1 + c2
+    if c == 0 then x else HExpr.add64 x (HExpr.const c)
+  | .const c1, .add64 x (.mk _ (.const c2)) =>
+    let c := c1 + c2
+    if c == 0 then x else HExpr.add64 x (HExpr.const c)
+  | .sub64 x (.mk _ (.const c1)), .const c2 =>
+    if c2 == c1 then x
+    else if c2 > c1 then HExpr.add64 x (HExpr.const (c2 - c1))
+    else HExpr.sub64 x (HExpr.const (c1 - c2))
+  | .const c1, .sub64 x (.mk _ (.const c2)) =>
+    if c1 == c2 then x
+    else if c1 > c2 then HExpr.add64 x (HExpr.const (c1 - c2))
+    else HExpr.sub64 x (HExpr.const (c2 - c1))
+  | _, .const 0 => a
+  | .const 0, _ => b
+  | .const c, _ => HExpr.add64 b (HExpr.const c)
+  | _, _ => HExpr.add64 a b
+
+def foldHSub64 {Reg : Type} [BEq Reg] (a b : HExpr Reg) : HExpr Reg :=
+  match a.node, b.node with
+  | .const x, .const y => HExpr.const (x - y)
+  | .sub64 x (.mk _ (.const c1)), .const c2 =>
+    let c := c1 + c2
+    if c == 0 then x else HExpr.sub64 x (HExpr.const c)
+  | .add64 x (.mk _ (.const c1)), .const c2 =>
+    if c1 == c2 then x
+    else if c1 > c2 then HExpr.add64 x (HExpr.const (c1 - c2))
+    else HExpr.sub64 x (HExpr.const (c2 - c1))
+  | _, .const 0 => a
+  | _, _ => HExpr.sub64 a b
+
+def foldHAnd64 {Reg : Type} [BEq Reg] (a b : HExpr Reg) : HExpr Reg :=
+  match a.node, b.node with
+  | .const x, .const y => HExpr.const (x &&& y)
+  | _, .const m =>
+    if m == 0xFFFF_FFFF_FFFF_FFFF then a
+    else if m == 0 then HExpr.const 0
+    else HExpr.and64 a (HExpr.const m)
+  | .const m, _ =>
+    if m == 0xFFFF_FFFF_FFFF_FFFF then b
+    else if m == 0 then HExpr.const 0
+    else HExpr.and64 (HExpr.const m) b
+  | _, _ => HExpr.and64 a b
+
+/-! ## Load-After-Store Resolution on HExpr -/
+
+def resolveHLoadFrom {Reg : Type} [BEq Reg]
+    (loadWidth : Width) (mem : HMem Reg) (loadAddr : HExpr Reg) : HExpr Reg :=
+  match mem with
+  | .mk _ .base => HExpr.load loadWidth HMem.base loadAddr
+  | .mk _ (.store storeWidth innerMem storeAddr storeVal) =>
+    if loadWidth == storeWidth && HExpr.beq loadAddr storeAddr then
+      foldHAnd64 storeVal (HExpr.const loadWidth.mask)
+    else
+      match storeAddr.node, loadAddr.node with
+      | .const a, .const b =>
+        if a.toNat + storeWidth.byteCount ≤ UInt64.size ∧
+           b.toNat + loadWidth.byteCount ≤ UInt64.size ∧
+           (a.toNat + storeWidth.byteCount ≤ b.toNat ∨
+            b.toNat + loadWidth.byteCount ≤ a.toNat) then
+          resolveHLoadFrom loadWidth innerMem loadAddr
+        else
+          HExpr.load loadWidth mem loadAddr
+      | _, _ => HExpr.load loadWidth mem loadAddr
+
+/-! ## Simplification on HExpr -/
+
+mutual
+def simplifyHExpr {Reg : Type} [BEq Reg] [Hashable Reg] : HExpr Reg → HExpr Reg
+  | .mk _ (.const v) => HExpr.const v
+  | .mk _ (.reg r) => HExpr.reg r
+  | .mk _ (.low32 x) => HExpr.low32 (simplifyHExpr x)
+  | .mk _ (.uext32 x) => HExpr.uext32 (simplifyHExpr x)
+  | .mk _ (.sext8to32 x) => HExpr.sext8to32 (simplifyHExpr x)
+  | .mk _ (.sext32to64 x) => HExpr.sext32to64 (simplifyHExpr x)
+  | .mk _ (.not64 x) => HExpr.not64 (simplifyHExpr x)
+  | .mk _ (.not32 x) => HExpr.not32 (simplifyHExpr x)
+  | .mk _ (.ite c t f) => HExpr.ite (simplifyHExpr c) (simplifyHExpr t) (simplifyHExpr f)
+  | .mk _ (.sub32 a b) => HExpr.sub32 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.shl32 a b) => HExpr.shl32 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.and32 a b) => HExpr.and32 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.or32 a b) => HExpr.or32 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.xor32 a b) => HExpr.xor32 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.add64 a b) => foldHAdd64 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.sub64 a b) => foldHSub64 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.xor64 a b) => HExpr.xor64 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.and64 a b) => foldHAnd64 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.or64 a b) => HExpr.or64 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.shl64 a b) => HExpr.shl64 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.shr64 a b) => HExpr.shr64 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.mul64 a b) => HExpr.mul64 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.mul32 a b) => HExpr.mul32 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.sar64 a b) => HExpr.sar64 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.sar32 a b) => HExpr.sar32 (simplifyHExpr a) (simplifyHExpr b)
+  | .mk _ (.load w mem addr) =>
+    let addr' := simplifyHExpr addr
+    let mem' := simplifyHMem mem
+    resolveHLoadFrom w mem' addr'
+
+def simplifyHMem {Reg : Type} [BEq Reg] [Hashable Reg] : HMem Reg → HMem Reg
+  | .mk _ .base => HMem.base
+  | .mk _ (.store w mem addr val) =>
+    let mem' := simplifyHMem mem
+    let addr' := simplifyHExpr addr
+    let val' := simplifyHExpr val
+    match mem'.node with
+    | .store w' innerMem storeAddr' _ =>
+      if w == w' && HExpr.beq addr' storeAddr' then
+        HMem.store w innerMem addr' val'
+      else
+        HMem.store w mem' addr' val'
+    | _ => HMem.store w mem' addr' val'
+end
+
 end VexISA
