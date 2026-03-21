@@ -163,4 +163,64 @@ def store {Reg : Type} (w : Width) (m : HMem Reg) (addr val : HExpr Reg) : HMem 
 
 end HMem
 
+/-! ## Hashable and BEq Instances
+
+Hashable returns cached hash — O(1).
+BEq uses hash fast-path, falls back to structural equality on the node. -/
+
+instance {Reg : Type} : Hashable (HExpr Reg) where
+  hash e := e.cached_hash
+
+instance {Reg : Type} : Hashable (HMem Reg) where
+  hash m := m.cached_hash
+
+mutual
+def HExprNode.beq {Reg : Type} [BEq Reg] : HExprNode Reg → HExprNode Reg → Bool
+  | .const a, .const b => a == b
+  | .reg a, .reg b => a == b
+  | .low32 a, .low32 b => HExpr.beq a b
+  | .uext32 a, .uext32 b => HExpr.beq a b
+  | .sext8to32 a, .sext8to32 b => HExpr.beq a b
+  | .sext32to64 a, .sext32to64 b => HExpr.beq a b
+  | .sub32 a1 a2, .sub32 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .shl32 a1 a2, .shl32 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .and32 a1 a2, .and32 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .or32 a1 a2, .or32 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .xor32 a1 a2, .xor32 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .add64 a1 a2, .add64 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .sub64 a1 a2, .sub64 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .xor64 a1 a2, .xor64 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .and64 a1 a2, .and64 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .or64 a1 a2, .or64 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .shl64 a1 a2, .shl64 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .shr64 a1 a2, .shr64 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .mul64 a1 a2, .mul64 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .mul32 a1 a2, .mul32 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .not64 a, .not64 b => HExpr.beq a b
+  | .not32 a, .not32 b => HExpr.beq a b
+  | .sar64 a1 a2, .sar64 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .sar32 a1 a2, .sar32 b1 b2 => HExpr.beq a1 b1 && HExpr.beq a2 b2
+  | .ite a1 a2 a3, .ite b1 b2 b3 => HExpr.beq a1 b1 && HExpr.beq a2 b2 && HExpr.beq a3 b3
+  | .load w1 m1 a1, .load w2 m2 a2 => w1 == w2 && HMem.beq m1 m2 && HExpr.beq a1 a2
+  | _, _ => false
+
+def HMemNode.beq {Reg : Type} [BEq Reg] : HMemNode Reg → HMemNode Reg → Bool
+  | .base, .base => true
+  | .store w1 m1 a1 v1, .store w2 m2 a2 v2 =>
+    w1 == w2 && HMem.beq m1 m2 && HExpr.beq a1 a2 && HExpr.beq v1 v2
+  | _, _ => false
+
+def HExpr.beq {Reg : Type} [BEq Reg] : HExpr Reg → HExpr Reg → Bool
+  | .mk h1 n1, .mk h2 n2 => h1 == h2 && HExprNode.beq n1 n2
+
+def HMem.beq {Reg : Type} [BEq Reg] : HMem Reg → HMem Reg → Bool
+  | .mk h1 n1, .mk h2 n2 => h1 == h2 && HMemNode.beq n1 n2
+end
+
+instance {Reg : Type} [BEq Reg] : BEq (HExpr Reg) where
+  beq := HExpr.beq
+
+instance {Reg : Type} [BEq Reg] : BEq (HMem Reg) where
+  beq := HMem.beq
+
 end VexISA
