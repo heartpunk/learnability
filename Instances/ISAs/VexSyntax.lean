@@ -40,6 +40,10 @@ end Width
 def mask32 (value : UInt64) : UInt64 :=
   value &&& 0xFFFF_FFFF
 
+@[simp] theorem mask32_idempotent (v : UInt64) : mask32 (mask32 v) = mask32 v := by
+  show v &&& 0xFFFF_FFFF &&& 0xFFFF_FFFF = v &&& 0xFFFF_FFFF
+  rw [UInt64.and_assoc, UInt64.and_self]
+
 /--
 Interpret the low 8 bits of `value` as a signed byte, sign-extend that byte to 32 bits, then
 store the resulting 32-bit bit-pattern in `UInt64` by clearing bits 63:32.
