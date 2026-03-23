@@ -482,9 +482,8 @@ theorem HExprNode.beq_true_toRaw {Reg : Type} [DecidableEq Reg]
     (n1 n2 : HExprNode Reg) (h : HExprNode.beq n1 n2 = true) :
     HExprNode.toRaw n1 = HExprNode.toRaw n2 := by
   cases n1 <;> cases n2
-  -- Pass 1: close cross-constructor cases via kernel reduction (beq = false)
-  all_goals (try contradiction)
-  -- Pass 2: simplify hypothesis and goal for same-constructor cases
+  -- Pass 1: simplify hypothesis and goal for same-constructor cases
+  -- (cross-constructor cases are closed by simp reducing beq to false)
   all_goals (simp [HExprNode.beq, Bool.and_eq_true] at h)
   all_goals (simp only [HExprNode.toRaw])
   -- Pass 3: close leaf cases (const, reg) where simp substituted equality

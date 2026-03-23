@@ -929,13 +929,13 @@ theorem antiUnifyExpr_inv {Reg : Type} [DecidableEq Reg]
       · -- w1 == w2: case split on antiUnifyMem result
         cases h_mem : antiUnifyMem st m1 m2 with
         | none =>
-          simp [h_mem]
+          simp
           exact ⟨fun h => freshExprHole_aligned st _ _ h,
                  freshExprHole_extends st _ _,
                  fun h_al => freshExprHole_holesBelow st _ _ h_al⟩
         | some val =>
           obtain ⟨tm, stm⟩ := val
-          simp [h_mem]
+          simp
           have ihm := antiUnifyMem_inv st m1 m2 tm stm h_mem
           have iha := antiUnifyExpr_inv stm a1 a2
           exact ⟨fun h => iha.aligned (ihm.aligned h),
@@ -991,7 +991,7 @@ theorem antiUnifyMem_inv {Reg : Type} [DecidableEq Reg]
       · simp [hw] at h_some
   termination_by (sizeOf l, sizeOf r)
   decreasing_by
-    all_goals (simp_wf; subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
+    all_goals (subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
 end
 
 /-- Compound invariant for antiUnifyPC: alignment, extension, holesBelow. -/
@@ -1095,10 +1095,10 @@ theorem antiUnifyExpr_left {Reg : Type} [DecidableEq Reg]
     · rename_i w1 m1 a1 w2 m2 a2
       split
       · cases h_mem : antiUnifyMem st m1 m2 with
-        | none => simp [h_mem]; exact freshExprHole_left st _ _ h_al
+        | none => simp; exact freshExprHole_left st _ _ h_al
         | some val =>
           obtain ⟨tm, stm⟩ := val
-          simp [h_mem, instantiateExpr]
+          simp [instantiateExpr]
           have ihm := antiUnifyMem_inv st m1 m2 tm stm h_mem
           constructor
           · rw [instantiateMem_val_agree _ (ihm.holesBelow h_al)
@@ -1147,7 +1147,7 @@ theorem antiUnifyMem_left {Reg : Type} [DecidableEq Reg]
               (antiUnifyExpr_aligned sub_st a1 a2 (ihm.aligned h_al))
       · simp [hw] at h_some
   termination_by (sizeOf l, sizeOf r)
-  decreasing_by all_goals (simp_wf; subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
+  decreasing_by all_goals (subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
 end
 
 mutual
@@ -1177,10 +1177,10 @@ theorem antiUnifyExpr_right {Reg : Type} [DecidableEq Reg]
       · -- w1 == w2 branch: eliminate width equality first
         rename_i h_weq; have hw : w1 = w2 := eq_of_beq h_weq; subst hw
         cases h_mem : antiUnifyMem st m1 m2 with
-        | none => simp [h_mem]; exact freshExprHole_right st _ _ h_al
+        | none => simp; exact freshExprHole_right st _ _ h_al
         | some val =>
           obtain ⟨tm, stm⟩ := val
-          simp [h_mem, instantiateExpr]
+          simp [instantiateExpr]
           have ihm := antiUnifyMem_inv st m1 m2 tm stm h_mem
           constructor
           · rw [instantiateMem_val_agree _ (ihm.holesBelow h_al)
@@ -1210,7 +1210,7 @@ theorem antiUnifyMem_right {Reg : Type} [DecidableEq Reg]
       by_cases hw : (w1 == w2)
       · -- Eliminate width equality first
         have hww : w1 = w2 := eq_of_beq hw; subst hww
-        simp [hw] at h_some
+        simp at h_some
         match h_sub : antiUnifyMem st m1 m2 with
         | none => simp [h_sub] at h_some
         | some (sub_tm, sub_st) =>
@@ -1232,7 +1232,7 @@ theorem antiUnifyMem_right {Reg : Type} [DecidableEq Reg]
                 (antiUnifyExpr_aligned sub_st a1 a2 (ihm.aligned h_al))
       · simp [hw] at h_some
   termination_by (sizeOf l, sizeOf r)
-  decreasing_by all_goals (simp_wf; subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
+  decreasing_by all_goals (subst_vars; simp [VexISA.SymMem.store.sizeOf_spec]; omega)
 end
 
 /-- Two SymPC terms have matching top-level constructors, recursively.
@@ -1287,9 +1287,6 @@ theorem antiUnifyPC_left {Reg : Type} [DecidableEq Reg]
     -- catch-all: MatchingPC is False for mismatched constructors
     · exfalso
       cases h_l : l <;> cases h_r : r <;> simp [MatchingPC] at h_match
-      -- Remaining: matching-constructor cases that the inner split already handled.
-      -- The split hypothesis contradicts these existing.
-      all_goals (revert h_l h_r; simp (config := { decide := true }))
   termination_by (sizeOf l, sizeOf r)
 
 /-- antiUnifyPC produces a valid right generalization (under MatchingPC). -/
@@ -1334,9 +1331,6 @@ theorem antiUnifyPC_right {Reg : Type} [DecidableEq Reg]
     -- catch-all: MatchingPC is False for mismatched constructors
     · exfalso
       cases h_l : l <;> cases h_r : r <;> simp [MatchingPC] at h_match
-      -- Remaining: matching-constructor cases that the inner split already handled.
-      -- The split hypothesis contradicts these existing.
-      all_goals (revert h_l h_r; simp (config := { decide := true }))
   termination_by (sizeOf l, sizeOf r)
 
 /-- TOP-LEVEL THEOREM: antiUnify produces a valid left generalization.
