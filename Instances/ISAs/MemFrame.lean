@@ -153,15 +153,45 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
     replaceMainGoal [newGoal]
     return true
 
+/-- Reduce closed (no free variables) UInt64 subexpressions to literals.
+    Walks the expression tree, finds UInt64-typed subexpressions with no fvars,
+    and replaces them with their kernel-evaluated form. -/
+private partial def reduceClosedUInt64 (e : Expr) : MetaM Expr := do
+  let ec := e.consumeMData
+  -- If closed, check if it's UInt64-typed and reducible
+  if !ec.hasFVar && !ec.hasMVar then
+    -- Only try reduction on applications (not already-reduced literals/consts)
+    if ec.isApp then
+      let ty ← try inferType ec catch _ => return e
+      if ty.isConstOf ``UInt64 then
+        let r ← withTransparency .all <| whnf ec
+        if r != ec then return r
+  -- Recurse into applications
+  match ec with
+  | .app f x =>
+    let f' ← reduceClosedUInt64 f
+    let x' ← reduceClosedUInt64 x
+    if f' == f && x' == x then return e
+    return mkApp f' x'
+  | _ => return e
+
 /-- Canonicalize UInt64 address arithmetic in the goal.
-    Folds chained add/sub into single offsets via associativity, then evaluates constants.
-    The constant subexpression is then evaluated by `native_decide`. -/
+    Step 1: Right-associate chained add/sub so constants group together.
+    Step 2: Reduce closed UInt64 subexpressions via kernel evaluation.
+    Result: `rbp + 8 + 8 - 72` becomes `rbp + 18446744073709551560`. -/
 private def canonicalizeAddresses : TacticM Unit := do
+  -- Step 1: Right-associate chained add/sub
   let _ ← tryTactic do
     evalTactic (← `(tactic|
       simp (config := { failIfUnchanged := false }) only [
         UInt64.add_assoc, UInt64.add_sub, UInt64.sub_add] at *))
-  return ()
+  -- Step 2: Evaluate closed UInt64 constants via MetaM reduction
+  let goal ← getMainGoal
+  let goalType ← goal.getType
+  let newType ← goal.withContext <| reduceClosedUInt64 goalType
+  if newType != goalType then
+    let newGoal ← goal.replaceTargetDefEq newType
+    replaceMainGoal [newGoal]
 
 /-- The `mem_frame` tactic. Peels non-overlapping writes from reads,
     processing simpler addresses first so inner reads normalize before

@@ -42,6 +42,13 @@ def mask32 (value : UInt64) : UInt64 :=
 /-! ### UInt64 arithmetic lemmas for frame reasoning -/
 
 @[simp] theorem UInt64.size_eq : UInt64.size = 18446744073709551616 := by native_decide
+theorem Nat.two_pow_64 : (2 : Nat) ^ 64 = 18446744073709551616 := by native_decide
+
+-- toNat of UInt64.ofNat using UInt64.size (not 2^64, which omega can't handle)
+@[simp] theorem UInt64.toNat_ofNat' (n : Nat) :
+    (UInt64.ofNat n).toNat = n % UInt64.size := by
+  have : UInt64.size = 2 ^ 64 := by native_decide
+  simp [UInt64.ofNat, UInt64.toNat, this]
 
 -- UInt64 arithmetic canonicalization: fold chained +/- into single offset.
 -- `(a + c1) + c2 = a + (c1 + c2)` and `(a + c1) - c2 = a + (c1 - c2)` etc.
