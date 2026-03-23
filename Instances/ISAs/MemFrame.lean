@@ -1,6 +1,14 @@
 import Instances.ISAs.VexSyntax
 import Lean
 
+/-!
+# mem_frame tactic
+
+Automates ByteMem read-after-write frame reasoning by walking the goal
+expression tree and peeling non-overlapping writes from reads.
+Uses ByteMem_read_write_ne with pointwise address distinctness.
+-/
+
 open Lean Meta Elab Tactic
 open VexISA
 
@@ -29,7 +37,6 @@ private partial def rewriteFirst (e : Expr) (lw sw M a v b proof : Expr) :
     MetaM (Expr × Option Expr) := do
   let ec := e.consumeMData
   if let some (lw', _, _, _, _, b') := matchReadOfWrite? ec then
-    -- Check if this is the SAME match (by comparing lw, b pointers)
     if lw' == lw && b' == b then
       return (← mkAppM ``ByteMem.read #[lw, M, b], some proof)
   match ec with
@@ -52,57 +59,29 @@ elab "mem_frame" : tactic => do
     fuel := fuel - 1
     let goal ← getMainGoal
     let goalType ← goal.getType
-    -- Find first read-of-write in the goal
     let some (lw, sw, M, a, v, b) := findReadOfWrite goalType
-      | break  -- no more patterns
-    -- Construct the proof term directly: ByteMem_read_write_nonoverlap lw sw M a v b h_a h_b h
-    -- Create typed mvars for the 3 hypothesis args
-    let uint64SizeExpr := mkConst ``UInt64.size
-    let natExpr := mkConst ``Nat
-    let propSort := mkSort .zero
-    -- h_a type: a.toNat + sw.byteCount ≤ UInt64.size
-    let h_a_type ← goal.withContext <| do
-      let aToNat ← mkAppM ``UInt64.toNat #[a]
-      let swBC ← mkAppM ``Width.byteCount #[sw]
-      let lhs ← mkAppM ``HAdd.hAdd #[aToNat, swBC]
-      mkAppM ``LE.le #[lhs, uint64SizeExpr]
-    -- h_b type: b.toNat + lw.byteCount ≤ UInt64.size
-    let h_b_type ← goal.withContext <| do
-      let bToNat ← mkAppM ``UInt64.toNat #[b]
-      let lwBC ← mkAppM ``Width.byteCount #[lw]
-      let lhs ← mkAppM ``HAdd.hAdd #[bToNat, lwBC]
-      mkAppM ``LE.le #[lhs, uint64SizeExpr]
-    -- h type: a.toNat + sw.byteCount ≤ b.toNat ∨ b.toNat + lw.byteCount ≤ a.toNat
-    let h_type ← goal.withContext <| do
-      let aToNat ← mkAppM ``UInt64.toNat #[a]
-      let bToNat ← mkAppM ``UInt64.toNat #[b]
-      let swBC ← mkAppM ``Width.byteCount #[sw]
-      let lwBC ← mkAppM ``Width.byteCount #[lw]
-      let lhs1 ← mkAppM ``HAdd.hAdd #[aToNat, swBC]
-      let lhs2 ← mkAppM ``HAdd.hAdd #[bToNat, lwBC]
-      let left ← mkAppM ``LE.le #[lhs1, bToNat]
-      let right ← mkAppM ``LE.le #[lhs2, aToNat]
-      mkAppM ``Or #[left, right]
-    let m1 ← mkFreshExprMVar (some h_a_type)
-    let m2 ← mkFreshExprMVar (some h_b_type)
-    let m3 ← mkFreshExprMVar (some h_type)
+      | break
+    -- Use ByteMem_read_write_ne: needs one mvar for the pointwise ≠ condition
     let proof ← try
-      goal.withContext <| mkAppM ``VexISA.ByteMem_read_write_nonoverlap #[lw, sw, M, a, v, b, m1, m2, m3]
+      goal.withContext <| mkAppOptM ``VexISA.ByteMem_read_write_ne
+        #[some lw, some sw, some M, some a, some v, some b, none]
     catch e =>
-      throwError "mem_frame: mkAppM failed: {e.toMessageData}"
-    -- Find and discharge the 3 mvar side conditions
+      throwError "mem_frame: mkAppOptM failed: {e.toMessageData}"
+    -- Find and discharge the hp mvar
     let mvars ← getMVars proof
     for mvar in mvars do
       if ← mvar.isAssigned then continue
       try
         setGoals [mvar]
-        -- Try multiple strategies to discharge
-        evalTactic (← `(tactic| first
-          | (simp only [Width.byteCount, UInt64.size]; omega)
-          | (simp_all only [Width.byteCount, UInt64.size, UInt64.toNat_add,
-              UInt64.toBitVec_toNat, _root_.UInt64.toNat_sub_of_le]; omega)
-          | (simp only [Width.byteCount]; bv_omega)
-          | assumption))
+        -- The hp condition is: ∀ i j, i < sw.byteCount → j < lw.byteCount → a + ofNat i ≠ b + ofNat j
+        -- Discharge by intro + native_decide (for concrete) or simp_all + omega (for symbolic)
+        evalTactic (← `(tactic| (
+          intro i j hi hj
+          simp only [Width.byteCount] at hi hj
+          first
+            | native_decide
+            | (simp_all; omega)
+            | omega)))
       catch _ =>
         let mvType ← mvar.getType
         throwError "mem_frame: could not discharge side condition:\n  {mvType}"

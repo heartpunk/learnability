@@ -752,6 +752,25 @@ private theorem uint64_add_ofNat_ne (a b : UInt64) (n m i j : Nat)
     rw [this, Nat.mod_eq_of_lt h_bj_lt]
   exact fun heq => h_ne (by rw [← h_lhs, ← h_rhs]; exact congrArg UInt64.toNat heq)
 
+/-- Read-write non-overlap with pointwise address distinctness precondition.
+    This avoids .toNat range checks — each byte-pair inequality is decidable on UInt64 directly. -/
+theorem ByteMem_read_write_ne (lw sw : Width) (M : ByteMem) (a v b : UInt64)
+    (hp : ∀ i j, i < sw.byteCount → j < lw.byteCount → a + UInt64.ofNat i ≠ b + UInt64.ofNat j) :
+    ByteMem.read lw (ByteMem.write sw M a v) b = ByteMem.read lw M b := by
+  cases lw <;> cases sw <;>
+    simp only [ByteMem.read, ByteMem.write, Width.byteCount,
+               ByteMem.read8, ByteMem.read16le, ByteMem.read32le, ByteMem.read64le,
+               ByteMem.write8, ByteMem.write16le, ByteMem.write32le, ByteMem.write64le] at *
+  all_goals first
+    | exact readLEAux_writeLEAux_nonoverlap M a v _ b _ hp
+    | (congr 1; congr 1
+       exact readByte_writeLEAux_nonoverlap M a v _ b
+        (fun i hi => by simpa using hp i 0 hi (by omega)))
+    | exact readLEAux_writeByte_nonoverlap M a _ b _
+        (fun j hj => by simpa using hp 0 j (by omega) hj)
+    | (congr 1; congr 1
+       exact readByte_writeByte_ne M a b _ (by simpa using hp 0 0 (by omega) (by omega)))
+
 theorem ByteMem_read_write_nonoverlap (lw sw : Width) (M : ByteMem) (a v b : UInt64)
     (h_a : a.toNat + sw.byteCount ≤ UInt64.size)
     (h_b : b.toNat + lw.byteCount ≤ UInt64.size)
