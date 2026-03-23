@@ -37,6 +37,34 @@ private theorem eval_lowerAmd64CalculateConditionZero {Reg : Type} [DecidableEq 
         have hEq13 : (evalSymExpr state ccOp == 0x13) = false := beq_false_of_ne h13
         simp [lowerAmd64CalculateConditionZero, pcOr, evalAmd64CalculateConditionZero, h3, h7, h13, hEq3, hEq7, hEq13, mask32]
 
+private theorem beq_zero_eq_not_bne_zero (a : UInt64) : (a == 0) = !(a != 0) := by
+  show (a == 0) = !!(a == 0)
+  simp [Bool.not_not]
+
+private theorem eval_lowerAmd64CalculateConditionSign {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (state : ConcreteState Reg) (ccOp ccDep1 ccDep2 : SymExpr Reg) :
+    evalSymPC state (lowerAmd64CalculateConditionSign ccOp ccDep1 ccDep2) =
+      evalAmd64CalculateConditionSign
+        (evalSymExpr state ccOp)
+        (evalSymExpr state ccDep1)
+        (evalSymExpr state ccDep2)
+        0 := by
+  by_cases h7 : evalSymExpr state ccOp = 0x7
+  · simp [lowerAmd64CalculateConditionSign, pcOr, evalAmd64CalculateConditionSign, h7, mask32,
+      beq_zero_eq_not_bne_zero]
+  · by_cases h3 : evalSymExpr state ccOp = 0x3
+    · have hEq7 := beq_false_of_ne h7
+      simp [lowerAmd64CalculateConditionSign, pcOr, evalAmd64CalculateConditionSign, h3, mask32,
+        beq_zero_eq_not_bne_zero]
+    · by_cases h13 : evalSymExpr state ccOp = 0x13
+      · have hEq7 := beq_false_of_ne h7; have hEq3 := beq_false_of_ne h3
+        simp [lowerAmd64CalculateConditionSign, pcOr, evalAmd64CalculateConditionSign, h13, mask32,
+          beq_zero_eq_not_bne_zero]
+      · have hEq7 := beq_false_of_ne h7; have hEq3 := beq_false_of_ne h3
+        have hEq13 := beq_false_of_ne h13
+        simp [lowerAmd64CalculateConditionSign, pcOr, evalAmd64CalculateConditionSign,
+          h7, h3, h13, hEq7, hEq3, hEq13, mask32]
+
 /-- Public bridge invariant relating a concrete threaded state to symbolic substitutions and temps. -/
 def BridgeInvariant {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (input : ConcreteState Reg)
@@ -191,11 +219,19 @@ private theorem lowerCond_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
         lowerExpr_sound input (applySymSub sub input) temps sub symTemps rfl hTemps ccDep2
       have hCcNdep :=
         lowerExpr_sound input (applySymSub sub input) temps sub symTemps rfl hTemps ccNdep
-      by_cases hCode : code = 0x4
-      · subst hCode
+      by_cases hCode4 : code = 0x4
+      · subst hCode4
         simp [evalCond, lowerCond, hCcOp, hCcDep1, hCcDep2,
           eval_lowerAmd64CalculateConditionZero, evalAmd64CalculateConditionZero]
-      · simp [evalCond, lowerCond, hCode]
+      · by_cases hCode8 : code = 0x8
+        · subst hCode8
+          simp [evalCond, lowerCond, hCode4, hCcOp, hCcDep1, hCcDep2,
+            eval_lowerAmd64CalculateConditionSign, evalAmd64CalculateConditionSign]
+        · by_cases hCode9 : code = 0x9
+          · subst hCode9
+            simp [evalCond, lowerCond, hCode4, hCode8, hCcOp, hCcDep1, hCcDep2,
+              eval_lowerAmd64CalculateConditionSign, evalAmd64CalculateConditionSign]
+          · simp [evalCond, lowerCond, hCode4, hCode8, hCode9]
 
 private theorem applySymSub_writeMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub : SymSub Reg) (input : ConcreteState Reg) (mem : SymMem Reg) :

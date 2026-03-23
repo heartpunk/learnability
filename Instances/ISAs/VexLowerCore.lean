@@ -22,6 +22,22 @@ def lowerAmd64CalculateConditionZero {Reg : Type}
       (.eq (.low32 ccDep1) (.const 0))
   pcOr addCase (pcOr subCase logicCase)
 
+/-- Lower S (sign) flag: bit 31 of the 32-bit result is set. -/
+def lowerAmd64CalculateConditionSign {Reg : Type}
+    (ccOp ccDep1 ccDep2 : SymExpr Reg) : SymPC Reg :=
+  -- Sign flag = bit 31 of result. We test: (result &&& 0x80000000) != 0
+  -- which is equivalent to: NOT (result &&& 0x80000000 == 0)
+  let subCase : SymPC Reg :=
+    .and (.eq ccOp (.const 0x7))
+      (.not (.eq (.and64 (.uext32 (.sub64 (.low32 ccDep1) (.low32 ccDep2))) (.const 0x80000000)) (.const 0)))
+  let addCase : SymPC Reg :=
+    .and (.eq ccOp (.const 0x3))
+      (.not (.eq (.and64 (.uext32 (.add64 (.low32 ccDep1) (.low32 ccDep2))) (.const 0x80000000)) (.const 0)))
+  let logicCase : SymPC Reg :=
+    .and (.eq ccOp (.const 0x13))
+      (.not (.eq (.and64 (.low32 ccDep1) (.const 0x80000000)) (.const 0)))
+  pcOr subCase (pcOr addCase logicCase)
+
 structure PartialSummary (Reg : Type) where
   sub : SymSub Reg
   pc : SymPC Reg
@@ -112,12 +128,12 @@ def lowerCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .le64 lhs rhs => .le (lowerExpr sub temps lhs) (lowerExpr sub temps rhs)
   | .ne64 lhs rhs => .not (.eq (lowerExpr sub temps lhs) (lowerExpr sub temps rhs))
   | .amd64CalculateCondition code ccOp ccDep1 ccDep2 _ccNdep =>
-      if code = 0x4 then
-        lowerAmd64CalculateConditionZero
-          (lowerExpr sub temps ccOp)
-          (lowerExpr sub temps ccDep1)
-          (lowerExpr sub temps ccDep2)
-      else
-        .not .true
+      let op := lowerExpr sub temps ccOp
+      let d1 := lowerExpr sub temps ccDep1
+      let d2 := lowerExpr sub temps ccDep2
+      if code = 0x4 then lowerAmd64CalculateConditionZero op d1 d2
+      else if code = 0x8 then lowerAmd64CalculateConditionSign op d1 d2
+      else if code = 0x9 then .not (lowerAmd64CalculateConditionSign op d1 d2)
+      else .not .true
 
 end VexISA

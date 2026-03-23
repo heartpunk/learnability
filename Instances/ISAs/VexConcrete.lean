@@ -17,6 +17,18 @@ def evalAmd64CalculateConditionZero
   else
     false
 
+/-- AMD64 S (sign) flag: bit 31 of the result. -/
+def evalAmd64CalculateConditionSign
+    (ccOp ccDep1 ccDep2 _ccNdep : UInt64) : Bool :=
+  if ccOp = 0x7 then       -- SUB32: sign of (dep1 - dep2)
+    mask32 (mask32 ccDep1 - mask32 ccDep2) &&& 0x80000000 != 0
+  else if ccOp = 0x3 then  -- ADD32: sign of (dep1 + dep2)
+    mask32 (mask32 ccDep1 + mask32 ccDep2) &&& 0x80000000 != 0
+  else if ccOp = 0x13 then -- LOGIC32: sign of result
+    mask32 ccDep1 &&& 0x80000000 != 0
+  else
+    false
+
 @[simp] def evalExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) (temps : TempEnv) : Expr Reg → UInt64
   | .const value => value
@@ -55,13 +67,13 @@ def evalAmd64CalculateConditionZero
   | .le64 lhs rhs => decide (evalExpr state temps lhs ≤ evalExpr state temps rhs)
   | .ne64 lhs rhs => !(evalExpr state temps lhs == evalExpr state temps rhs)
   | .amd64CalculateCondition code ccOp ccDep1 ccDep2 ccNdep =>
-      if code = 0x4 then
-        evalAmd64CalculateConditionZero
-          (evalExpr state temps ccOp)
-          (evalExpr state temps ccDep1)
-          (evalExpr state temps ccDep2)
-          (evalExpr state temps ccNdep)
-      else
-        false
+      let op := evalExpr state temps ccOp
+      let d1 := evalExpr state temps ccDep1
+      let d2 := evalExpr state temps ccDep2
+      let nd := evalExpr state temps ccNdep
+      if code = 0x4 then evalAmd64CalculateConditionZero op d1 d2 nd
+      else if code = 0x8 then evalAmd64CalculateConditionSign op d1 d2 nd
+      else if code = 0x9 then !evalAmd64CalculateConditionSign op d1 d2 nd
+      else false
 
 end VexISA
