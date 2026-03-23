@@ -42,6 +42,11 @@ def mask32 (value : UInt64) : UInt64 :=
 
 /-! ### UInt64 arithmetic lemmas for frame reasoning -/
 
+-- Normalize .toBitVec.toNat to .toNat (they're definitionally equal but
+-- simp sometimes produces one vs the other, breaking rw matching).
+@[simp] theorem UInt64.toBitVec_toNat (a : UInt64) :
+    a.toBitVec.toNat = a.toNat := rfl
+
 @[simp] theorem UInt64.toNat_sub_of_le {a b : UInt64} (h : b.toNat ≤ a.toNat) :
     (a - b).toNat = a.toNat - b.toNat := by
   exact _root_.UInt64.toNat_sub_of_le a b h
