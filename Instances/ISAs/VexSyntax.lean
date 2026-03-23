@@ -253,7 +253,7 @@ private theorem ByteMem.insertSorted_insertSorted_comm
     · have h2 : ¬(b.toNat < a.toNat) := by omega
       have h3 : ¬(b = a) := Ne.symm hab
       have h4 : ¬(a = b) := hab
-      simp [h1, h2, h3, h4, insertSorted]
+      simp [h1, h2, h3]
     · have h2 : b.toNat < a.toNat := by omega
       have h3 : ¬(a.toNat < b.toNat) := by omega
       have h4 : ¬(b = a) := Ne.symm hab
