@@ -107,7 +107,7 @@ private theorem eval_lowerAmd64CalculateConditionP {Reg : Type} [DecidableEq Reg
       · simp [lowerAmd64CalculateConditionP, pcOr, evalAmd64CalculateConditionP, evalSymPC,
           evalSymExpr, h13, mask32, eval_symParity8]
       · simp [lowerAmd64CalculateConditionP, pcOr, evalAmd64CalculateConditionP, evalSymPC,
-          evalSymExpr, h7, h3, h13, beq_false_of_ne h7, beq_false_of_ne h3, beq_false_of_ne h13, mask32]
+          evalSymExpr, h7, h3, h13, beq_false_of_ne h7, beq_false_of_ne h3, beq_false_of_ne h13]
 
 private theorem eval_lowerAmd64CalculateConditionL {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) (ccOp ccDep1 ccDep2 : SymExpr Reg) :
