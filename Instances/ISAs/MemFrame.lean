@@ -10,6 +10,9 @@ Uses ByteMem_read_write_ne with pointwise address distinctness.
 
 Priority-ordered peeling: addresses without memory loads are processed first,
 so inner reads normalize before outer reads that depend on them.
+Skips patterns whose side conditions can't be discharged, so the tactic
+peels everything it can and stops gracefully.
+
 This is the memo table step toward e-graph equality saturation.
 -/
 
@@ -55,15 +58,6 @@ private partial def collectReadOfWrite (e : Expr) :
     | _ => #[]
   here ++ children
 
-/-- Find the read-of-write with the simplest address (priority-ordered peeling).
-    Returns the pattern whose read address has fewest nested memory loads. -/
-private def findSimplestReadOfWrite (e : Expr) :
-    Option (Expr × Expr × Expr × Expr × Expr × Expr) :=
-  let all := collectReadOfWrite e
-  let scored := all.map fun m => (scoreReadAddr m.2.2.2.2.2, m)
-  let sorted := scored.qsort fun a b => a.1 < b.1
-  sorted[0]?.map (·.2)
-
 /-- Walk expression tree, rewriting first matching read-of-write with a given proof.
     Matches on (lw, a, b) to identify the exact pattern. -/
 private partial def rewriteFirst (e : Expr) (lw sw M a v b proof : Expr) :
@@ -84,9 +78,51 @@ private partial def rewriteFirst (e : Expr) (lw sw M a v b proof : Expr) :
       | none => return (e, none)
   | _ => return (e, none)
 
+/-- Try to peel one write from one read-of-write pattern. Returns true on success. -/
+private def tryPeelOne (goal : MVarId) (goalType : Expr)
+    (lw sw M a v b : Expr) : TacticM Bool := do
+  let hpType ← goal.withContext <| do
+    let swBC ← mkAppM ``VexISA.Width.byteCount #[sw]
+    let lwBC ← mkAppM ``VexISA.Width.byteCount #[lw]
+    withLocalDeclD `i (mkConst ``Nat) fun i =>
+    withLocalDeclD `j (mkConst ``Nat) fun j => do
+      let hi ← mkAppM ``LT.lt #[i, swBC]
+      let hj ← mkAppM ``LT.lt #[j, lwBC]
+      let oi ← mkAppM ``UInt64.ofNat #[i]
+      let oj ← mkAppM ``UInt64.ofNat #[j]
+      let ai ← mkAppM ``HAdd.hAdd #[a, oi]
+      let bj ← mkAppM ``HAdd.hAdd #[b, oj]
+      let neq ← mkAppM ``Ne #[ai, bj]
+      let body ← mkArrow hj neq
+      let body ← mkArrow hi body
+      let body ← mkForallFVars #[j] body
+      mkForallFVars #[i] body
+  let hp ← mkFreshExprMVar (some hpType)
+  let proof ← goal.withContext <|
+    mkAppM ``VexISA.ByteMem_read_write_ne #[lw, sw, M, a, v, b, hp]
+  -- Discharge hp
+  let mvars ← getMVars proof
+  for mvar in mvars do
+    if ← mvar.isAssigned then continue
+    setGoals [mvar]
+    evalTactic (← `(tactic| (
+      intro i j hi hj
+      simp only [Width.byteCount] at hi hj
+      (intro heq; have heq_nat := congrArg UInt64.toNat heq
+       simp only [UInt64.toNat_add, UInt64.size, UInt64.toBitVec_toNat] at *
+       omega))))
+  -- Rewrite the goal
+  let (newType, eqProof?) ← goal.withContext (rewriteFirst goalType lw sw M a v b proof)
+  match eqProof? with
+  | none => return false
+  | some eqProof =>
+    let newGoal ← goal.replaceTargetEq newType eqProof
+    replaceMainGoal [newGoal]
+    return true
+
 /-- The `mem_frame` tactic. Peels non-overlapping writes from reads,
     processing simpler addresses first so inner reads normalize before
-    outer reads that depend on them. -/
+    outer reads that depend on them. Skips patterns it can't discharge. -/
 elab "mem_frame" : tactic => do
   let mut fuel := 50
   let mut progress := false
@@ -94,52 +130,30 @@ elab "mem_frame" : tactic => do
     fuel := fuel - 1
     let goal ← getMainGoal
     let goalType ← goal.getType
-    let some (lw, sw, M, a, v, b) := findSimplestReadOfWrite goalType
-      | break
-    -- Build hp type: ∀ i j, i < sw.byteCount → j < lw.byteCount → a + ofNat i ≠ b + ofNat j
-    let hpType ← goal.withContext <| do
-      let swBC ← mkAppM ``VexISA.Width.byteCount #[sw]
-      let lwBC ← mkAppM ``VexISA.Width.byteCount #[lw]
-      withLocalDeclD `i (mkConst ``Nat) fun i =>
-      withLocalDeclD `j (mkConst ``Nat) fun j => do
-        let hi ← mkAppM ``LT.lt #[i, swBC]
-        let hj ← mkAppM ``LT.lt #[j, lwBC]
-        let oi ← mkAppM ``UInt64.ofNat #[i]
-        let oj ← mkAppM ``UInt64.ofNat #[j]
-        let ai ← mkAppM ``HAdd.hAdd #[a, oi]
-        let bj ← mkAppM ``HAdd.hAdd #[b, oj]
-        let neq ← mkAppM ``Ne #[ai, bj]
-        let body ← mkArrow hj neq
-        let body ← mkArrow hi body
-        let body ← mkForallFVars #[j] body
-        mkForallFVars #[i] body
-    let hp ← mkFreshExprMVar (some hpType)
-    let proof ← try
-      goal.withContext <| mkAppM ``VexISA.ByteMem_read_write_ne #[lw, sw, M, a, v, b, hp]
-    catch e =>
-      throwError "mem_frame: mkAppM failed: {e.toMessageData}"
-    -- Discharge hp
-    let mvars ← getMVars proof
-    for mvar in mvars do
-      if ← mvar.isAssigned then continue
+    let candidates := collectReadOfWrite goalType
+    if candidates.isEmpty then break
+    let scored := candidates.map fun m => (scoreReadAddr m.2.2.2.2.2, m)
+    let sorted := scored.qsort fun a b => a.1 < b.1
+    let mut peeled := false
+    for idx in [:sorted.size] do
+      if peeled then break
+      let item := sorted[idx]!
+      let lw := item.2.1
+      let sw := item.2.2.1
+      let M := item.2.2.2.1
+      let a := item.2.2.2.2.1
+      let v := item.2.2.2.2.2.1
+      let b := item.2.2.2.2.2.2
+      let saved ← saveState
       try
-        setGoals [mvar]
-        evalTactic (← `(tactic| (
-          intro i j hi hj
-          simp only [Width.byteCount] at hi hj
-          (intro heq; have heq_nat := congrArg UInt64.toNat heq
-           simp only [UInt64.toNat_add, UInt64.size, UInt64.toBitVec_toNat] at *
-           omega))))
+        let ok ← tryPeelOne goal goalType lw sw M a v b
+        if ok then
+          peeled := true
+          progress := true
+        else
+          saved.restore
       catch _ =>
-        let mvType ← mvar.getType
-        throwError "mem_frame: could not discharge side condition:\n  {mvType}"
-    -- Rewrite the goal
-    let (newType, eqProof?) ← goal.withContext (rewriteFirst goalType lw sw M a v b proof)
-    match eqProof? with
-    | none => break
-    | some eqProof =>
-      progress := true
-      let newGoal ← goal.replaceTargetEq newType eqProof
-      replaceMainGoal [newGoal]
+        saved.restore
+    if !peeled then break
   unless progress do
     throwError "mem_frame: no ByteMem.read (ByteMem.write ...) patterns could be simplified"
