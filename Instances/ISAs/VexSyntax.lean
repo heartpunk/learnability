@@ -271,7 +271,6 @@ private theorem ByteMem.insertSorted_insertSorted_comm
     -- Close: rfl, IH (congr 1 splits cons equality into head + tail)
     all_goals (try simp only [Prod.eta] at *)
     all_goals (first | rfl | exact congrArg _ ih
-                     | (congr 1 <;> (first | rfl | exact ih))
                      | (split <;> (simp_all (config := { decide := false }) <;> omega))
                      | simp_all
                      | omega)
