@@ -35,6 +35,22 @@ def evalAmd64CalculateConditionB
   if ccOp = 0x7 then decide (mask32 ccDep1 < mask32 ccDep2)
   else false
 
+/-- Parity of the low 8 bits: true if even number of 1-bits. -/
+def parity8 (v : UInt64) : Bool :=
+  let b := v &&& 0xFF
+  let x := b ^^^ (b >>> 4)
+  let x := x ^^^ (x >>> 2)
+  let x := x ^^^ (x >>> 1)
+  (x &&& 1) == 0
+
+/-- AMD64 P (parity): PF=1 (even parity of low byte of result). -/
+def evalAmd64CalculateConditionP
+    (ccOp ccDep1 ccDep2 _ccNdep : UInt64) : Bool :=
+  if ccOp = 0x7 then parity8 (mask32 ccDep1 - mask32 ccDep2)
+  else if ccOp = 0x3 then parity8 (mask32 ccDep1 + mask32 ccDep2)
+  else if ccOp = 0x13 then parity8 (mask32 ccDep1)
+  else false
+
 /-- AMD64 L (less, signed): SF≠OF. For SUB32: signed dep1 < dep2. -/
 def evalAmd64CalculateConditionL
     (ccOp ccDep1 ccDep2 _ccNdep : UInt64) : Bool :=
@@ -96,6 +112,8 @@ def evalAmd64CalculateConditionLE
       else if code = 0x9 then !evalAmd64CalculateConditionSign op d1 d2 nd
       else if code = 0x2 then evalAmd64CalculateConditionB op d1 d2 nd
       else if code = 0x3 then !evalAmd64CalculateConditionB op d1 d2 nd
+      else if code = 0xA then evalAmd64CalculateConditionP op d1 d2 nd
+      else if code = 0xB then !evalAmd64CalculateConditionP op d1 d2 nd
       else if code = 0xC then evalAmd64CalculateConditionL op d1 d2 nd
       else if code = 0xD then !evalAmd64CalculateConditionL op d1 d2 nd
       else if code = 0xE then evalAmd64CalculateConditionLE op d1 d2 nd

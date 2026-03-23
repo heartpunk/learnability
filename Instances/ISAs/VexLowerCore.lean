@@ -46,6 +46,28 @@ def lowerAmd64CalculateConditionLE {Reg : Type}
       (.le (.sext32to64 (.low32 ccDep1)) (.sext32to64 (.low32 ccDep2)))
   subCase  -- only SUB32 for now
 
+/-- Symbolic parity8: XOR fold of low byte, check bit 0. -/
+def symParity8 {Reg : Type} (result : SymExpr Reg) : SymPC Reg :=
+  let byte := SymExpr.and64 result (.const 0xFF)
+  let x1 := SymExpr.xor64 byte (.shr64 byte (.const 4))
+  let x2 := SymExpr.xor64 x1 (.shr64 x1 (.const 2))
+  let x3 := SymExpr.xor64 x2 (.shr64 x2 (.const 1))
+  .eq (.and64 x3 (.const 1)) (.const 0)
+
+/-- Lower P (parity): express parity via XOR fold on the symbolic result. -/
+def lowerAmd64CalculateConditionP {Reg : Type}
+    (ccOp ccDep1 ccDep2 : SymExpr Reg) : SymPC Reg :=
+  let subCase :=
+    .and (.eq ccOp (.const 0x7))
+      (symParity8 (.uext32 (.sub64 (.low32 ccDep1) (.low32 ccDep2))))
+  let addCase :=
+    .and (.eq ccOp (.const 0x3))
+      (symParity8 (.uext32 (.add64 (.low32 ccDep1) (.low32 ccDep2))))
+  let logicCase :=
+    .and (.eq ccOp (.const 0x13))
+      (symParity8 (.low32 ccDep1))
+  pcOr subCase (pcOr addCase logicCase)
+
 /-- Lower L (less, signed): for SUB32, signed dep1 < dep2. -/
 def lowerAmd64CalculateConditionL {Reg : Type}
     (ccOp ccDep1 ccDep2 : SymExpr Reg) : SymPC Reg :=
@@ -156,6 +178,8 @@ def lowerCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       else if code = 0x9 then .not (lowerAmd64CalculateConditionSign op d1 d2)
       else if code = 0x2 then lowerAmd64CalculateConditionB op d1 d2
       else if code = 0x3 then .not (lowerAmd64CalculateConditionB op d1 d2)
+      else if code = 0xA then lowerAmd64CalculateConditionP op d1 d2
+      else if code = 0xB then .not (lowerAmd64CalculateConditionP op d1 d2)
       else if code = 0xC then lowerAmd64CalculateConditionL op d1 d2
       else if code = 0xD then .not (lowerAmd64CalculateConditionL op d1 d2)
       else if code = 0xE then lowerAmd64CalculateConditionLE op d1 d2

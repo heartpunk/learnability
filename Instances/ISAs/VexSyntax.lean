@@ -56,6 +56,12 @@ def mask32 (value : UInt64) : UInt64 :=
   simp [_root_.UInt64.toNat_add]
   omega
 
+@[simp] theorem mask32_sub (a b : UInt64) : mask32 (mask32 a - mask32 b) = mask32 (a - b) := by
+  simp only [mask32]; bv_decide
+
+@[simp] theorem mask32_add (a b : UInt64) : mask32 (mask32 a + mask32 b) = mask32 (a + b) := by
+  simp only [mask32]; bv_decide
+
 @[simp] theorem mask32_idempotent (v : UInt64) : mask32 (mask32 v) = mask32 v := by
   show v &&& 0xFFFF_FFFF &&& 0xFFFF_FFFF = v &&& 0xFFFF_FFFF
   rw [UInt64.and_assoc, UInt64.and_self]
