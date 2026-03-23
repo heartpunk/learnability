@@ -292,6 +292,7 @@ def normalizeSymPC {Reg : Type} : SymPC Reg → SymPC Reg
   | .lt a b => .lt (normalizeSymExpr a) (normalizeSymExpr b)
   | .le a b => .le (normalizeSymExpr a) (normalizeSymExpr b)
   | .and p q => .and (normalizeSymPC p) (normalizeSymPC q)
+  | .not (.not p) => normalizeSymPC p  -- double negation elimination
   | .not p => .not (normalizeSymPC p)
 
 theorem normalizeSymExpr_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
