@@ -19,7 +19,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
     (addrClassify : Option (AddrClassifier Reg) := none)
     (maxBranches : Nat := 10000)
     (diagnostics : Bool := false) :
-    IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)))) := do
+    IO (Option (Nat × Array (Branch (SymSub Reg) (SymPC Reg)) × HSubPool Reg)) := do
   let isa := vexSummaryISA Reg
   let initBranch := Branch.skip isa
   let (rawClosure, ripCount, dataCount) := extractClosure ip_reg bodyArr (dataOnly := true)
@@ -172,7 +172,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
       for (_, bucket) in currentByHash.toArray do
         for b in bucket do
           capResult := capResult.push ⟨b.sub.toRaw, b.pc⟩
-      return some (k, capResult)
+      return some (k, capResult, hSubPool)
     -- Phase 2: PC-signature convergence (syntactic fast-path + SMT semantic).
     -- For each candidate, compute its signature: which closure PCs does it imply?
     -- Fast path: syntactic sig matches an existing rep sig → collapse.
@@ -326,7 +326,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
         for b in bucket do
           summaryArr := summaryArr.push ⟨b.sub.toRaw, b.pc⟩
       log s!"    sub-pool: {hSubPool.pool.size} unique subs, {hSubPool.hits} hits, {hSubPool.misses} misses"
-      unless diagnostics do return some (k, summaryArr)
+      unless diagnostics do return some (k, summaryArr, hSubPool)
       -- h_contains check: every body branch PC's conjuncts are in the closure.
       -- Note: h_contains is about branchingLoopModel (= original body block
       -- summaries), NOT the composed fixpoint (summaryArr). The body branches'
@@ -622,7 +622,7 @@ def computeFunctionStabilization {Reg : Type} [DecidableEq Reg] [Fintype Reg] [H
           log s!"    [atom-closed] *** semClosed_of_liftedAtomsInBasis applies — SemClosed by structural theorem ***"
         else
           log s!"    [atom-closed] FAIL: {atomViolations} atom violations ({atomBasis.size} PCs, {atomTotal} pairs)"
-      return some (k, summaryArr)
+      return some (k, summaryArr, hSubPool)
     frontier := newBranches
   return none
 

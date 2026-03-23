@@ -106,7 +106,7 @@ def stratifiedFixpoint
     (maxBranches : Nat := 10000)
     (diagnostics : Bool := false)
     (maxIter : Nat := 200) :
-    IO (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))) := do
+    IO (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) × Std.HashMap UInt64 (HSubPool Amd64Reg)) := do
   let ip_reg := Amd64Reg.rip
   -- Build address classifier from ELF memory regions.
   -- rsp and rbp are stack registers — addresses relative to them are in the
@@ -131,6 +131,7 @@ def stratifiedFixpoint
       log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches ({t_parsed - t_parse}ms parse, {t_body - t_parsed}ms body)"
   -- Phase 1: Compute leaf function (next_sym) fixpoint — no summaries needed
   let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  let mut pools : Std.HashMap UInt64 (HSubPool Amd64Reg) := {}
   -- Green-style SMT query cache: shared across all function stabilizations
   let smtCache ← IO.mkRef ({} : SMTCache Amd64Reg)
   log s!"\n--- Phase 1: Leaf function (next_sym) ---"
@@ -140,13 +141,14 @@ def stratifiedFixpoint
   -- Don't double-run with computeStabilizationHS — that keeps two copies of deeply-nested
   -- symbolic branches alive simultaneously, causing OOM.
   match ← computeFunctionStabilization ip_reg nextSymBody {} maxIter log smtCache (addrClassify := addrClassify) (maxBranches := maxBranches) (diagnostics := diagnostics) with
-  | some (k, summaryArr) =>
+  | some (k, summaryArr, pool) =>
     let t1 ← IO.monoMsNow
     summaries := summaries.insert functions[0]!.entryAddr summaryArr
+    pools := pools.insert functions[0]!.entryAddr pool
     log s!"  {nextSymName}: converged at K={k}, {summaryArr.size} summary branches, {t1 - t0}ms"
   | none =>
     log s!"  {nextSymName}: DID NOT CONVERGE"
-    return {}
+    return ({}, {})
   -- Phase 2: Iterate NT function summaries to fixpoint
   -- At each outer round, for each NT function:
   --   1. Split body into non-call blocks + call-expanded results (via splitBodyAndExpandCalls)
@@ -174,8 +176,9 @@ def stratifiedFixpoint
       -- Step 2: Run stabilization on non-call body, seeding call results as initial frontier
       let oldSummary := summaries.getD func.entryAddr #[]
       match ← computeFunctionStabilization ip_reg nonCallBody {} (min maxIter 30) log smtCache (initialFrontier := callResults) (addrClassify := addrClassify) (maxBranches := maxBranches) (diagnostics := diagnostics) with
-      | some (k, newSummary) =>
+      | some (k, newSummary, pool) =>
         let t1 ← IO.monoMsNow
+        pools := pools.insert func.entryAddr pool
         if newSummary.size != oldSummary.size then
           outerChanged := true
           summaries := summaries.insert func.entryAddr newSummary
@@ -184,7 +187,7 @@ def stratifiedFixpoint
           log s!"  {fname}: K={k}, {newSummary.size} branches (stable), {t1 - t0}ms"
       | none =>
         log s!"  {fname}: DID NOT CONVERGE"
-        return {}
+        return ({}, {})
   log s!"\n=== Stratified fixpoint complete after {outerRound} outer rounds ==="
   for i in [:functions.size] do
     let func := functions[i]!
@@ -194,7 +197,7 @@ def stratifiedFixpoint
   let cacheContents ← smtCache.get
   log s!"\n=== SMT Cache Summary ==="
   log s!"  cache entries: {cacheContents.size}"
-  return summaries
+  return (summaries, pools)
 
 /-! ## Weak Topological Ordering (Bourdoncle's Algorithm)
 
@@ -363,7 +366,7 @@ def wtoFixpoint
     (maxIter : Nat := 200)
     (maxBranches : Nat := 10000)
     (diagnostics : Bool := false)
-    : IO (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg)))) := do
+    : IO (Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) × Std.HashMap UInt64 (HSubPool Amd64Reg)) := do
   let ip_reg := Amd64Reg.rip
   let addrClassify : Option (AddrClassifier Amd64Reg) :=
     if regions.size > 0 then
@@ -386,6 +389,7 @@ def wtoFixpoint
       log s!"  {func.name} @ 0x{String.ofList (Nat.toDigits 16 func.entryAddr.toNat)}: {pairs.length} blocks, {bodyArr.size} body branches"
   -- Initialize all summaries as empty
   let mut summaries : Std.HashMap UInt64 (Array (Branch (SymSub Amd64Reg) (SymPC Amd64Reg))) := {}
+  let mut pools : Std.HashMap UInt64 (HSubPool Amd64Reg) := {}
   for func in functions do
     summaries := summaries.insert func.entryAddr #[]
   -- Shared SMT cache
@@ -412,10 +416,11 @@ def wtoFixpoint
         match ← computeFunctionStabilization ip_reg nonCallBody {} maxIter log smtCache
             (initialFrontier := callResults) (addrClassify := addrClassify)
             (maxBranches := maxBranches) (diagnostics := diagnostics) with
-        | some (k, summaryArr) =>
+        | some (k, summaryArr, pool) =>
           let t1 ← IO.monoMsNow
           log s!"    {fname}: converged K={k}, {summaryArr.size} branches, {t1 - t0}ms"
           summaries := summaries.insert addr summaryArr
+          pools := pools.insert addr pool
         | none =>
           log s!"    {fname}: DID NOT CONVERGE"
     | .component head body =>
@@ -440,10 +445,11 @@ def wtoFixpoint
           match ← computeFunctionStabilization ip_reg nonCallBody {} maxIter log smtCache
               (initialFrontier := callResults) (addrClassify := addrClassify)
               (maxBranches := maxBranches) (diagnostics := diagnostics) with
-          | some (k, summaryArr) =>
+          | some (k, summaryArr, pool) =>
             let t1 ← IO.monoMsNow
             log s!"    {fname}: converged K={k}, {summaryArr.size} branches, {t1 - t0}ms"
             summaries := summaries.insert head summaryArr
+            pools := pools.insert head pool
           | none =>
             log s!"    {fname}: DID NOT CONVERGE"
             stable := true  -- bail on divergence
@@ -463,10 +469,11 @@ def wtoFixpoint
             match ← computeFunctionStabilization ip_reg nonCallBody {} iterLimit log smtCache
                 (initialFrontier := callResults) (addrClassify := addrClassify)
                 (maxBranches := maxBranches) (diagnostics := diagnostics) with
-            | some (k, summaryArr) =>
+            | some (k, summaryArr, pool) =>
               let t1 ← IO.monoMsNow
               log s!"    {fname}: converged K={k}, {summaryArr.size} branches, {t1 - t0}ms"
               summaries := summaries.insert addr summaryArr
+              pools := pools.insert addr pool
             | none =>
               log s!"    {fname}: DID NOT CONVERGE"
         -- Check if head stabilized
@@ -481,5 +488,5 @@ def wtoFixpoint
   let cacheContents ← smtCache.get
   log s!"\n=== SMT Cache Summary ==="
   log s!"  cache entries: {cacheContents.size}"
-  return summaries
+  return (summaries, pools)
 

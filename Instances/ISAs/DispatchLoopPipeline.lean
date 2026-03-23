@@ -254,7 +254,7 @@ def runPipeline (functions : Array FunctionSpec) (regions : Array MemRegion := #
     (diagnostics : Bool := false)
     (maxIter : Nat := 200) : IO Unit := do
   log "=== Stratified Dispatch Loop Stabilization ==="
-  let summaries ← stratifiedFixpoint functions regions log (maxBranches := maxBranches) (diagnostics := diagnostics) (maxIter := maxIter)
+  let (summaries, _pools) ← stratifiedFixpoint functions regions log (maxBranches := maxBranches) (diagnostics := diagnostics) (maxIter := maxIter)
   let funcEntries := buildFuncEntries functions
   -- Parser detection
   let parserResult ← detectParser functions summaries log
@@ -410,7 +410,7 @@ def runPipelineJSON (functions : Array FunctionSpec) (regions : Array MemRegion 
     (diagnostics : Bool := false)
     (maxIter : Nat := 200) : IO Unit := do
   log "=== Stratified Dispatch Loop Stabilization (JSON mode) ==="
-  let summaries ← stratifiedFixpoint functions regions log (maxBranches := maxBranches) (diagnostics := diagnostics) (maxIter := maxIter)
+  let (summaries, _pools) ← stratifiedFixpoint functions regions log (maxBranches := maxBranches) (diagnostics := diagnostics) (maxIter := maxIter)
   let parserResult ← detectParser functions summaries log
   let ps := match parserResult with
     | .ok ps => some ps
@@ -475,7 +475,7 @@ def runPipelineWTO (functions : Array FunctionSpec) (regions : Array MemRegion :
     | none => hexAddr addr
   log s!"  WTO: {ppWTO wto nameOf}"
   -- Run WTO fixpoint
-  let summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
+  let (summaries, _pools) ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
   let funcEntries := buildFuncEntries functions
   -- Build address classifier for label simplification (same as wtoFixpoint uses)
   let addrClassify : Option (AddrClassifier Amd64Reg) :=
@@ -606,7 +606,7 @@ def runPipelineWTOJSON (functions : Array FunctionSpec) (regions : Array MemRegi
     | none => autoDetectRoot functions callGraph log
   let nodes := functions.map (·.entryAddr)
   let wto := computeWTO nodes callGraph root
-  let _summaries ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
+  let (_summaries, _pools) ← wtoFixpoint functions wto regions log (maxIter := maxIter) (maxBranches := maxBranches) (diagnostics := diagnostics)
   let json := pipelineToJson functions none
   IO.println json.pretty
 
