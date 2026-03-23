@@ -29,6 +29,14 @@ def evalAmd64CalculateConditionSign
   else
     false
 
+/-- AMD64 LE (less or equal, signed): ZF=1 or SF≠OF. For SUB32: signed dep1 ≤ dep2. -/
+def evalAmd64CalculateConditionLE
+    (ccOp ccDep1 ccDep2 _ccNdep : UInt64) : Bool :=
+  if ccOp = 0x7 then       -- SUB32: signed ≤
+    decide (signExtend32to64 (mask32 ccDep1) ≤ signExtend32to64 (mask32 ccDep2))
+  else
+    false
+
 @[simp] def evalExpr {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) (temps : TempEnv) : Expr Reg → UInt64
   | .const value => value
@@ -74,6 +82,8 @@ def evalAmd64CalculateConditionSign
       if code = 0x4 then evalAmd64CalculateConditionZero op d1 d2 nd
       else if code = 0x8 then evalAmd64CalculateConditionSign op d1 d2 nd
       else if code = 0x9 then !evalAmd64CalculateConditionSign op d1 d2 nd
+      else if code = 0xE then evalAmd64CalculateConditionLE op d1 d2 nd
+      else if code = 0xF then !evalAmd64CalculateConditionLE op d1 d2 nd
       else false
 
 end VexISA

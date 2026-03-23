@@ -38,6 +38,14 @@ def lowerAmd64CalculateConditionSign {Reg : Type}
       (.not (.eq (.and64 (.low32 ccDep1) (.const 0x80000000)) (.const 0)))
   pcOr subCase (pcOr addCase logicCase)
 
+/-- Lower LE (less or equal, signed): for SUB32, signed dep1 ≤ dep2. -/
+def lowerAmd64CalculateConditionLE {Reg : Type}
+    (ccOp ccDep1 ccDep2 : SymExpr Reg) : SymPC Reg :=
+  let subCase : SymPC Reg :=
+    .and (.eq ccOp (.const 0x7))
+      (.le (.sext32to64 (.low32 ccDep1)) (.sext32to64 (.low32 ccDep2)))
+  subCase  -- only SUB32 for now
+
 structure PartialSummary (Reg : Type) where
   sub : SymSub Reg
   pc : SymPC Reg
@@ -134,6 +142,8 @@ def lowerCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       if code = 0x4 then lowerAmd64CalculateConditionZero op d1 d2
       else if code = 0x8 then lowerAmd64CalculateConditionSign op d1 d2
       else if code = 0x9 then .not (lowerAmd64CalculateConditionSign op d1 d2)
+      else if code = 0xE then lowerAmd64CalculateConditionLE op d1 d2
+      else if code = 0xF then .not (lowerAmd64CalculateConditionLE op d1 d2)
       else .not .true
 
 end VexISA
