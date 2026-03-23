@@ -787,6 +787,34 @@ private theorem uint64_add_ofNat_ne (a b : UInt64) (n m i j : Nat)
     rw [this, Nat.mod_eq_of_lt h_bj_lt]
   exact fun heq => h_ne (by rw [← h_lhs, ← h_rhs]; exact congrArg UInt64.toNat heq)
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Footprints: byte ranges in the UInt64 address space
+-- ═══════════════════════════════════════════════════════════════════════════
+
+/-- A footprint is a contiguous byte range [addr, addr + size) in memory. -/
+structure Footprint where
+  addr : UInt64
+  size : Nat
+  deriving DecidableEq, Repr
+
+/-- The footprint of a memory read or write at address `a` with width `w`. -/
+def Footprint.ofWidth (a : UInt64) (w : Width) : Footprint :=
+  ⟨a, w.byteCount⟩
+
+/-- Two footprints are disjoint if no byte in one equals any byte in the other. -/
+def Footprint.Disjoint (fp1 fp2 : Footprint) : Prop :=
+  ∀ i j, i < fp1.size → j < fp2.size →
+    fp1.addr + UInt64.ofNat i ≠ fp2.addr + UInt64.ofNat j
+
+/-- Footprint disjointness is decidable (finite enumeration over bounded i, j). -/
+instance Footprint.decidableDisjoint (fp1 fp2 : Footprint) : Decidable (Footprint.Disjoint fp1 fp2) :=
+  -- Check all byte pairs: for each i < fp1.size and j < fp2.size,
+  -- verify fp1.addr + i ≠ fp2.addr + j. UInt64 equality is decidable.
+  if h : ∀ i : Fin fp1.size, ∀ j : Fin fp2.size,
+      fp1.addr + UInt64.ofNat i.val ≠ fp2.addr + UInt64.ofNat j.val
+  then isTrue fun i j hi hj => h ⟨i, hi⟩ ⟨j, hj⟩
+  else isFalse fun hd => h (fun ⟨i, hi⟩ ⟨j, hj⟩ => hd i j hi hj)
+
 /-- Read-write non-overlap with pointwise address distinctness precondition.
     This avoids .toNat range checks — each byte-pair inequality is decidable on UInt64 directly. -/
 theorem ByteMem_read_write_ne (lw sw : Width) (M : ByteMem) (a v b : UInt64)
@@ -827,5 +855,13 @@ theorem ByteMem_read_write_nonoverlap (lw sw : Width) (M : ByteMem) (a v b : UIn
         (fun j hj => by simpa using hp 0 j (by omega) hj)
     | (congr 1; congr 1
        exact readByte_writeByte_ne M a b _ (by simpa using hp 0 0 (by omega) (by omega)))
+
+/-- Frame rule via footprint disjointness: if the write footprint is disjoint
+    from the read footprint, the write doesn't affect the read. -/
+theorem ByteMem_read_write_of_disjoint (lw sw : Width) (M : ByteMem) (a v b : UInt64)
+    (h : Footprint.Disjoint (Footprint.ofWidth a sw) (Footprint.ofWidth b lw)) :
+    ByteMem.read lw (ByteMem.write sw M a v) b = ByteMem.read lw M b :=
+  ByteMem_read_write_ne lw sw M a v b fun i j hi hj =>
+    h i j (by simpa [Footprint.ofWidth] using hi) (by simpa [Footprint.ofWidth] using hj)
 
 end VexISA
