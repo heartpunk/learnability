@@ -40,6 +40,17 @@ end Width
 def mask32 (value : UInt64) : UInt64 :=
   value &&& 0xFFFF_FFFF
 
+/-! ### UInt64 arithmetic lemmas for frame reasoning -/
+
+@[simp] theorem UInt64.toNat_sub_of_le {a b : UInt64} (h : b.toNat ≤ a.toNat) :
+    (a - b).toNat = a.toNat - b.toNat := by
+  exact _root_.UInt64.toNat_sub_of_le a b h
+
+@[simp] theorem UInt64.toNat_add_of_lt {a b : UInt64} (h : a.toNat + b.toNat < UInt64.size) :
+    (a + b).toNat = a.toNat + b.toNat := by
+  simp [_root_.UInt64.toNat_add]
+  omega
+
 @[simp] theorem mask32_idempotent (v : UInt64) : mask32 (mask32 v) = mask32 v := by
   show v &&& 0xFFFF_FFFF &&& 0xFFFF_FFFF = v &&& 0xFFFF_FFFF
   rw [UInt64.and_assoc, UInt64.and_self]
