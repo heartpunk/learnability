@@ -258,7 +258,7 @@ private theorem ByteMem.insertSorted_insertSorted_comm
       have h3 : ¬(a.toNat < b.toNat) := by omega
       have h4 : ¬(b = a) := Ne.symm hab
       have h5 : ¬(a = b) := hab
-      simp [h1, h2, h3, h4, h5, insertSorted]
+      simp [h1, h2, h5]
   | cons hd tl ih =>
     have hne : a.toNat ≠ b.toNat := fun h => hab (by
       exact UInt64.eq_of_toBitVec_eq (BitVec.eq_of_toNat_eq h))
