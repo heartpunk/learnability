@@ -272,8 +272,7 @@ private theorem ByteMem.insertSorted_insertSorted_comm
     all_goals (try simp only [Prod.eta] at *)
     all_goals (first | rfl | exact congrArg _ ih
                      | (split <;> (simp_all (config := { decide := false }) <;> omega))
-                     | simp_all
-                     | omega)
+                     | simp_all)
 
 structure ByteMem where
   fn : UInt64 → UInt8
