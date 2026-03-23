@@ -99,12 +99,9 @@ elab "mem_frame" : tactic => do
         evalTactic (← `(tactic| (
           intro i j hi hj
           simp only [Width.byteCount] at hi hj
-          first
-            | native_decide
-            | omega
-            | (intro heq; have heq_nat := congrArg UInt64.toNat heq
-               repeat rw [UInt64.toNat_add_of_lt (by change _ < 18446744073709551616; omega)] at heq_nat
-               omega))))
+          (intro heq; have heq_nat := congrArg UInt64.toNat heq
+           simp only [UInt64.toNat_add, UInt64.size, UInt64.toBitVec_toNat] at *
+           omega))))
       catch _ =>
         let mvType ← mvar.getType
         throwError "mem_frame: could not discharge side condition:\n  {mvType}"
