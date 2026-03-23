@@ -153,10 +153,22 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
     replaceMainGoal [newGoal]
     return true
 
+/-- Canonicalize UInt64 address arithmetic in the goal.
+    Folds chained add/sub into single offsets via associativity, then evaluates constants.
+    The constant subexpression is then evaluated by `native_decide`. -/
+private def canonicalizeAddresses : TacticM Unit := do
+  let _ ← tryTactic do
+    evalTactic (← `(tactic|
+      simp (config := { failIfUnchanged := false }) only [
+        UInt64.add_assoc, UInt64.add_sub, UInt64.sub_add] at *))
+  return ()
+
 /-- The `mem_frame` tactic. Peels non-overlapping writes from reads,
     processing simpler addresses first so inner reads normalize before
     outer reads that depend on them. Skips patterns it can't discharge. -/
 elab "mem_frame" : tactic => do
+  -- Phase 0: Canonicalize UInt64 address arithmetic
+  canonicalizeAddresses
   let mut fuel := 50
   let mut progress := false
   while fuel > 0 do

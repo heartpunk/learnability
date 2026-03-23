@@ -43,6 +43,22 @@ def mask32 (value : UInt64) : UInt64 :=
 
 @[simp] theorem UInt64.size_eq : UInt64.size = 18446744073709551616 := by native_decide
 
+-- UInt64 arithmetic canonicalization: fold chained +/- into single offset.
+-- `(a + c1) + c2 = a + (c1 + c2)` and `(a + c1) - c2 = a + (c1 - c2)` etc.
+-- These let simp collapse addresses like `rbp + 8 + 8 - 72` to `rbp + (N-56)`.
+theorem UInt64.add_assoc (a b c : UInt64) : a + b + c = a + (b + c) := by
+  simp only [UInt64.add_def, BitVec.add_assoc]
+
+theorem UInt64.sub_add (a b c : UInt64) : a - b + c = a + (c - b) := by
+  have : a.toBitVec - b.toBitVec + c.toBitVec = a.toBitVec + (c.toBitVec - b.toBitVec) := by
+    bv_omega
+  exact congrArg UInt64.ofBitVec this
+
+theorem UInt64.add_sub (a b c : UInt64) : a + b - c = a + (b - c) := by
+  have : a.toBitVec + b.toBitVec - c.toBitVec = a.toBitVec + (b.toBitVec - c.toBitVec) := by
+    bv_omega
+  exact congrArg UInt64.ofBitVec this
+
 -- Normalize .toBitVec.toNat to .toNat (they're definitionally equal but
 -- simp sometimes produces one vs the other, breaking rw matching).
 @[simp] theorem UInt64.toBitVec_toNat (a : UInt64) :
