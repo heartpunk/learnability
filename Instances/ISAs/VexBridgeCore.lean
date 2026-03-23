@@ -65,6 +65,19 @@ private theorem eval_lowerAmd64CalculateConditionSign {Reg : Type} [DecidableEq 
         simp [lowerAmd64CalculateConditionSign, pcOr, evalAmd64CalculateConditionSign,
           h7, h3, h13, hEq7, hEq3, hEq13, mask32]
 
+private theorem eval_lowerAmd64CalculateConditionB {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (state : ConcreteState Reg) (ccOp ccDep1 ccDep2 : SymExpr Reg) :
+    evalSymPC state (lowerAmd64CalculateConditionB ccOp ccDep1 ccDep2) =
+      evalAmd64CalculateConditionB
+        (evalSymExpr state ccOp)
+        (evalSymExpr state ccDep1)
+        (evalSymExpr state ccDep2)
+        0 := by
+  by_cases h7 : evalSymExpr state ccOp = 0x7
+  · simp [lowerAmd64CalculateConditionB, evalAmd64CalculateConditionB, h7, mask32]
+  · have hEq7 := beq_false_of_ne h7
+    simp [lowerAmd64CalculateConditionB, evalAmd64CalculateConditionB, h7, hEq7]
+
 private theorem eval_lowerAmd64CalculateConditionLE {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) (ccOp ccDep1 ccDep2 : SymExpr Reg) :
     evalSymPC state (lowerAmd64CalculateConditionLE ccOp ccDep1 ccDep2) =
@@ -244,15 +257,23 @@ private theorem lowerCond_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
           · subst hCode9
             simp [evalCond, lowerCond, hCode4, hCode8, hCcOp, hCcDep1, hCcDep2,
               eval_lowerAmd64CalculateConditionSign, evalAmd64CalculateConditionSign]
-          · by_cases hCodeE : code = 0xE
-            · subst hCodeE
+          · by_cases hCode2 : code = 0x2
+            · subst hCode2
               simp [evalCond, lowerCond, hCode4, hCode8, hCode9, hCcOp, hCcDep1, hCcDep2,
-                eval_lowerAmd64CalculateConditionLE, evalAmd64CalculateConditionLE]
-            · by_cases hCodeF : code = 0xF
-              · subst hCodeF
-                simp [evalCond, lowerCond, hCode4, hCode8, hCode9, hCodeE, hCcOp, hCcDep1, hCcDep2,
-                  eval_lowerAmd64CalculateConditionLE, evalAmd64CalculateConditionLE]
-              · simp [evalCond, lowerCond, hCode4, hCode8, hCode9, hCodeE, hCodeF]
+                eval_lowerAmd64CalculateConditionB, evalAmd64CalculateConditionB]
+            · by_cases hCode3 : code = 0x3
+              · subst hCode3
+                simp [evalCond, lowerCond, hCode4, hCode8, hCode9, hCode2, hCcOp, hCcDep1, hCcDep2,
+                  eval_lowerAmd64CalculateConditionB, evalAmd64CalculateConditionB]
+              · by_cases hCodeE : code = 0xE
+                · subst hCodeE
+                  simp [evalCond, lowerCond, hCode4, hCode8, hCode9, hCode2, hCode3, hCcOp, hCcDep1, hCcDep2,
+                    eval_lowerAmd64CalculateConditionLE, evalAmd64CalculateConditionLE]
+                · by_cases hCodeF : code = 0xF
+                  · subst hCodeF
+                    simp [evalCond, lowerCond, hCode4, hCode8, hCode9, hCode2, hCode3, hCodeE, hCcOp, hCcDep1, hCcDep2,
+                      eval_lowerAmd64CalculateConditionLE, evalAmd64CalculateConditionLE]
+                  · simp [evalCond, lowerCond, hCode4, hCode8, hCode9, hCode2, hCode3, hCodeE, hCodeF]
 
 private theorem applySymSub_writeMem {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub : SymSub Reg) (input : ConcreteState Reg) (mem : SymMem Reg) :

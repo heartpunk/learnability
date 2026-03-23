@@ -46,6 +46,12 @@ def lowerAmd64CalculateConditionLE {Reg : Type}
       (.le (.sext32to64 (.low32 ccDep1)) (.sext32to64 (.low32 ccDep2)))
   subCase  -- only SUB32 for now
 
+/-- Lower B (below, unsigned): for SUB32, unsigned dep1 < dep2. -/
+def lowerAmd64CalculateConditionB {Reg : Type}
+    (ccOp ccDep1 ccDep2 : SymExpr Reg) : SymPC Reg :=
+  .and (.eq ccOp (.const 0x7))
+    (.lt (.low32 ccDep1) (.low32 ccDep2))
+
 structure PartialSummary (Reg : Type) where
   sub : SymSub Reg
   pc : SymPC Reg
@@ -142,6 +148,8 @@ def lowerCond {Reg : Type} [DecidableEq Reg] [Fintype Reg]
       if code = 0x4 then lowerAmd64CalculateConditionZero op d1 d2
       else if code = 0x8 then lowerAmd64CalculateConditionSign op d1 d2
       else if code = 0x9 then .not (lowerAmd64CalculateConditionSign op d1 d2)
+      else if code = 0x2 then lowerAmd64CalculateConditionB op d1 d2
+      else if code = 0x3 then .not (lowerAmd64CalculateConditionB op d1 d2)
       else if code = 0xE then lowerAmd64CalculateConditionLE op d1 d2
       else if code = 0xF then .not (lowerAmd64CalculateConditionLE op d1 d2)
       else .not .true
