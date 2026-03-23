@@ -13,6 +13,10 @@ so inner reads normalize before outer reads that depend on them.
 Skips patterns whose side conditions can't be discharged, so the tactic
 peels everything it can and stops gracefully.
 
+Region-aware discharger: when simple omega fails, unfolds hypothesis
+definitions (e.g. StackSeparation, DataPtrInRegion) to expose bounds
+on opaque UInt64 terms, then retries omega with those bounds.
+
 This is the memo table step toward e-graph equality saturation.
 -/
 
@@ -97,7 +101,8 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
       let body ← mkArrow hi body
       let body ← mkForallFVars #[j] body
       mkForallFVars #[i] body
-  let hp ← mkFreshExprMVar (some hpType)
+  -- Create mvar with goal's local context so discharger sees hypotheses
+  let hp ← goal.withContext <| mkFreshExprMVar (some hpType)
   let proof ← goal.withContext <|
     mkAppM ``VexISA.ByteMem_read_write_ne #[lw, sw, M, a, v, b, hp]
   -- Discharge hp
@@ -105,12 +110,40 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
   for mvar in mvars do
     if ← mvar.isAssigned then continue
     setGoals [mvar]
-    evalTactic (← `(tactic| (
-      intro i j hi hj
-      simp only [Width.byteCount] at hi hj
-      (intro heq; have heq_nat := congrArg UInt64.toNat heq
-       simp only [UInt64.toNat_add, UInt64.size, UInt64.toBitVec_toNat] at *
-       omega))))
+    let saved ← saveState
+    -- Fast path: simp + omega (handles constant and stack-relative addresses)
+    try
+      evalTactic (← `(tactic| (
+        intro i j hi hj
+        simp only [Width.byteCount] at hi hj
+        (intro heq; have heq_nat := congrArg UInt64.toNat heq
+         simp only [UInt64.toNat_add, UInt64.size, UInt64.toBitVec_toNat] at *
+         omega))))
+    catch _ =>
+      -- Slow path: unfold hypothesis definitions for region-based reasoning.
+      -- Definitions like StackSeparation and DataPtrInRegion are opaque to
+      -- omega. Unfolding them exposes the bounds that omega needs.
+      saved.restore
+      setGoals [mvar]
+      evalTactic (← `(tactic| (
+        intro i j hi hj
+        simp only [Width.byteCount] at hi hj
+        intro heq; have heq_nat := congrArg UInt64.toNat heq)))
+      let g ← getMainGoal
+      let mut g' := g
+      let lctx := (← g'.getDecl).lctx
+      for decl in lctx do
+        if decl.isAuxDecl then continue
+        match ← unfoldDefinition? decl.type with
+        | some unfolded =>
+          if unfolded == decl.type then continue
+          try g' ← g'.changeLocalDecl decl.fvarId unfolded
+          catch _ => continue
+        | none => continue
+      replaceMainGoal [g']
+      evalTactic (← `(tactic| (
+        simp only [UInt64.toNat_add, UInt64.size, UInt64.toBitVec_toNat] at *
+        omega)))
   -- Rewrite the goal
   let (newType, eqProof?) ← goal.withContext (rewriteFirst goalType lw sw M a v b proof)
   match eqProof? with
