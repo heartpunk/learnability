@@ -55,21 +55,57 @@ elab "mem_frame" : tactic => do
     -- Find first read-of-write in the goal
     let some (lw, sw, M, a, v, b) := findReadOfWrite goalType
       | break  -- no more patterns
-    -- Create mvars for side conditions and build the proof
-    let m1 ← mkFreshExprMVar none
-    let m2 ← mkFreshExprMVar none
-    let m3 ← mkFreshExprMVar none
+    -- Construct the proof term directly: ByteMem_read_write_nonoverlap lw sw M a v b h_a h_b h
+    -- Create typed mvars for the 3 hypothesis args
+    let uint64SizeExpr := mkConst ``UInt64.size
+    let natExpr := mkConst ``Nat
+    let propSort := mkSort .zero
+    -- h_a type: a.toNat + sw.byteCount ≤ UInt64.size
+    let h_a_type ← goal.withContext <| do
+      let aToNat ← mkAppM ``UInt64.toNat #[a]
+      let swBC ← mkAppM ``Width.byteCount #[sw]
+      let lhs ← mkAppM ``HAdd.hAdd #[aToNat, swBC]
+      mkAppM ``LE.le #[lhs, uint64SizeExpr]
+    -- h_b type: b.toNat + lw.byteCount ≤ UInt64.size
+    let h_b_type ← goal.withContext <| do
+      let bToNat ← mkAppM ``UInt64.toNat #[b]
+      let lwBC ← mkAppM ``Width.byteCount #[lw]
+      let lhs ← mkAppM ``HAdd.hAdd #[bToNat, lwBC]
+      mkAppM ``LE.le #[lhs, uint64SizeExpr]
+    -- h type: a.toNat + sw.byteCount ≤ b.toNat ∨ b.toNat + lw.byteCount ≤ a.toNat
+    let h_type ← goal.withContext <| do
+      let aToNat ← mkAppM ``UInt64.toNat #[a]
+      let bToNat ← mkAppM ``UInt64.toNat #[b]
+      let swBC ← mkAppM ``Width.byteCount #[sw]
+      let lwBC ← mkAppM ``Width.byteCount #[lw]
+      let lhs1 ← mkAppM ``HAdd.hAdd #[aToNat, swBC]
+      let lhs2 ← mkAppM ``HAdd.hAdd #[bToNat, lwBC]
+      let left ← mkAppM ``LE.le #[lhs1, bToNat]
+      let right ← mkAppM ``LE.le #[lhs2, aToNat]
+      mkAppM ``Or #[left, right]
+    let m1 ← mkFreshExprMVar (some h_a_type)
+    let m2 ← mkFreshExprMVar (some h_b_type)
+    let m3 ← mkFreshExprMVar (some h_type)
     let proof ← try
-      goal.withContext <| mkAppM ``ByteMem_read_write_nonoverlap #[lw, sw, M, a, v, b, m1, m2, m3]
+      goal.withContext <| mkAppM ``VexISA.ByteMem_read_write_nonoverlap #[lw, sw, M, a, v, b, m1, m2, m3]
     catch e =>
-      throwError "mem_frame: failed to construct proof term"
-    -- Discharge side conditions using simp + omega
-    for mvar in [m1, m2, m3] do
+      throwError "mem_frame: mkAppM failed: {e.toMessageData}"
+    -- Find and discharge the 3 mvar side conditions
+    let mvars ← getMVars proof
+    for mvar in mvars do
+      if ← mvar.isAssigned then continue
       try
-        setGoals [mvar.mvarId!]
-        evalTactic (← `(tactic| (simp only [Width.byteCount, UInt64.size]; omega)))
+        setGoals [mvar]
+        -- Try multiple strategies to discharge
+        evalTactic (← `(tactic| first
+          | (simp only [Width.byteCount, UInt64.size]; omega)
+          | (simp_all only [Width.byteCount, UInt64.size, UInt64.toNat_add,
+              UInt64.toBitVec_toNat, _root_.UInt64.toNat_sub_of_le]; omega)
+          | (simp only [Width.byteCount]; bv_omega)
+          | assumption))
       catch _ =>
-        throwError "mem_frame: could not discharge side condition"
+        let mvType ← mvar.getType
+        throwError "mem_frame: could not discharge side condition:\n  {mvType}"
     -- Rewrite the goal
     let (newType, eqProof?) ← goal.withContext (rewriteFirst goalType lw sw M a v b proof)
     match eqProof? with
