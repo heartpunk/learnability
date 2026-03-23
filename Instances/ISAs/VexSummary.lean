@@ -218,6 +218,11 @@ despite introducing redundant narrowing chains. -/
     evalSymExpr state (.uext32 (.uext32 e)) = evalSymExpr state (.uext32 e) := by
   simp [evalSymExpr, mask32_idempotent]
 
+@[simp] theorem evalSymPC_not_not {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (state : ConcreteState Reg) (p : SymPC Reg) :
+    evalSymPC state (.not (.not p)) = evalSymPC state p := by
+  simp [evalSymPC, Bool.not_not]
+
 def satisfiesSymPC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) (pc : SymPC Reg) : Prop :=
   evalSymPC state pc = true
