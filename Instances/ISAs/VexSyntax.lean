@@ -223,7 +223,7 @@ private theorem ByteMem.insertSorted_insertSorted_same
   | nil =>
     simp only [insertSorted]
     have : ¬(addr.toNat < addr.toNat) := Nat.lt_irrefl _
-    simp [this]
+    simp
   | cons hd tl ih =>
     simp only [insertSorted]
     split -- addr.toNat < hd.1.toNat
