@@ -210,14 +210,14 @@ theorem foldAnd64_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     · split
       · next h _ =>
         -- h should tell us m == 0; let's see the full error
-        simp_all [uint64_and_zero]
+        simp_all
       · rfl
   · rename_i m x                               -- const m &&& x
     simp only [evalSymExpr]
     split
     · next h => simp_all [uint64_max_and]
     · split
-      · next h _ => simp_all [uint64_zero_and]
+      · next h _ => simp_all
       · rfl
   · simp only [evalSymExpr]
 
@@ -356,8 +356,7 @@ theorem resolveLoadFrom_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
           -- hnoverlap : rawConstRangesNonOverlapping ... = true
           -- Let's see what simp_all can do
           rw [ih]; simp only [evalSymExpr, evalSymMem]
-          simp only [rawConstRangesNonOverlapping, Bool.and_eq_true, decide_eq_true_eq,
-                      Bool.or_eq_true] at hnoverlap
+          simp only [rawConstRangesNonOverlapping, decide_eq_true_eq] at hnoverlap
           exact (ByteMem_read_write_nonoverlap w sw _ _ _ _ hnoverlap.1 hnoverlap.2.1 hnoverlap.2.2).symm
         · simp only [evalSymExpr, evalSymMem]
       -- reg+const cases: split on the if, false branch is conservative
