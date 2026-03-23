@@ -191,6 +191,33 @@ end
   | .not φ => !(evalSymPC state φ)
 
 
+/-! ### Narrowing/extension idempotence lemmas
+
+Since `evalSymExpr` maps both `.low32` and `.uext32` to `mask32`, chains of
+these operations are idempotent. These lemmas are used in WitnessSemClosed
+proofs to show that `substSymPC` lifting preserves closure membership
+despite introducing redundant narrowing chains. -/
+
+@[simp] theorem evalSymExpr_uext32_low32 {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (state : ConcreteState Reg) (e : SymExpr Reg) :
+    evalSymExpr state (.uext32 (.low32 e)) = evalSymExpr state (.uext32 e) := by
+  simp [evalSymExpr, mask32_idempotent]
+
+@[simp] theorem evalSymExpr_low32_uext32 {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (state : ConcreteState Reg) (e : SymExpr Reg) :
+    evalSymExpr state (.low32 (.uext32 e)) = evalSymExpr state (.low32 e) := by
+  simp [evalSymExpr, mask32_idempotent]
+
+@[simp] theorem evalSymExpr_low32_low32 {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (state : ConcreteState Reg) (e : SymExpr Reg) :
+    evalSymExpr state (.low32 (.low32 e)) = evalSymExpr state (.low32 e) := by
+  simp [evalSymExpr, mask32_idempotent]
+
+@[simp] theorem evalSymExpr_uext32_uext32 {Reg : Type} [DecidableEq Reg] [Fintype Reg]
+    (state : ConcreteState Reg) (e : SymExpr Reg) :
+    evalSymExpr state (.uext32 (.uext32 e)) = evalSymExpr state (.uext32 e) := by
+  simp [evalSymExpr, mask32_idempotent]
+
 def satisfiesSymPC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) (pc : SymPC Reg) : Prop :=
   evalSymPC state pc = true
