@@ -82,68 +82,32 @@ private partial def rewriteFirst (e : Expr) (lw sw M a v b proof : Expr) :
       | none => return (e, none)
   | _ => return (e, none)
 
-/-- Try to peel one write from one read-of-write pattern. Returns true on success. -/
+/-- Try to peel one write from one read-of-write pattern using footprint disjointness.
+    Constructs `Footprint.Disjoint (write_fp) (read_fp)` and proves it via `native_decide`.
+    For concrete footprints (both addresses are closed), this is a finite check.
+    Falls back to `decide` if `native_decide` fails. -/
 private def tryPeelOne (goal : MVarId) (goalType : Expr)
     (lw sw M a v b : Expr) : TacticM Bool := do
-  let hpType ← goal.withContext <| do
-    let swBC ← mkAppM ``VexISA.Width.byteCount #[sw]
-    let lwBC ← mkAppM ``VexISA.Width.byteCount #[lw]
-    withLocalDeclD `i (mkConst ``Nat) fun i =>
-    withLocalDeclD `j (mkConst ``Nat) fun j => do
-      let hi ← mkAppM ``LT.lt #[i, swBC]
-      let hj ← mkAppM ``LT.lt #[j, lwBC]
-      let oi ← mkAppM ``UInt64.ofNat #[i]
-      let oj ← mkAppM ``UInt64.ofNat #[j]
-      let ai ← mkAppM ``HAdd.hAdd #[a, oi]
-      let bj ← mkAppM ``HAdd.hAdd #[b, oj]
-      let neq ← mkAppM ``Ne #[ai, bj]
-      let body ← mkArrow hj neq
-      let body ← mkArrow hi body
-      let body ← mkForallFVars #[j] body
-      mkForallFVars #[i] body
-  -- Create mvar with goal's local context so discharger sees hypotheses
-  let hp ← goal.withContext <| mkFreshExprMVar (some hpType)
-  let proof ← goal.withContext <|
-    mkAppM ``VexISA.ByteMem_read_write_ne #[lw, sw, M, a, v, b, hp]
-  -- Discharge hp
-  let mvars ← getMVars proof
-  for mvar in mvars do
-    if ← mvar.isAssigned then continue
-    setGoals [mvar]
-    let saved ← saveState
-    -- Fast path: simp + omega (handles constant and stack-relative addresses)
+  -- Build: Footprint.Disjoint (Footprint.ofWidth a sw) (Footprint.ofWidth b lw)
+  let writeFP ← goal.withContext <| mkAppM ``VexISA.Footprint.ofWidth #[a, sw]
+  let readFP ← goal.withContext <| mkAppM ``VexISA.Footprint.ofWidth #[b, lw]
+  let disjProp ← goal.withContext <| mkAppM ``VexISA.Footprint.Disjoint #[writeFP, readFP]
+  -- Try to prove disjointness via native_decide (fast for concrete addresses)
+  let disjProof ← goal.withContext <| do
+    let mvar ← mkFreshExprMVar (some disjProp)
+    let mvarId := mvar.mvarId!
+    setGoals [mvarId]
     try
-      evalTactic (← `(tactic| (
-        intro i j hi hj
-        simp only [Width.byteCount] at hi hj
-        (intro heq; have heq_nat := congrArg UInt64.toNat heq
-         simp only [UInt64.toNat_add, UInt64.toNat_sub, UInt64.size, UInt64.toBitVec_toNat] at *
-         omega))))
+      evalTactic (← `(tactic| native_decide))
     catch _ =>
-      -- Slow path: unfold hypothesis definitions for region-based reasoning.
-      -- Definitions like StackSeparation and DataPtrInRegion are opaque to
-      -- omega. Unfolding them exposes the bounds that omega needs.
-      saved.restore
-      setGoals [mvar]
-      evalTactic (← `(tactic| (
-        intro i j hi hj
-        simp only [Width.byteCount] at hi hj
-        intro heq; have heq_nat := congrArg UInt64.toNat heq)))
-      let g ← getMainGoal
-      let mut g' := g
-      let lctx := (← g'.getDecl).lctx
-      for decl in lctx do
-        if decl.isAuxDecl then continue
-        match ← unfoldDefinition? decl.type with
-        | some unfolded =>
-          if unfolded == decl.type then continue
-          try g' ← g'.changeLocalDecl decl.fvarId unfolded
-          catch _ => continue
-        | none => continue
-      replaceMainGoal [g']
-      evalTactic (← `(tactic| (
-        simp only [UInt64.toNat_add, UInt64.toNat_sub, UInt64.size, UInt64.toBitVec_toNat] at *
-        omega)))
+      try
+        evalTactic (← `(tactic| decide))
+      catch _ =>
+        throwError "mem_frame: could not prove footprint disjointness"
+    return mvar
+  -- Apply the frame rule
+  let proof ← goal.withContext <|
+    mkAppM ``VexISA.ByteMem_read_write_of_disjoint #[lw, sw, M, a, v, b, disjProof]
   -- Rewrite the goal
   let (newType, eqProof?) ← goal.withContext (rewriteFirst goalType lw sw M a v b proof)
   match eqProof? with
