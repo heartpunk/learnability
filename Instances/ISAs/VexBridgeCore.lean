@@ -323,7 +323,7 @@ private theorem lowerCond_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
                   eval_lowerAmd64CalculateConditionP, evalAmd64CalculateConditionP]
               · by_cases hCode2 : code = 0x2
                 · subst hCode2
-                  simp [evalCond, lowerCond, hCode4, hCode8, hCode9, hCodeA, hCodeB, hCcOp, hCcDep1, hCcDep2,
+                  simp [evalCond, lowerCond, hCode4, hCode8, hCode9, hCcOp, hCcDep1, hCcDep2,
                     eval_lowerAmd64CalculateConditionB, evalAmd64CalculateConditionB]
                 · by_cases hCode3 : code = 0x3
                   · subst hCode3
