@@ -35,6 +35,12 @@ def evalAmd64CalculateConditionB
   if ccOp = 0x7 then decide (mask32 ccDep1 < mask32 ccDep2)
   else false
 
+/-- AMD64 L (less, signed): SF≠OF. For SUB32: signed dep1 < dep2. -/
+def evalAmd64CalculateConditionL
+    (ccOp ccDep1 ccDep2 _ccNdep : UInt64) : Bool :=
+  if ccOp = 0x7 then decide (signExtend32to64 (mask32 ccDep1) < signExtend32to64 (mask32 ccDep2))
+  else false
+
 /-- AMD64 LE (less or equal, signed): ZF=1 or SF≠OF. For SUB32: signed dep1 ≤ dep2. -/
 def evalAmd64CalculateConditionLE
     (ccOp ccDep1 ccDep2 _ccNdep : UInt64) : Bool :=
@@ -90,6 +96,8 @@ def evalAmd64CalculateConditionLE
       else if code = 0x9 then !evalAmd64CalculateConditionSign op d1 d2 nd
       else if code = 0x2 then evalAmd64CalculateConditionB op d1 d2 nd
       else if code = 0x3 then !evalAmd64CalculateConditionB op d1 d2 nd
+      else if code = 0xC then evalAmd64CalculateConditionL op d1 d2 nd
+      else if code = 0xD then !evalAmd64CalculateConditionL op d1 d2 nd
       else if code = 0xE then evalAmd64CalculateConditionLE op d1 d2 nd
       else if code = 0xF then !evalAmd64CalculateConditionLE op d1 d2 nd
       else false
