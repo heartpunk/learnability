@@ -661,10 +661,16 @@ def simplifyHExpr {Reg : Type} [BEq Reg] [Hashable Reg] : HExpr Reg → HExpr Re
   | .mk h (.reg r) => .mk h (.reg r)
   | .mk h (.low32 x) =>
     let x' := simplifyHExpr x
-    if hexprUnchanged x' x then .mk h (.low32 x) else HExpr.low32 x'
+    -- low32(low32(e)) = low32(e), low32(uext32(e)) = low32(e)
+    match x'.node with
+    | .low32 _ | .uext32 _ => x'  -- inner already masked to 32 bits
+    | _ => if hexprUnchanged x' x then .mk h (.low32 x) else HExpr.low32 x'
   | .mk h (.uext32 x) =>
     let x' := simplifyHExpr x
-    if hexprUnchanged x' x then .mk h (.uext32 x) else HExpr.uext32 x'
+    -- uext32(uext32(e)) = uext32(e), uext32(low32(e)) = low32(e)  (all are mask32)
+    match x'.node with
+    | .low32 _ | .uext32 _ => x'  -- inner already masked to 32 bits
+    | _ => if hexprUnchanged x' x then .mk h (.uext32 x) else HExpr.uext32 x'
   | .mk h (.sext8to32 x) =>
     let x' := simplifyHExpr x
     if hexprUnchanged x' x then .mk h (.sext8to32 x) else HExpr.sext8to32 x'
