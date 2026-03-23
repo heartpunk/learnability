@@ -267,7 +267,6 @@ private theorem ByteMem.insertSorted_insertSorted_comm
     by_cases ha1 : a.toNat < hd.1.toNat <;> by_cases ha2 : a = hd.1 <;>
       by_cases hb1 : b.toNat < hd.1.toNat <;> by_cases hb2 : b = hd.1
     -- Close contradictory cases
-    all_goals (try (have h := ‹a = hd.1›; rw [h] at *; exact absurd ‹_ < _› (Nat.lt_irrefl _)))
     all_goals (try (have h := ‹b = hd.1›; rw [h] at *; exact absurd ‹_ < _› (Nat.lt_irrefl _)))
     -- Simplify remaining goals
     all_goals (try simp_all only [ite_true, ite_false, insertSorted])
