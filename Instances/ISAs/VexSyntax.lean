@@ -41,6 +41,8 @@ def mask32 (value : UInt64) : UInt64 :=
 
 /-! ### UInt64 arithmetic lemmas for frame reasoning -/
 
+@[simp] theorem UInt64.size_eq : UInt64.size = 18446744073709551616 := by native_decide
+
 -- Normalize .toBitVec.toNat to .toNat (they're definitionally equal but
 -- simp sometimes produces one vs the other, breaking rw matching).
 @[simp] theorem UInt64.toBitVec_toNat (a : UInt64) :

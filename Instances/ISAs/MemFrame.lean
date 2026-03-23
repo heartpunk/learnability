@@ -24,13 +24,15 @@ private def matchReadOfWrite? (e : Expr) :
     else none
   else none
 
-/-- Walk expression tree, find first read-of-write, return its components. -/
+/-- Walk expression tree, find DEEPEST read-of-write (innermost first). -/
 private partial def findReadOfWrite (e : Expr) :
     Option (Expr × Expr × Expr × Expr × Expr × Expr) :=
-  if let some r := matchReadOfWrite? e.consumeMData then r
-  else match e.consumeMData with
-  | .app f x => findReadOfWrite f |>.orElse fun _ => findReadOfWrite x
-  | _ => none
+  -- First recurse into children to find deeper matches
+  let deeper := match e.consumeMData with
+    | .app f x => findReadOfWrite f |>.orElse fun _ => findReadOfWrite x
+    | _ => none
+  -- If a deeper match exists, use it. Otherwise check this node.
+  deeper.orElse fun _ => matchReadOfWrite? e.consumeMData
 
 /-- Walk expression tree, rewriting first read-of-write with a given proof. -/
 private partial def rewriteFirst (e : Expr) (lw sw M a v b proof : Expr) :
@@ -61,12 +63,31 @@ elab "mem_frame" : tactic => do
     let goalType ← goal.getType
     let some (lw, sw, M, a, v, b) := findReadOfWrite goalType
       | break
-    -- Use ByteMem_read_write_ne: needs one mvar for the pointwise ≠ condition
+    -- Build hp type matching ByteMem_read_write_ne's signature exactly:
+    -- ∀ (i : Nat) (j : Nat), i < sw.byteCount → j < lw.byteCount → a + ofNat i ≠ b + ofNat j
+    let hpType ← goal.withContext <| do
+      let swBC ← mkAppM ``VexISA.Width.byteCount #[sw]
+      let lwBC ← mkAppM ``VexISA.Width.byteCount #[lw]
+      withLocalDeclD `i (mkConst ``Nat) fun i =>
+      withLocalDeclD `j (mkConst ``Nat) fun j => do
+        let hi ← mkAppM ``LT.lt #[i, swBC]
+        let hj ← mkAppM ``LT.lt #[j, lwBC]
+        let oi ← mkAppM ``UInt64.ofNat #[i]
+        let oj ← mkAppM ``UInt64.ofNat #[j]
+        let ai ← mkAppM ``HAdd.hAdd #[a, oi]
+        let bj ← mkAppM ``HAdd.hAdd #[b, oj]
+        let neq ← mkAppM ``Ne #[ai, bj]
+        -- Build: i < swBC → j < lwBC → neq
+        let body ← mkArrow hj neq
+        let body ← mkArrow hi body
+        -- Build: ∀ (j : Nat), ...
+        let body ← mkForallFVars #[j] body
+        mkForallFVars #[i] body
+    let hp ← mkFreshExprMVar (some hpType)
     let proof ← try
-      goal.withContext <| mkAppOptM ``VexISA.ByteMem_read_write_ne
-        #[some lw, some sw, some M, some a, some v, some b, none]
+      goal.withContext <| mkAppM ``VexISA.ByteMem_read_write_ne #[lw, sw, M, a, v, b, hp]
     catch e =>
-      throwError "mem_frame: mkAppOptM failed: {e.toMessageData}"
+      throwError "mem_frame: mkAppM failed: {e.toMessageData}"
     -- Find and discharge the hp mvar
     let mvars ← getMVars proof
     for mvar in mvars do
@@ -80,8 +101,10 @@ elab "mem_frame" : tactic => do
           simp only [Width.byteCount] at hi hj
           first
             | native_decide
-            | (simp_all; omega)
-            | omega)))
+            | omega
+            | (intro heq; have heq_nat := congrArg UInt64.toNat heq
+               repeat rw [UInt64.toNat_add_of_lt (by change _ < 18446744073709551616; omega)] at heq_nat
+               omega))))
       catch _ =>
         let mvType ← mvar.getType
         throwError "mem_frame: could not discharge side condition:\n  {mvType}"
