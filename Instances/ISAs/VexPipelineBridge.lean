@@ -823,9 +823,9 @@ theorem h_value_determined_of_state_agreement
     (isa : SymbolicISA (SymSub Reg) (SymPC Reg) (ConcreteState Reg))
     (model : Finset (Branch (SymSub Reg) (SymPC Reg)))
     (basis : Finset (SymPC Reg))
-    (h_lift_eq : ∀ (σ : SymSub Reg) (φ : SymPC Reg),
+    (_h_lift_eq : ∀ (σ : SymSub Reg) (φ : SymPC Reg),
       isa.pc_lift σ φ = substSymPC σ φ)
-    (h_sat_eq : ∀ (s : ConcreteState Reg) (φ : SymPC Reg),
+    (_h_sat_eq : ∀ (s : ConcreteState Reg) (φ : SymPC Reg),
       isa.satisfies s φ = (evalSymPC s φ = true))
     (h_state_eq : ∀ s₁ s₂ : ConcreteState Reg,
       (pcSetoidWith isa basis).r s₁ s₂ → s₁ = s₂)
