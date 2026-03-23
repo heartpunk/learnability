@@ -52,6 +52,16 @@ def mask32 (value : UInt64) : UInt64 :=
     (a - b).toNat = a.toNat - b.toNat := by
   exact _root_.UInt64.toNat_sub_of_le a b h
 
+-- Unconditional modular subtraction: (a - b).toNat = (a.toNat + 2^64 - b.toNat) % 2^64
+theorem UInt64.toNat_sub (a b : UInt64) :
+    (a - b).toNat = (a.toNat + UInt64.size - b.toNat) % UInt64.size := by
+  have ha : a.toNat < UInt64.size := a.toBitVec.isLt
+  have hb : b.toNat < UInt64.size := b.toBitVec.isLt
+  change (a.toBitVec - b.toBitVec).toNat = _
+  rw [BitVec.toNat_sub]
+  simp only [UInt64.toBitVec_toNat, UInt64.size] at *
+  omega
+
 @[simp] theorem UInt64.toNat_add_of_lt {a b : UInt64} (h : a.toNat + b.toNat < UInt64.size) :
     (a + b).toNat = a.toNat + b.toNat := by
   simp [_root_.UInt64.toNat_add]

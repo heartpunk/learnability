@@ -117,7 +117,7 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
         intro i j hi hj
         simp only [Width.byteCount] at hi hj
         (intro heq; have heq_nat := congrArg UInt64.toNat heq
-         simp only [UInt64.toNat_add, UInt64.size, UInt64.toBitVec_toNat] at *
+         simp only [UInt64.toNat_add, UInt64.toNat_sub, UInt64.size, UInt64.toBitVec_toNat] at *
          omega))))
     catch _ =>
       -- Slow path: unfold hypothesis definitions for region-based reasoning.
@@ -142,7 +142,7 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
         | none => continue
       replaceMainGoal [g']
       evalTactic (← `(tactic| (
-        simp only [UInt64.toNat_add, UInt64.size, UInt64.toBitVec_toNat] at *
+        simp only [UInt64.toNat_add, UInt64.toNat_sub, UInt64.size, UInt64.toBitVec_toNat] at *
         omega)))
   -- Rewrite the goal
   let (newType, eqProof?) ← goal.withContext (rewriteFirst goalType lw sw M a v b proof)
