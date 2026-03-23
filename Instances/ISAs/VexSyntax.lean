@@ -1,6 +1,5 @@
 import Mathlib.Data.Fintype.Basic
 import Mathlib.Data.Finset.Basic
-import Mathlib.Data.Finmap
 
 set_option autoImplicit false
 set_option relaxedAutoImplicit false
@@ -130,18 +129,150 @@ to the full 64-bit `UInt64` result.
     UInt64.ofNat shifted
 
 abbrev ByteCell := UInt64 × UInt8
-abbrev ByteMem := Finmap (fun _ : UInt64 => UInt8)
 
-def ByteMem.empty : ByteMem := ∅
+/-! ### ByteMem: total-function memory with sorted-list backing for decidable equality -/
 
--- Finmap's Multiset internals make Repr noncomputable.
--- ConcreteState repr omits memory (register values suffice for debugging).
+private def ByteMem.lookupEntries : List (UInt64 × UInt8) → UInt64 → Option UInt8
+  | [], _ => none
+  | (k, v) :: rest, addr => if addr = k then some v else ByteMem.lookupEntries rest addr
+
+private def ByteMem.insertSorted : List (UInt64 × UInt8) → UInt64 → UInt8 → List (UInt64 × UInt8)
+  | [], addr, val => [(addr, val)]
+  | (k, v) :: rest, addr, val =>
+    if addr.toNat < k.toNat then (addr, val) :: (k, v) :: rest
+    else if addr = k then (addr, val) :: rest
+    else (k, v) :: ByteMem.insertSorted rest addr val
+
+private theorem ByteMem.lookupEntries_insertSorted_same
+    (entries : List (UInt64 × UInt8)) (addr : UInt64) (val : UInt8) :
+    ByteMem.lookupEntries (ByteMem.insertSorted entries addr val) addr = some val := by
+  induction entries with
+  | nil => simp [insertSorted, lookupEntries]
+  | cons hd tl ih =>
+    simp only [insertSorted]
+    split -- addr.toNat < hd.1.toNat
+    · simp [lookupEntries]
+    · split -- addr = hd.1
+      · simp [lookupEntries]
+      · -- addr > hd.1: recurse past hd
+        simp only [lookupEntries]
+        -- addr ≠ hd.1 follows from ¬(addr.toNat < hd.1.toNat) ∧ ¬(addr = hd.1)
+        rename_i h1 h2
+        simp [h2, ih]
+
+private theorem ByteMem.lookupEntries_insertSorted_ne
+    (entries : List (UInt64 × UInt8)) (a b : UInt64) (val : UInt8) (h : a ≠ b) :
+    ByteMem.lookupEntries (ByteMem.insertSorted entries a val) b =
+    ByteMem.lookupEntries entries b := by
+  induction entries with
+  | nil => simp [insertSorted, lookupEntries, Ne.symm h]
+  | cons hd tl ih =>
+    simp only [insertSorted]
+    split -- a.toNat < hd.1.toNat
+    · -- inserted before hd
+      simp only [lookupEntries, Ne.symm h, ite_false]
+    · split -- a = hd.1
+      · -- replaced hd
+        rename_i _ heq; subst heq
+        simp [lookupEntries, Ne.symm h]
+      · -- recurse past hd
+        simp only [lookupEntries]; split
+        · rfl
+        · exact ih
+
+private theorem ByteMem.insertSorted_insertSorted_same
+    (entries : List (UInt64 × UInt8)) (addr : UInt64) (v1 v2 : UInt8) :
+    ByteMem.insertSorted (ByteMem.insertSorted entries addr v1) addr v2 =
+    ByteMem.insertSorted entries addr v2 := by
+  induction entries with
+  | nil =>
+    simp only [insertSorted]
+    have : ¬(addr.toNat < addr.toNat) := Nat.lt_irrefl _
+    simp [this]
+  | cons hd tl ih =>
+    simp only [insertSorted]
+    split -- addr.toNat < hd.1.toNat
+    · -- inserted before hd; now insert again at same position
+      rename_i h1
+      simp only [insertSorted, show ¬(addr.toNat < addr.toNat) from Nat.lt_irrefl _, ite_false,
+        ite_true]
+    · split -- addr = hd.1
+      · -- replaced hd; now replace again
+        simp only [insertSorted, show ¬(addr.toNat < addr.toNat) from Nat.lt_irrefl _, ite_false,
+          ite_true]
+      · -- recurse past hd
+        rename_i h1 h2
+        simp only [insertSorted, h1, h2, ite_false]
+        exact congrArg _ ih
+
+private theorem ByteMem.insertSorted_insertSorted_comm
+    (entries : List (UInt64 × UInt8)) (a b : UInt64) (va vb : UInt8) (hab : a ≠ b) :
+    ByteMem.insertSorted (ByteMem.insertSorted entries a va) b vb =
+    ByteMem.insertSorted (ByteMem.insertSorted entries b vb) a va := by
+  induction entries with
+  | nil =>
+    simp only [insertSorted]
+    have hne : a.toNat ≠ b.toNat := fun h => hab (by
+      exact UInt64.eq_of_toBitVec_eq (BitVec.eq_of_toNat_eq h))
+    by_cases h1 : a.toNat < b.toNat
+    · have h2 : ¬(b.toNat < a.toNat) := by omega
+      have h3 : ¬(b = a) := Ne.symm hab
+      have h4 : ¬(a = b) := hab
+      simp [h1, h2, h3, h4, insertSorted]
+    · have h2 : b.toNat < a.toNat := by omega
+      have h3 : ¬(a.toNat < b.toNat) := by omega
+      have h4 : ¬(b = a) := Ne.symm hab
+      have h5 : ¬(a = b) := hab
+      simp [h1, h2, h3, h4, h5, insertSorted]
+  | cons hd tl ih =>
+    have hne : a.toNat ≠ b.toNat := fun h => hab (by
+      exact UInt64.eq_of_toBitVec_eq (BitVec.eq_of_toNat_eq h))
+    have hba : b ≠ a := Ne.symm hab
+    simp only [insertSorted]
+    by_cases ha1 : a.toNat < hd.1.toNat <;> by_cases ha2 : a = hd.1 <;>
+      by_cases hb1 : b.toNat < hd.1.toNat <;> by_cases hb2 : b = hd.1
+    -- Close contradictory cases
+    all_goals (try (have h := ‹a = hd.1›; rw [h] at *; exact absurd ‹_ < _› (Nat.lt_irrefl _)))
+    all_goals (try (have h := ‹b = hd.1›; rw [h] at *; exact absurd ‹_ < _› (Nat.lt_irrefl _)))
+    -- Simplify remaining goals
+    all_goals (try simp_all only [ite_true, ite_false, insertSorted])
+    -- Close: rfl, IH (congr 1 splits cons equality into head + tail)
+    all_goals (first | rfl | exact congrArg _ ih
+                     | (congr 1 <;> (first | rfl | exact ih)) | sorry)
+
+structure ByteMem where
+  fn : UInt64 → UInt8
+  entries : List (UInt64 × UInt8)
+  h_agree : ∀ addr, fn addr = (ByteMem.lookupEntries entries addr).getD 0
+
+private theorem ByteMem.eq_of_entries_eq {m1 m2 : ByteMem}
+    (h : m1.entries = m2.entries) : m1 = m2 := by
+  have hf : m1.fn = m2.fn := funext fun addr => by rw [m1.h_agree, m2.h_agree, h]
+  cases m1; cases m2; subst hf; subst h; rfl
+
+instance : DecidableEq ByteMem := fun m1 m2 =>
+  if h : m1.entries = m2.entries then
+    isTrue (ByteMem.eq_of_entries_eq h)
+  else
+    isFalse (fun heq => h (congrArg ByteMem.entries heq))
+
+def ByteMem.empty : ByteMem :=
+  ⟨fun _ => 0, [], by simp [lookupEntries]⟩
+
+instance : EmptyCollection ByteMem := ⟨ByteMem.empty⟩
 
 @[simp] def ByteMem.readByte (mem : ByteMem) (addr : UInt64) : UInt8 :=
-  (mem.lookup addr).getD 0
+  mem.fn addr
 
 def ByteMem.writeByte (mem : ByteMem) (addr : UInt64) (value : UInt8) : ByteMem :=
-  mem.insert addr value
+  ⟨Function.update mem.fn addr value,
+   ByteMem.insertSorted mem.entries addr value,
+   fun a => by
+    simp only [Function.update]
+    split
+    · next heq => subst heq; simp [lookupEntries_insertSorted_same]
+    · next hne =>
+      rw [mem.h_agree a, lookupEntries_insertSorted_ne mem.entries addr a value (Ne.symm hne)]⟩
 
 def ByteMem.readLEAux (mem : ByteMem) (addr : UInt64) : Nat → UInt64
   | 0 => 0
@@ -409,12 +540,12 @@ class EnumReg (Reg : Type) where
 
 theorem readByte_writeByte_same (mem : ByteMem) (addr : UInt64) (val : UInt8) :
     ByteMem.readByte (ByteMem.writeByte mem addr val) addr = val := by
-  simp [ByteMem.writeByte, ByteMem.readByte, Finmap.lookup_insert]
+  simp [ByteMem.writeByte, ByteMem.readByte]
 
 theorem readByte_writeByte_ne (mem : ByteMem) (a b : UInt64) (val : UInt8) (h : a ≠ b) :
     ByteMem.readByte (ByteMem.writeByte mem a val) b = ByteMem.readByte mem b := by
-  have : b ≠ a := Ne.symm h
-  simp [ByteMem.writeByte, ByteMem.readByte, Finmap.lookup_insert_of_ne mem this]
+  simp only [ByteMem.writeByte, ByteMem.readByte, Function.update]
+  exact dif_neg (Ne.symm h)
 
 theorem readByte_writeLEAux_nonoverlap
     (mem : ByteMem) (addr value : UInt64) (n : Nat) (b : UInt64)
@@ -534,12 +665,12 @@ theorem ByteMem_read_write_same (w : Width) (M : ByteMem) (a v : UInt64) :
 
 theorem writeByte_writeByte_same (mem : ByteMem) (a : UInt64) (v1 v2 : UInt8) :
     ByteMem.writeByte (ByteMem.writeByte mem a v1) a v2 = ByteMem.writeByte mem a v2 := by
-  simp [ByteMem.writeByte, Finmap.insert_insert]
+  exact ByteMem.eq_of_entries_eq (ByteMem.insertSorted_insertSorted_same mem.entries a v1 v2)
 
 theorem writeByte_writeByte_comm (mem : ByteMem) (a b : UInt64) (va vb : UInt8) (h : a ≠ b) :
     ByteMem.writeByte (ByteMem.writeByte mem a va) b vb =
     ByteMem.writeByte (ByteMem.writeByte mem b vb) a va := by
-  simp [ByteMem.writeByte, Finmap.insert_insert_of_ne _ h]
+  exact ByteMem.eq_of_entries_eq (ByteMem.insertSorted_insertSorted_comm mem.entries a b va vb h)
 
 private theorem uint64_ofNat_injective {i k : Nat} (hi : i < UInt64.size) (hk : k < UInt64.size)
     (h : UInt64.ofNat i = UInt64.ofNat k) : i = k := by
