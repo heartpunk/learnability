@@ -1,4 +1,6 @@
 import Iris
+import Iris.ProofMode
+import Iris.Instances.UPred
 import Instances.ISAs.VexSyntax
 
 /-!
@@ -118,3 +120,27 @@ theorem ByteMem_frame_of_separate
   intro i j hi hj heq
   exact byteHeap_absurd_of_both_some h_write h_read (a + UInt64.ofNat i) hv
     (hw i hi) (heq ▸ hr j hj)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- UPred assertions over ByteHeap for MoSeL proof mode
+-- ═══════════════════════════════════════════════════════════════════════════
+
+open Iris.BI
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- UPred assertions over ByteHeap — the MoSeL interface
+-- ═══════════════════════════════════════════════════════════════════════════
+
+/-- Ownership assertion: "I own this ByteHeap fragment."
+    `ownM h` holds at resource `x` if `h ≼ x` (h is included in x). -/
+def ownBytes (h : ByteHeap) : UPred ByteHeap := UPred.ownM h
+
+/-- The key MoSeL theorem: owning disjoint byte fragments means their
+    addresses don't overlap, giving us the frame rule for ByteMem. -/
+theorem ownBytes_frame (lw sw : Width) (M : ByteMem) (a v b : UInt64)
+    (h_write h_read : ByteHeap)
+    (hw : ∀ i, i < sw.byteCount → ∃ vi, h_write (a + UInt64.ofNat i) = some (.excl vi))
+    (hr : ∀ j, j < lw.byteCount → ∃ vj, h_read (b + UInt64.ofNat j) = some (.excl vj)) :
+    ownBytes h_write ∗ ownBytes h_read ⊢
+      ⌜ByteMem.read lw (ByteMem.write sw M a v) b = ByteMem.read lw M b⌝ := by
+  sorry
