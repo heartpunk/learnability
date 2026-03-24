@@ -42,6 +42,9 @@ private partial def containsRead (e : Expr) : Bool :=
   if fn == ``ByteMem.read && args.size == 3 then true
   else match ec with
     | .app f x => containsRead f || containsRead x
+    | .letE _ t v b _ => containsRead t || containsRead v || containsRead b
+    | .lam _ t b _ => containsRead t || containsRead b
+    | .forallE _ t b _ => containsRead t || containsRead b
     | _ => false
 
 /-- Score a read address by simplicity. Lower = simpler = process first.
@@ -92,18 +95,52 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
   let writeFP ← goal.withContext <| mkAppM ``VexISA.Footprint.ofWidth #[a, sw]
   let readFP ← goal.withContext <| mkAppM ``VexISA.Footprint.ofWidth #[b, lw]
   let disjProp ← goal.withContext <| mkAppM ``VexISA.Footprint.Disjoint #[writeFP, readFP]
-  -- Try to prove disjointness via native_decide (fast for concrete addresses)
+  -- Try to prove disjointness
   let disjProof ← goal.withContext <| do
     let mvar ← mkFreshExprMVar (some disjProp)
     let mvarId := mvar.mvarId!
     setGoals [mvarId]
     try
+      -- Fast path: native_decide for fully concrete footprints
       evalTactic (← `(tactic| native_decide))
     catch _ =>
-      try
-        evalTactic (← `(tactic| decide))
-      catch _ =>
-        throwError "mem_frame: could not prove footprint disjointness"
+      -- Slow path: unfold Disjoint, lift to .toNat, unfold region hyps, omega
+      evalTactic (← `(tactic| (
+        unfold VexISA.Footprint.Disjoint
+        intro i j hi hj heq
+        simp only [VexISA.Footprint.ofWidth, VexISA.Footprint.addr,
+          VexISA.Width.byteCount] at hi hj heq
+        have h := congrArg UInt64.toNat heq
+        simp only [UInt64.toNat_add, UInt64.toNat_sub, UInt64.toNat_ofNat,
+          UInt64.toNat_ofNat', UInt64.size, Nat.two_pow_64,
+          UInt64.toBitVec_toNat] at h)))
+      -- Unfold user-defined region hypotheses for omega bounds
+      let g ← getMainGoal
+      let mut g' := g
+      let lctx := (← g'.getDecl).lctx
+      for decl in lctx do
+        if decl.isAuxDecl then continue
+        let (headFn, _) := decl.type.getAppFnArgs
+        if headFn.isAnonymous then continue
+        if !(toString headFn).any (· == '.') then continue
+        match ← unfoldDefinition? decl.type with
+        | some unfolded =>
+          if unfolded == decl.type then continue
+          if containsRead unfolded then continue
+          try g' ← g'.changeLocalDecl decl.fvarId unfolded
+          catch _ => continue
+        | none => continue
+      -- Clear hypotheses whose unfolded form has ByteMem.read (noise for omega)
+      let lctx2 := (← g'.getDecl).lctx
+      for decl in lctx2 do
+        if decl.isAuxDecl then continue
+        if containsRead decl.type then continue  -- Don't clear h/heq
+        match ← unfoldDefinition? decl.type with
+        | some u => if containsRead u then
+            try g' ← g'.clear decl.fvarId catch _ => continue
+        | none => continue
+      replaceMainGoal [g']
+      evalTactic (← `(tactic| omega))
     return mvar
   -- Apply the frame rule
   let proof ← goal.withContext <|
@@ -129,7 +166,17 @@ private partial def reduceClosedUInt64 (e : Expr) : MetaM Expr := do
       let ty ← try inferType ec catch _ => return e
       if ty.isConstOf ``UInt64 then
         let r ← withTransparency .all <| whnf ec
-        if r != ec then return r
+        if r != ec then
+          -- whnf produces raw struct { toBitVec := N#64 }.
+          -- Extract the Nat value and reconstruct as a proper OfNat literal
+          -- so simp [toNat_ofNat] can match.
+          let natVal ← try
+            let nExpr ← withTransparency .all <| reduce (← mkAppM ``UInt64.toNat #[r])
+            pure nExpr.rawNatLit?
+          catch _ => pure none
+          match natVal with
+          | some n => return ← mkNumeral (mkConst ``UInt64) n
+          | none => return r
   -- Recurse into applications
   match ec with
   | .app f x =>

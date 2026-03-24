@@ -23,6 +23,11 @@ name = "smt"
 scope = "ufmg-smite"
 rev = "main"
 
+[[require]]
+name = "egg"
+git = "https://github.com/heartpunk/lean-egg"
+rev = "main"
+
 [[lean_lib]]
 name = "LTS"
 

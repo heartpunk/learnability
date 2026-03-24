@@ -182,6 +182,8 @@
               pkgs.jq
               pkgs.cvc5
               pkgs.just
+              pkgs.rustc
+              pkgs.cargo
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               pkgs.gcc
               pkgs.binutils
