@@ -1,4 +1,5 @@
 import Instances.ISAs.VexSyntax
+import Mathlib.Tactic.IntervalCases
 import Lean
 
 /-!
@@ -86,53 +87,45 @@ private partial def rewriteFirst (e : Expr) (lw sw M a v b proof : Expr) :
   | _ => return (e, none)
 
 /-- Try to peel one write from one read-of-write pattern using footprint disjointness.
-    Constructs `Footprint.Disjoint (write_fp) (read_fp)` and proves it via `native_decide`.
-    For concrete footprints (both addresses are closed), this is a finite check.
-    Falls back to `decide` if `native_decide` fails. -/
+    Three strategies in cascade:
+    1. native_decide — fully concrete footprints
+    2. Same-base cancellation — Disjoint_add_left + native_decide on offsets
+    3. Stack-vs-ELF — eq_sub_of_add_eq + rw into StackSeparation + interval_cases -/
 private def tryPeelOne (goal : MVarId) (goalType : Expr)
     (lw sw M a v b : Expr) : TacticM Bool := do
   -- Build: Footprint.Disjoint (Footprint.ofWidth a sw) (Footprint.ofWidth b lw)
   let writeFP ← goal.withContext <| mkAppM ``VexISA.Footprint.ofWidth #[a, sw]
   let readFP ← goal.withContext <| mkAppM ``VexISA.Footprint.ofWidth #[b, lw]
   let disjProp ← goal.withContext <| mkAppM ``VexISA.Footprint.Disjoint #[writeFP, readFP]
-  -- Try to prove disjointness
+  -- Try to prove disjointness via three strategies
   let disjProof ← goal.withContext <| do
     let mvar ← mkFreshExprMVar (some disjProp)
     let mvarId := mvar.mvarId!
     setGoals [mvarId]
+    -- Strategy 1: native_decide for fully concrete footprints
+    let s1 ← saveState
     try
-      -- Fast path: native_decide for fully concrete footprints
       evalTactic (← `(tactic| native_decide))
     catch _ =>
-      -- Slow path: unfold Disjoint, lift to .toNat, unfold region hyps, omega
-      evalTactic (← `(tactic| (
-        unfold VexISA.Footprint.Disjoint
-        intro i j hi hj heq
-        simp only [VexISA.Footprint.ofWidth, VexISA.Footprint.addr,
-          VexISA.Width.byteCount] at hi hj heq
-        have h := congrArg UInt64.toNat heq
-        simp only [UInt64.toNat_add, UInt64.toNat_sub, UInt64.toNat_ofNat,
-          UInt64.toNat_ofNat', UInt64.size, Nat.two_pow_64,
-          UInt64.toBitVec_toNat] at h)))
-      -- Unfold ALL hypotheses, clear those with ByteMem.read
-      let g ← getMainGoal
-      let mut g' := g
-      let mut toClear : Array FVarId := #[]
-      for decl in (← g'.getDecl).lctx do
-        if decl.isAuxDecl then continue
-        match ← unfoldDefinition? decl.type with
-        | some unfolded =>
-          if unfolded == decl.type then continue
-          if containsRead unfolded then
-            toClear := toClear.push decl.fvarId
-          else
-            try g' ← g'.changeLocalDecl decl.fvarId unfolded
-            catch _ => continue
-        | none => continue
-      for fv in toClear do
-        try g' ← g'.clear fv catch _ => continue
-      replaceMainGoal [g']
-      evalTactic (← `(tactic| omega))
+      s1.restore
+      -- Strategy 2: same-base cancellation
+      let s2 ← saveState
+      try
+        evalTactic (← `(tactic| (
+          apply VexISA.Footprint.Disjoint_add_left
+          native_decide)))
+      catch _ =>
+        s2.restore
+        -- Strategy 3: stack-vs-ELF via UInt64-level derivation
+        evalTactic (← `(tactic| (
+          unfold VexISA.Footprint.Disjoint
+          intro i j hi hj heq
+          simp only [VexISA.Footprint.ofWidth, VexISA.Width.byteCount] at hi hj heq
+          simp only [UInt64.add_assoc] at heq
+          have hrb := VexISA.UInt64.eq_sub_of_add_eq heq
+          first
+          | (rw [hrb] at *; interval_cases i <;> interval_cases j <;> simp_all)
+          | omega)))
     return mvar
   -- Apply the frame rule
   let proof ← goal.withContext <|
