@@ -93,11 +93,7 @@ private partial def rewriteFirst (e : Expr) (lw sw M a v b proof : Expr) :
     3. Stack-vs-ELF — eq_sub_of_add_eq + rw into StackSeparation + interval_cases -/
 private def tryPeelOne (goal : MVarId) (goalType : Expr)
     (lw sw M a v b : Expr) : TacticM Bool := do
-  -- The frame equality we want to prove:
-  -- ByteMem.read lw (ByteMem.write sw M a v) b = ByteMem.read lw M b
-  let frameEq ← goal.withContext <|
-    mkAppM ``VexISA.ByteMem_read_write_of_disjoint #[lw, sw, M, a, v, b]
-  -- Try three strategies to prove this
+  -- Try three strategies to construct the frame proof
   let proof ← goal.withContext <| do
     -- Strategy 1: Footprint.Disjoint via native_decide (fully concrete)
     let s1 ← saveState
