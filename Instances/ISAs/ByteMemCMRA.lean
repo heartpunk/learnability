@@ -85,3 +85,36 @@ theorem byteOwn_ne_of_valid (a b : UInt64) (va vb : UInt8)
   have := hv a
   simp only [byteOwn, optionOp, CMRA.op, Excl.Valid, optionValid,
     ite_true, CMRA.Valid] at this
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Multi-byte ownership and the frame rule for ByteMem.read/write
+-- ═══════════════════════════════════════════════════════════════════════════
+
+/-- If two ByteHeap fragments are validly composed and both claim ownership at
+    the same address, that's a contradiction. -/
+theorem byteHeap_absurd_of_both_some (h₁ h₂ : ByteHeap) (addr : UInt64)
+    (hv : CMRA.Valid (CMRA.op h₁ h₂))
+    (ha : ∃ va, h₁ addr = some (.excl va))
+    (hb : ∃ vb, h₂ addr = some (.excl vb)) :
+    False := by
+  obtain ⟨va, hva⟩ := ha
+  obtain ⟨vb, hvb⟩ := hb
+  have := hv addr
+  simp only [CMRA.Valid, optionValid, optionOp, CMRA.op,
+    hva, hvb, Excl.Valid] at this
+
+/-- The separation frame rule for ByteMem: if the write footprint and read footprint
+    are owned by validly-composed (disjoint) ByteHeap fragments, then the write
+    doesn't affect the read. This replaces arithmetic-based non-aliasing with
+    structural non-aliasing from the CMRA. -/
+theorem ByteMem_frame_of_separate
+    (lw sw : Width) (M : ByteMem) (a v b : UInt64)
+    (h_write h_read : ByteHeap)
+    (hv : CMRA.Valid (CMRA.op h_write h_read))
+    (hw : ∀ i, i < sw.byteCount → ∃ vi, h_write (a + UInt64.ofNat i) = some (.excl vi))
+    (hr : ∀ j, j < lw.byteCount → ∃ vj, h_read (b + UInt64.ofNat j) = some (.excl vj)) :
+    ByteMem.read lw (ByteMem.write sw M a v) b = ByteMem.read lw M b := by
+  apply ByteMem_read_write_ne
+  intro i j hi hj heq
+  exact byteHeap_absurd_of_both_some h_write h_read (a + UInt64.ofNat i) hv
+    (hw i hi) (heq ▸ hr j hj)
