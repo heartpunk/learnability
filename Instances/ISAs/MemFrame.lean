@@ -121,16 +121,13 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
         mkAppM ``VexISA.ByteMem_read_write_of_disjoint #[lw, sw, M, a, v, b, mvar]
       catch _ =>
         s2.restore
-        -- Strategy 3: ByteMem_frame_of_separate via Iris separation
-        -- Construct the frame equality directly. The proof context must
-        -- have ByteHeap witnesses with valid composition (from Iris ∗).
+        -- Strategy 3: leave ByteMem_frame_of_separate as subgoal
+        -- The Bridge proof provides ByteHeap witnesses after mem_frame.
         let eqType ← mkAppM ``Eq #[
           ← mkAppM ``VexISA.ByteMem.read #[lw, ← mkAppM ``VexISA.ByteMem.write #[sw, M, a, v], b],
           ← mkAppM ``VexISA.ByteMem.read #[lw, M, b]]
         let mvar ← mkFreshExprMVar (some eqType)
-        setGoals [mvar.mvarId!]
-        evalTactic (← `(tactic|
-          exact VexISA.ByteMem_frame_of_separate _ _ _ _ _ _ _ _ (by assumption) (by assumption) (by assumption)))
+        -- Leave this as a subgoal for the user/proof to close
         return mvar
   -- Rewrite the goal
   let (newType, eqProof?) ← goal.withContext (rewriteFirst goalType lw sw M a v b proof)
@@ -138,7 +135,10 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
   | none => return false
   | some eqProof =>
     let newGoal ← goal.replaceTargetEq newType eqProof
-    replaceMainGoal [newGoal]
+    -- Collect any unassigned mvars from the proof (strategy 3 subgoals)
+    let mvars ← getMVars proof
+    let unassigned ← mvars.filterM (fun m => return !(← m.isAssigned))
+    replaceMainGoal (unassigned.toList ++ [newGoal])
     return true
 
 /-- Reduce closed (no free variables) UInt64 subexpressions to literals.
