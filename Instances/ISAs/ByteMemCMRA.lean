@@ -58,7 +58,7 @@ theorem byteOwn_models (a : UInt64) (v : UInt8) (m : ByteMem)
     This is the key soundness property: if fragment₁ and fragment₂ are both valid
     and both model the same concrete memory, their composition also models it. -/
 theorem ByteHeap.models_op (h₁ h₂ : ByteHeap) (m : ByteMem)
-    (hv : CMRA.Valid (CMRA.op h₁ h₂))
+    (_hv : CMRA.Valid (CMRA.op h₁ h₂))
     (hm₁ : h₁.models m) (hm₂ : h₂.models m) :
     (CMRA.op h₁ h₂).models m := by
   intro addr
@@ -84,4 +84,4 @@ theorem byteOwn_ne_of_valid (a b : UInt64) (va vb : UInt8)
   -- optionValid (some invalid) = False
   have := hv a
   simp only [byteOwn, optionOp, CMRA.op, Excl.Valid, optionValid,
-    ite_true, CMRA.Valid, CMRA.ValidN] at this
+    ite_true, CMRA.Valid] at this
