@@ -879,7 +879,7 @@ theorem Footprint.Disjoint_add_left (R c1 c2 : UInt64) (sw lw : Width)
     (h : Footprint.Disjoint (Footprint.ofWidth c1 sw) (Footprint.ofWidth c2 lw)) :
     Footprint.Disjoint (Footprint.ofWidth (R + c1) sw) (Footprint.ofWidth (R + c2) lw) := by
   intro i j hi hj heq
-  simp only [Footprint.ofWidth, Footprint.addr] at heq
+  simp only [Footprint.ofWidth] at heq
   simp only [UInt64.add_assoc] at heq
   exact h i j hi hj (UInt64.add_left_cancel heq)
 
