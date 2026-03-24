@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    lean4-nix.url = "github:lenianiva/lean4-nix";
+    lean4-nix.url = "github:heartpunk/lean4-nix";
     angr-nix.url = "github:heartpunk/angr-nix/2f20f9ed68506bd151ed171e505942ac9a2a0b43";
     stalagmite = {
       url = "github:leonbett/stalagmite/eadeecfd0845859e78d7390270a7bee31f57bc71";
