@@ -92,7 +92,7 @@ private partial def rewriteFirst (e : Expr) (lw sw M a v b proof : Expr) :
     2. Same-base cancellation — Disjoint_add_left + native_decide on offsets
     3. Stack-vs-ELF — eq_sub_of_add_eq + rw into StackSeparation + interval_cases -/
 private def tryPeelOne (goal : MVarId) (goalType : Expr)
-    (lw sw M a v b : Expr) : TacticM Bool := do
+    (lw sw M a v b : Expr) : TacticM (Bool × List MVarId) := do
   -- Try three strategies to construct the frame proof
   let proof ← goal.withContext <| do
     -- Strategy 1: Footprint.Disjoint via native_decide (fully concrete)
@@ -121,25 +121,38 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
         mkAppM ``VexISA.ByteMem_read_write_of_disjoint #[lw, sw, M, a, v, b, mvar]
       catch _ =>
         s2.restore
-        -- Strategy 3: leave ByteMem_frame_of_separate as subgoal
-        -- The Bridge proof provides ByteHeap witnesses after mem_frame.
-        let eqType ← mkAppM ``Eq #[
-          ← mkAppM ``VexISA.ByteMem.read #[lw, ← mkAppM ``VexISA.ByteMem.write #[sw, M, a, v], b],
-          ← mkAppM ``VexISA.ByteMem.read #[lw, M, b]]
-        let mvar ← mkFreshExprMVar (some eqType)
-        -- Leave this as a subgoal for the user/proof to close
-        return mvar
+        -- Strategy 3: construct ByteMem_read_write_ne proof in MetaM.
+        -- The hp premise (pointwise ≠) becomes a proper subgoal.
+        -- mkAppM constructs the proof directly — no tactic unification,
+        -- so no recursion into deeply nested ByteMem expressions.
+        let swBC ← mkAppM ``VexISA.Width.byteCount #[sw]
+        let lwBC ← mkAppM ``VexISA.Width.byteCount #[lw]
+        let hpType ← withLocalDeclD `i (mkConst ``Nat) fun i =>
+          withLocalDeclD `j (mkConst ``Nat) fun j => do
+            let hi ← mkAppM ``LT.lt #[i, swBC]
+            let hj ← mkAppM ``LT.lt #[j, lwBC]
+            let oi ← mkAppM ``UInt64.ofNat #[i]
+            let oj ← mkAppM ``UInt64.ofNat #[j]
+            let ai ← mkAppM ``HAdd.hAdd #[a, oi]
+            let bj ← mkAppM ``HAdd.hAdd #[b, oj]
+            let neq ← mkAppM ``Ne #[ai, bj]
+            let body ← mkArrow hj neq
+            let body ← mkArrow hi body
+            let body ← mkForallFVars #[j] body
+            mkForallFVars #[i] body
+        let hp ← mkFreshExprMVar (some hpType)
+        mkAppM ``VexISA.ByteMem_read_write_ne #[lw, sw, M, a, v, b, hp]
   -- Rewrite the goal
   let (newType, eqProof?) ← goal.withContext (rewriteFirst goalType lw sw M a v b proof)
   match eqProof? with
-  | none => return false
+  | none => return (false, [])
   | some eqProof =>
     let newGoal ← goal.replaceTargetEq newType eqProof
     -- Collect any unassigned mvars from the proof (strategy 3 subgoals)
     let mvars ← getMVars proof
     let unassigned ← mvars.filterM (fun m => return !(← m.isAssigned))
-    replaceMainGoal (unassigned.toList ++ [newGoal])
-    return true
+    replaceMainGoal [newGoal]
+    return (true, unassigned.toList)
 
 /-- Reduce closed (no free variables) UInt64 subexpressions to literals.
     Walks the expression tree, finds UInt64-typed subexpressions with no fvars,
@@ -199,6 +212,7 @@ elab "mem_frame" : tactic => do
   canonicalizeAddresses
   let mut fuel := 50
   let mut progress := false
+  let mut hpGoals : List MVarId := []
   while fuel > 0 do
     fuel := fuel - 1
     let goal ← getMainGoal
@@ -219,10 +233,11 @@ elab "mem_frame" : tactic => do
       let b := item.2.2.2.2.2.2
       let saved ← saveState
       try
-        let ok ← tryPeelOne goal goalType lw sw M a v b
+        let (ok, newHpGoals) ← tryPeelOne goal goalType lw sw M a v b
         if ok then
           peeled := true
           progress := true
+          hpGoals := hpGoals ++ newHpGoals
         else
           saved.restore
       catch _ =>
@@ -230,3 +245,7 @@ elab "mem_frame" : tactic => do
     if !peeled then break
   unless progress do
     throwError "mem_frame: no ByteMem.read (ByteMem.write ...) patterns could be simplified"
+  -- Append accumulated cross-region subgoals after the main goal
+  if !hpGoals.isEmpty then
+    let goals ← getGoals
+    setGoals (goals ++ hpGoals)
