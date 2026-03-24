@@ -114,31 +114,23 @@ private def tryPeelOne (goal : MVarId) (goalType : Expr)
         simp only [UInt64.toNat_add, UInt64.toNat_sub, UInt64.toNat_ofNat,
           UInt64.toNat_ofNat', UInt64.size, Nat.two_pow_64,
           UInt64.toBitVec_toNat] at h)))
-      -- Unfold user-defined region hypotheses for omega bounds
+      -- Unfold ALL hypotheses, clear those with ByteMem.read
       let g ← getMainGoal
       let mut g' := g
-      let lctx := (← g'.getDecl).lctx
-      for decl in lctx do
+      let mut toClear : Array FVarId := #[]
+      for decl in (← g'.getDecl).lctx do
         if decl.isAuxDecl then continue
-        let (headFn, _) := decl.type.getAppFnArgs
-        if headFn.isAnonymous then continue
-        if !(toString headFn).any (· == '.') then continue
         match ← unfoldDefinition? decl.type with
         | some unfolded =>
           if unfolded == decl.type then continue
-          if containsRead unfolded then continue
-          try g' ← g'.changeLocalDecl decl.fvarId unfolded
-          catch _ => continue
+          if containsRead unfolded then
+            toClear := toClear.push decl.fvarId
+          else
+            try g' ← g'.changeLocalDecl decl.fvarId unfolded
+            catch _ => continue
         | none => continue
-      -- Clear hypotheses whose unfolded form has ByteMem.read (noise for omega)
-      let lctx2 := (← g'.getDecl).lctx
-      for decl in lctx2 do
-        if decl.isAuxDecl then continue
-        if containsRead decl.type then continue  -- Don't clear h/heq
-        match ← unfoldDefinition? decl.type with
-        | some u => if containsRead u then
-            try g' ← g'.clear decl.fvarId catch _ => continue
-        | none => continue
+      for fv in toClear do
+        try g' ← g'.clear fv catch _ => continue
       replaceMainGoal [g']
       evalTactic (← `(tactic| omega))
     return mvar
