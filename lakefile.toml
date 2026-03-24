@@ -28,6 +28,11 @@ name = "egg"
 git = "https://github.com/heartpunk/lean-egg"
 rev = "main"
 
+[[require]]
+name = "iris"
+git = "https://github.com/leanprover-community/iris-lean"
+rev = "745e0c4"
+
 [[lean_lib]]
 name = "LTS"
 
