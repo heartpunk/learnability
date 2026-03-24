@@ -297,40 +297,10 @@ def substSymPC {Reg : Type} [DecidableEq Reg] [Fintype Reg]
   | .not φ => .not (substSymPC sub φ)
 
 
-mutual
-/-- Normalize a SymExpr by collapsing redundant low32/uext32 chains.
-    Sound because both low32 and uext32 evaluate to mask32, which is idempotent. -/
-def normalizeSymExpr {Reg : Type} : SymExpr Reg → SymExpr Reg
-  | .low32 (.low32 e) => .low32 (normalizeSymExpr e)
-  | .low32 (.uext32 e) => .uext32 (normalizeSymExpr e)
-  | .uext32 (.low32 e) => .low32 (normalizeSymExpr e)
-  | .uext32 (.uext32 e) => .uext32 (normalizeSymExpr e)
-  | .low32 e => .low32 (normalizeSymExpr e)
-  | .uext32 e => .uext32 (normalizeSymExpr e)
-  | .load w m a => .load w (normalizeSymMem m) (normalizeSymExpr a)
-  | e => e
-def normalizeSymMem {Reg : Type} : SymMem Reg → SymMem Reg
-  | .base => .base
-  | .store w m a v => .store w (normalizeSymMem m) (normalizeSymExpr a) (normalizeSymExpr v)
-end
-def normalizeSymPC {Reg : Type} : SymPC Reg → SymPC Reg
-  | .true => .true
-  | .eq a b => .eq (normalizeSymExpr a) (normalizeSymExpr b)
-  | .lt a b => .lt (normalizeSymExpr a) (normalizeSymExpr b)
-  | .le a b => .le (normalizeSymExpr a) (normalizeSymExpr b)
-  | .and p q => .and (normalizeSymPC p) (normalizeSymPC q)
-  | .not (.not p) => normalizeSymPC p  -- double negation elimination
-  | .not p => .not (normalizeSymPC p)
-
-theorem normalizeSymExpr_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (s : ConcreteState Reg) (e : SymExpr Reg) :
-    evalSymExpr s (normalizeSymExpr e) = evalSymExpr s e := by
-  sorry -- TODO: structural induction + mask32_idempotent
-
-theorem normalizeSymPC_sound {Reg : Type} [DecidableEq Reg] [Fintype Reg]
-    (s : ConcreteState Reg) (pc : SymPC Reg) :
-    evalSymPC s (normalizeSymPC pc) = evalSymPC s pc := by
-  sorry -- TODO: structural induction + normalizeSymExpr_sound
+-- normalizeSymExpr/normalizeSymMem/normalizeSymPC and their soundness theorems
+-- were removed: dead code (nothing calls them). The normalization they performed
+-- (low32/uext32 chain collapse, double negation elimination) is now handled
+-- by egg equality saturation at the tactic level.
 
 def composeSymSub {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (sub₁ sub₂ : SymSub Reg) : SymSub Reg :=
