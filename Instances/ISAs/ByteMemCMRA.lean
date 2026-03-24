@@ -128,6 +128,30 @@ theorem ByteMem_frame_of_separate
 open Iris.BI
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- Extracting the frame rule into a regular Lean theorem
+-- ═══════════════════════════════════════════════════════════════════════════
+
+/-- A ByteHeap fragment is well-formed: only none or excl, never invalid. -/
+def ByteHeap.WF (h : ByteHeap) : Prop :=
+  ∀ k, h k = none ∨ ∃ v, h k = some (.excl v)
+
+/-- Well-formed fragments are valid on their own. -/
+theorem ByteHeap.valid_of_wf (h : ByteHeap) (hw : h.WF) : CMRA.Valid h := by
+  intro k; rcases hw k with hk | ⟨v, hk⟩ <;> (simp [hk]; trivial)
+
+/-- Two well-formed ByteHeap fragments with disjoint domains compose validly. -/
+theorem ByteHeap.valid_of_disjoint_domains (h₁ h₂ : ByteHeap)
+    (hw₁ : h₁.WF) (hw₂ : h₂.WF)
+    (hd : ∀ k, h₁ k = none ∨ h₂ k = none) :
+    CMRA.Valid (CMRA.op h₁ h₂) := by
+  intro k
+  rcases hd k with hk | hk
+  · simp [hk, optionOp, CMRA.op]
+    exact ByteHeap.valid_of_wf h₂ hw₂ k
+  · simp [hk, optionOp, CMRA.op]
+    rcases hw₁ k with hk₁ | ⟨v, hk₁⟩ <;> (simp [hk₁]; trivial)
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- UPred assertions over ByteHeap — the MoSeL interface
 -- ═══════════════════════════════════════════════════════════════════════════
 
