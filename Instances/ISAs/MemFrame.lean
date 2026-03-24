@@ -93,43 +93,49 @@ private partial def rewriteFirst (e : Expr) (lw sw M a v b proof : Expr) :
     3. Stack-vs-ELF — eq_sub_of_add_eq + rw into StackSeparation + interval_cases -/
 private def tryPeelOne (goal : MVarId) (goalType : Expr)
     (lw sw M a v b : Expr) : TacticM Bool := do
-  -- Build: Footprint.Disjoint (Footprint.ofWidth a sw) (Footprint.ofWidth b lw)
-  let writeFP ← goal.withContext <| mkAppM ``VexISA.Footprint.ofWidth #[a, sw]
-  let readFP ← goal.withContext <| mkAppM ``VexISA.Footprint.ofWidth #[b, lw]
-  let disjProp ← goal.withContext <| mkAppM ``VexISA.Footprint.Disjoint #[writeFP, readFP]
-  -- Try to prove disjointness via three strategies
-  let disjProof ← goal.withContext <| do
-    let mvar ← mkFreshExprMVar (some disjProp)
-    let mvarId := mvar.mvarId!
-    setGoals [mvarId]
-    -- Strategy 1: native_decide for fully concrete footprints
+  -- The frame equality we want to prove:
+  -- ByteMem.read lw (ByteMem.write sw M a v) b = ByteMem.read lw M b
+  let frameEq ← goal.withContext <|
+    mkAppM ``VexISA.ByteMem_read_write_of_disjoint #[lw, sw, M, a, v, b]
+  -- Try three strategies to prove this
+  let proof ← goal.withContext <| do
+    -- Strategy 1: Footprint.Disjoint via native_decide (fully concrete)
     let s1 ← saveState
     try
+      let writeFP ← mkAppM ``VexISA.Footprint.ofWidth #[a, sw]
+      let readFP ← mkAppM ``VexISA.Footprint.ofWidth #[b, lw]
+      let disjProp ← mkAppM ``VexISA.Footprint.Disjoint #[writeFP, readFP]
+      let mvar ← mkFreshExprMVar (some disjProp)
+      setGoals [mvar.mvarId!]
       evalTactic (← `(tactic| native_decide))
+      mkAppM ``VexISA.ByteMem_read_write_of_disjoint #[lw, sw, M, a, v, b, mvar]
     catch _ =>
       s1.restore
-      -- Strategy 2: same-base cancellation
+      -- Strategy 2: Footprint.Disjoint via same-base cancellation
       let s2 ← saveState
       try
+        let writeFP ← mkAppM ``VexISA.Footprint.ofWidth #[a, sw]
+        let readFP ← mkAppM ``VexISA.Footprint.ofWidth #[b, lw]
+        let disjProp ← mkAppM ``VexISA.Footprint.Disjoint #[writeFP, readFP]
+        let mvar ← mkFreshExprMVar (some disjProp)
+        setGoals [mvar.mvarId!]
         evalTactic (← `(tactic| (
           apply VexISA.Footprint.Disjoint_add_left
           native_decide)))
+        mkAppM ``VexISA.ByteMem_read_write_of_disjoint #[lw, sw, M, a, v, b, mvar]
       catch _ =>
         s2.restore
-        -- Strategy 3: stack-vs-ELF via UInt64-level derivation
-        evalTactic (← `(tactic| (
-          unfold VexISA.Footprint.Disjoint
-          intro i j hi hj heq
-          simp only [VexISA.Footprint.ofWidth, VexISA.Width.byteCount] at hi hj heq
-          simp only [UInt64.add_assoc] at heq
-          have hrb := VexISA.UInt64.eq_sub_of_add_eq heq
-          first
-          | (rw [hrb] at *; interval_cases i <;> interval_cases j <;> simp_all)
-          | omega)))
-    return mvar
-  -- Apply the frame rule
-  let proof ← goal.withContext <|
-    mkAppM ``VexISA.ByteMem_read_write_of_disjoint #[lw, sw, M, a, v, b, disjProof]
+        -- Strategy 3: ByteMem_frame_of_separate via Iris separation
+        -- Construct the frame equality directly. The proof context must
+        -- have ByteHeap witnesses with valid composition (from Iris ∗).
+        let eqType ← mkAppM ``Eq #[
+          ← mkAppM ``VexISA.ByteMem.read #[lw, ← mkAppM ``VexISA.ByteMem.write #[sw, M, a, v], b],
+          ← mkAppM ``VexISA.ByteMem.read #[lw, M, b]]
+        let mvar ← mkFreshExprMVar (some eqType)
+        setGoals [mvar.mvarId!]
+        evalTactic (← `(tactic|
+          exact VexISA.ByteMem_frame_of_separate _ _ _ _ _ _ _ _ (by assumption) (by assumption) (by assumption)))
+        return mvar
   -- Rewrite the goal
   let (newType, eqProof?) ← goal.withContext (rewriteFirst goalType lw sw M a v b proof)
   match eqProof? with
