@@ -859,4 +859,28 @@ theorem ByteMem_read_write_of_disjoint (lw sw : Width) (M : ByteMem) (a v b : UI
   ByteMem_read_write_ne lw sw M a v b fun i j hi hj =>
     h i j (by simpa [Footprint.ofWidth] using hi) (by simpa [Footprint.ofWidth] using hj)
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Enabling lemmas for footprint-based memory frame reasoning
+-- ═══════════════════════════════════════════════════════════════════════════
+
+/-- UInt64 addition is left-cancellative: a + b = a + c → b = c. -/
+theorem UInt64.add_left_cancel {a b c : UInt64} (h : a + b = a + c) : b = c := by
+  have : b.toBitVec = c.toBitVec := by bv_decide
+  exact congrArg UInt64.ofBitVec this
+
+/-- From a + b = c, derive a = c - b. UInt64 group property. -/
+theorem UInt64.eq_sub_of_add_eq {a b c : UInt64} (h : a + b = c) : a = c - b := by
+  have : a.toBitVec = (c - b).toBitVec := by bv_decide
+  exact congrArg UInt64.ofBitVec this
+
+/-- Same-base footprint disjointness: if offsets are disjoint, base+offsets are disjoint.
+    Proof via UInt64.add_left_cancel. Enables native_decide on the concrete offset residual. -/
+theorem Footprint.Disjoint_add_left (R c1 c2 : UInt64) (sw lw : Width)
+    (h : Footprint.Disjoint (Footprint.ofWidth c1 sw) (Footprint.ofWidth c2 lw)) :
+    Footprint.Disjoint (Footprint.ofWidth (R + c1) sw) (Footprint.ofWidth (R + c2) lw) := by
+  intro i j hi hj heq
+  simp only [Footprint.ofWidth, Footprint.addr] at heq
+  simp only [UInt64.add_assoc] at heq
+  exact h i j hi hj (UInt64.add_left_cancel heq)
+
 end VexISA
