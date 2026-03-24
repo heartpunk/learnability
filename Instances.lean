@@ -112,6 +112,7 @@ import Instances.ISAs.DispatchLoopGrammar
 import Instances.ISAs.DispatchLoopPipeline
 import Instances.ISAs.DispatchLoopWTO
 import Instances.ISAs.MemFrame
+import Instances.ISAs.ByteMemCMRA
 import Core.CslibBridge
 import SymExec.DispatchCertificate
 import Instances.ISAs.NextSymDenotEval
