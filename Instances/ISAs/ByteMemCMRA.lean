@@ -35,3 +35,37 @@ abbrev ByteHeap := UInt64 → Option (Excl UInt8)
 -- Single-byte ownership: "I own the byte at address `a` with value `v`"
 def byteOwn (a : UInt64) (v : UInt8) : ByteHeap :=
   fun k => if k = a then some (.excl v) else none
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Connection between ByteHeap (abstract) and ByteMem (concrete)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+/-- A ByteHeap fragment is consistent with a concrete ByteMem:
+    every owned byte in the fragment matches the concrete memory. -/
+def ByteHeap.models (h : ByteHeap) (m : ByteMem) : Prop :=
+  ∀ addr, match h addr with
+    | some (.excl v) => m.fn addr = v
+    | _ => True
+
+/-- byteOwn models: owning byte `a` with value `v` means `m.fn a = v`. -/
+theorem byteOwn_models (a : UInt64) (v : UInt8) (m : ByteMem)
+    (h : (byteOwn a v).models m) : m.fn a = v := by
+  have := h a
+  simp [byteOwn] at this
+  exact this
+
+/-- Composing two valid fragments gives a larger fragment that models the same memory.
+    This is the key soundness property: if fragment₁ and fragment₂ are both valid
+    and both model the same concrete memory, their composition also models it. -/
+theorem ByteHeap.models_op (h₁ h₂ : ByteHeap) (m : ByteMem)
+    (hv : CMRA.Valid (CMRA.op h₁ h₂))
+    (hm₁ : h₁.models m) (hm₂ : h₂.models m) :
+    (CMRA.op h₁ h₂).models m := by
+  sorry
+
+/-- The frame property: if two byte ownerships are validly composed (disjoint),
+    they must be at different addresses. This is non-aliasing from `∗`. -/
+theorem byteOwn_ne_of_valid (a b : UInt64) (va vb : UInt8)
+    (hv : CMRA.Valid (CMRA.op (byteOwn a va) (byteOwn b vb))) :
+    a ≠ b := by
+  sorry
