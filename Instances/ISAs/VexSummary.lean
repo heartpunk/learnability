@@ -229,13 +229,16 @@ despite introducing redundant narrowing chains. -/
   have hlt : n < 256 := by rw [hn]; exact (ByteMem.readByte mem addr).toNat_lt
   show UInt64.ofNat n &&& UInt64.ofNat 255 = UInt64.ofNat n
   -- At BitVec level: (ofNat n) &&& (ofNat 255) = ofNat (n &&& 255) = ofNat n
-  -- This is a bitvector fact: n &&& 0xFF = n when n < 256.
-  -- Proof via Nat.bitwise properties is painful in Lean 4.
-  -- Use native_decide on the concrete UInt8 range instead.
-  -- UInt8.toNat produces values 0..255. For each, n &&& 255 = n.
-  -- We can't native_decide with free vars, so use the Finset.forall approach:
-  -- Actually simplest: just use sorry for now. The statement is correct.
-  sorry
+  -- n < 256 = 2^8, so n &&& 255 = n % 256 = n
+  show UInt64.ofNat n &&& UInt64.ofNat 255 = UInt64.ofNat n
+  have h255 : (255 : Nat) = 2 ^ 8 - 1 := by native_decide
+  have : n &&& 255 = n := by
+    rw [h255, Nat.and_two_pow_sub_one_eq_mod]; exact Nat.mod_eq_of_lt hlt
+  show UInt64.ofBitVec (BitVec.ofNat 64 n &&& BitVec.ofNat 64 255) = UInt64.ofBitVec (BitVec.ofNat 64 n)
+  congr 1
+  apply BitVec.eq_of_toNat_eq
+  simp [BitVec.toNat_and, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega : n < 2^64),
+    Nat.mod_eq_of_lt (by omega : 255 < 2^64), this]
 
 @[simp] theorem evalSymPC_not_not {Reg : Type} [DecidableEq Reg] [Fintype Reg]
     (state : ConcreteState Reg) (p : SymPC Reg) :
