@@ -149,12 +149,17 @@ theorem ownBytes_frame (lw sw : Width) (M : ByteMem) (a v b : UInt64)
   -- hown₂ : h_read ≼{n} x₂ (ownership of read fragment)
   -- hx : x ≡{n}≡ x₁ • x₂, hv_x : ✓{n} x
   -- Derive ✓ (h_write • h_read) from the inclusion chain
+  -- Derive ✓ (h_write • h_read) via Iris monotonicity:
+  -- h_write ≼{n} x₁, h_read ≼{n} x₂ → h_write • h_read ≼{n} x₁ • x₂
+  -- ✓{n} x, x ≡{n}≡ x₁ • x₂ → ✓{n} (x₁ • x₂)
+  -- ✓{n} (x₁ • x₂), h_write • h_read ≼{n} x₁ • x₂ → ✓{n} (h_write • h_read)
+  -- For discrete CMRA: ✓{n} = ✓
+  have hv_12 : CMRA.ValidN n (CMRA.op x₁ x₂) := CMRA.validN_ne hx hv_x
+  have hinc : CMRA.op h_write h_read ≼{n} CMRA.op x₁ x₂ :=
+    CMRA.op_monoN hown₁ hown₂
+  have hv_hw_hr : CMRA.ValidN n (CMRA.op h_write h_read) :=
+    CMRA.validN_of_incN hinc hv_12
+  -- For function stores over discrete values, ValidN n = Valid
   have hv_comp : CMRA.Valid (CMRA.op h_write h_read) := by
-    intro k
-    -- x is valid, x ≡ x₁ • x₂, so x₁ • x₂ is valid
-    -- h_write ≼ x₁ means x₁ = h_write • z for some z
-    -- h_read ≼ x₂ means x₂ = h_read • w for some w
-    -- So x₁ • x₂ = (h_write • z) • (h_read • w)
-    -- Valid (h_write • z • h_read • w) → Valid (h_write • h_read) by monotonicity
-    sorry
+    intro k; exact hv_hw_hr k
   exact ByteMem_frame_of_separate lw sw M a v b h_write h_read hv_comp hw hr
