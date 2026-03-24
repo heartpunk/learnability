@@ -61,11 +61,27 @@ theorem ByteHeap.models_op (h₁ h₂ : ByteHeap) (m : ByteMem)
     (hv : CMRA.Valid (CMRA.op h₁ h₂))
     (hm₁ : h₁.models m) (hm₂ : h₂.models m) :
     (CMRA.op h₁ h₂).models m := by
-  sorry
+  intro addr
+  unfold models at *
+  specialize hm₁ addr; specialize hm₂ addr
+  -- CMRA.op on function store is pointwise optionOp
+  show match optionOp (h₁ addr) (h₂ addr) with
+    | some (.excl v) => m.fn addr = v | _ => True
+  cases hh₁ : h₁ addr <;> cases hh₂ : h₂ addr
+  · simp [optionOp]
+  · simp [optionOp, hh₂] at hm₂ ⊢; exact hm₂
+  · simp [optionOp, hh₁] at hm₁ ⊢; exact hm₁
+  · simp [optionOp, CMRA.op]
 
 /-- The frame property: if two byte ownerships are validly composed (disjoint),
     they must be at different addresses. This is non-aliasing from `∗`. -/
 theorem byteOwn_ne_of_valid (a b : UInt64) (va vb : UInt8)
     (hv : CMRA.Valid (CMRA.op (byteOwn a va) (byteOwn b vb))) :
     a ≠ b := by
-  sorry
+  intro heq; subst heq
+  -- hv : ∀ k, optionValid (optionOp (byteOwn a va k) (byteOwn a vb k))
+  -- At k = a: optionOp (some (excl va)) (some (excl vb)) = some invalid
+  -- optionValid (some invalid) = False
+  have := hv a
+  simp only [byteOwn, optionOp, CMRA.op, Excl.Valid, optionValid,
+    ite_true, CMRA.Valid, CMRA.ValidN] at this
