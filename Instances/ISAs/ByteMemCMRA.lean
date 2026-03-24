@@ -143,4 +143,18 @@ theorem ownBytes_frame (lw sw : Width) (M : ByteMem) (a v b : UInt64)
     (hr : ∀ j, j < lw.byteCount → ∃ vj, h_read (b + UInt64.ofNat j) = some (.excl vj)) :
     ownBytes h_write ∗ ownBytes h_read ⊢
       ⌜ByteMem.read lw (ByteMem.write sw M a v) b = ByteMem.read lw M b⌝ := by
-  sorry
+  -- Unpack the entailment and separating conjunction
+  intro n x hv_x ⟨x₁, x₂, hx, hown₁, hown₂⟩
+  -- hown₁ : h_write ≼{n} x₁ (ownership of write fragment)
+  -- hown₂ : h_read ≼{n} x₂ (ownership of read fragment)
+  -- hx : x ≡{n}≡ x₁ • x₂, hv_x : ✓{n} x
+  -- Derive ✓ (h_write • h_read) from the inclusion chain
+  have hv_comp : CMRA.Valid (CMRA.op h_write h_read) := by
+    intro k
+    -- x is valid, x ≡ x₁ • x₂, so x₁ • x₂ is valid
+    -- h_write ≼ x₁ means x₁ = h_write • z for some z
+    -- h_read ≼ x₂ means x₂ = h_read • w for some w
+    -- So x₁ • x₂ = (h_write • z) • (h_read • w)
+    -- Valid (h_write • z • h_read • w) → Valid (h_write • h_read) by monotonicity
+    sorry
+  exact ByteMem_frame_of_separate lw sw M a v b h_write h_read hv_comp hw hr
