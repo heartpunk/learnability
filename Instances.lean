@@ -113,6 +113,7 @@ import Instances.ISAs.DispatchLoopPipeline
 import Instances.ISAs.DispatchLoopWTO
 import Instances.ISAs.MemFrame
 import Instances.ISAs.ByteMemCMRA
+import Instances.ISAs.BisimTactic
 import Core.CslibBridge
 import SymExec.DispatchCertificate
 
